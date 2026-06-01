@@ -28,7 +28,10 @@ class Node(QtWidgets.QGraphicsPixmapItem):
         self._highlighted = False
         self._result_image: Optional[np.ndarray] = None
         self._executing = False
-        
+        # Backend links (set by the GraphController when the node is registered).
+        self.gnode = None
+        self.controller = None
+
         # Setup basic properties
         self.setFlags(
             QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -121,6 +124,19 @@ class Node(QtWidgets.QGraphicsPixmapItem):
             finally:
                 painter.restore()
         
+        # Draw an error border if the backend recorded a failure for this node.
+        gnode = getattr(self, 'gnode', None)
+        if gnode is not None and getattr(gnode, 'error', None):
+            painter.save()
+            try:
+                pen = QtGui.QPen(QtGui.QColor(220, 20, 60))  # crimson = error
+                pen.setWidth(3)
+                painter.setPen(pen)
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawRect(self.boundingRect())
+            finally:
+                painter.restore()
+
         # Draw type indicator icon
         self._draw_type_icon(painter)
     
@@ -218,6 +234,14 @@ class Node(QtWidgets.QGraphicsPixmapItem):
         """Get current parameters. Override in subclasses."""
         return {}
 
+    def refresh_from_model(self) -> None:
+        """Update the view from the backend node's result. Override as needed."""
+        pass
+
+    def on_commit(self) -> None:
+        """Hook fired after a committed (non-preview) recompute. Override as needed."""
+        pass
+
 
 class ImageNode(Node):
     """Node representing an input image."""
@@ -288,33 +312,29 @@ class ImageNode(Node):
 
 
 class FunctionNode(Node):
-    """A node that runs a registered :class:`operations.Operation`.
+    """View item for a registered operation.
 
-    One generic class drives every (pure) operation; the operation supplies
-    the ports, parameter defaults, and compute function. This replaces the
-    former one-subclass-per-function design.
+    Topology, parameter values, and results live in the backend (``core.graph``
+    via the :class:`~ui.controller.GraphController`). This class is a thin view:
+    it delegates data operations to the controller and renders whatever result
+    the backend currently holds for its node.
     """
 
     def __init__(self, op, icon_size: int, grid_size: int = 12):
         self.op = op
         self._label = op.label
-        self._input_connections: List[Node] = []
-        self._parameters: Dict[str, Any] = op.defaults()
-        self._propagating = False
         meta = {"name": op.id, "in": op.in_label, "out": op.out_label}
         super().__init__(icon_size, grid_size, meta)
 
+    # --- rendering ---------------------------------------------------------
     def set_icon_size(self, icon_size: int) -> None:
-        """Update the icon size and re-render."""
+        """Update the icon size and re-render (result thumbnail if available)."""
         self._icon_size = int(icon_size)
-        # Flag prevents propagation while we are only resizing thumbnails.
-        self._resizing_icons = True
-        if self._result_image is not None:
+        if self.get_output_image() is not None:
             self._update_result_thumbnail()
         else:
             self._render_icon()
         self._notify_arrows()
-        self._resizing_icons = False
 
     def _render_icon(self) -> None:
         """Render the function node icon (label + funnel glyph)."""
@@ -360,70 +380,33 @@ class FunctionNode(Node):
             painter.end()
         self.setPixmap(pix)
 
-    def can_accept_input(self, input_node: Node) -> bool:
-        """Accept inputs until every input port of the operation is filled."""
-        return len(self._input_connections) < len(self.op.inputs)
-
-    def add_input_connection(self, input_node: Node) -> bool:
-        """Add an input connection if a port is still free."""
-        if self.can_accept_input(input_node):
-            self._input_connections.append(input_node)
-            self._check_and_execute()
-            return True
-        return False
-
-    def remove_input_connection(self, input_node: Node) -> None:
-        """Remove an input connection."""
-        if input_node in self._input_connections:
-            self._input_connections.remove(input_node)
-
-    def _check_and_execute(self) -> None:
-        """Run the operation once all input ports are connected and have data."""
-        if self._executing or getattr(self, '_propagating', False):
-            return
-        if len(self._input_connections) != len(self.op.inputs):
-            return
-        inputs = [c.get_output_image() for c in self._input_connections]
-        if any(img is None for img in inputs):
-            return
-
-        self._executing = True
+    def _draw_specific_type_icon(self, painter: QtGui.QPainter, icon_rect: QtCore.QRectF) -> None:
+        """Draw a generic marker tinted with the operation's color."""
+        painter.save()
         try:
-            result_image = self._compute(inputs)
-            if result_image is not None:
-                self._result_image = result_image
-                self._update_result_thumbnail()
+            r, g, b = self.op.color
+            painter.setPen(QtGui.QPen(QtGui.QColor(r, g, b), 1))
+            painter.setBrush(QtGui.QBrush(QtGui.QColor(r, g, b)))
+            painter.drawEllipse(icon_rect.center(), 4, 4)
         finally:
-            self._executing = False
+            painter.restore()
 
-    def _compute(self, inputs: List[np.ndarray]) -> Optional[np.ndarray]:
-        """Invoke the operation's compute function. Subclasses may override."""
-        return self.op.compute(inputs, self._parameters)
-
-    def set_parameter(self, param_name: str, value: Any, preview_mode: bool = False) -> None:
-        """Update a parameter and re-execute (with downstream propagation)."""
-        if param_name not in self._parameters:
-            return
-        self._parameters[param_name] = value
-        if len(self._input_connections) != len(self.op.inputs):
-            return
-        if preview_mode:
-            self._re_execute_preview()
+    def refresh_from_model(self) -> None:
+        """Re-render from the backend result (called by the controller)."""
+        if self.get_output_image() is not None:
+            self._update_result_thumbnail()
         else:
-            self._check_and_execute()
-            if not getattr(self, '_propagating', False):
-                self._propagate_changes()
-
-    def get_parameters(self) -> Dict[str, Any]:
-        """Return a copy of the current parameter values."""
-        return self._parameters.copy()
+            self._render_icon()
+        self._notify_arrows()
+        self.update()
 
     def _update_result_thumbnail(self) -> None:
-        """Update the node's thumbnail to show the computed result."""
-        if self._result_image is None:
+        """Show the backend's current result image as the node thumbnail."""
+        image = self.get_output_image()
+        if image is None:
             return
 
-        qimage = cv_to_qimage(self._result_image)
+        qimage = cv_to_qimage(image)
         pix = QtGui.QPixmap.fromImage(qimage)
 
         size = max(1, int(self._icon_size))
@@ -447,84 +430,50 @@ class FunctionNode(Node):
             painter.drawRect(1, 1, size - 2, size - 2)
         finally:
             painter.end()
-
         self.setPixmap(thumb)
 
-        # Propagate only on a real (committed) recompute.
-        if (not getattr(self, '_preview_mode', False)
-                and not self._executing
-                and not getattr(self, '_resizing_icons', False)):
-            self._propagate_changes()
-
+    # --- data: delegate to the backend via the controller ------------------
     def get_output_image(self) -> Optional[np.ndarray]:
-        """Return the result image."""
-        return self._result_image
+        return None if self.gnode is None else self.gnode.output
 
-    def _draw_specific_type_icon(self, painter: QtGui.QPainter, icon_rect: QtCore.QRectF) -> None:
-        """Draw a generic marker tinted with the operation's color."""
-        painter.save()
-        try:
-            r, g, b = self.op.color
-            painter.setPen(QtGui.QPen(QtGui.QColor(r, g, b), 1))
-            painter.setBrush(QtGui.QBrush(QtGui.QColor(r, g, b)))
-            painter.drawEllipse(icon_rect.center(), 4, 4)
-        finally:
-            painter.restore()
+    def can_accept_input(self, input_node: Node) -> bool:
+        if self.controller is None:
+            return False
+        return self.controller.can_connect(input_node, self)
 
-    def _re_execute_preview(self) -> None:
-        """Re-execute in preview mode (update thumbnail only; no file writes / propagation)."""
-        self._preview_mode = True
-        self._check_and_execute()
-        self._preview_mode = False
+    def add_input_connection(self, input_node: Node) -> bool:
+        if self.controller is None:
+            return False
+        return self.controller.connect(input_node, self)
 
-    def _propagate_changes(self) -> None:
-        """Re-execute downstream function nodes connected via arrows."""
-        if getattr(self, '_propagating', False):
+    def set_parameter(self, param_name: str, value: Any, preview_mode: bool = False) -> None:
+        if self.gnode is None or param_name not in self.gnode.params:
             return
-        self._propagating = True
-        try:
-            scene = self.scene()
-            if scene is None:
-                return
-            for item in scene.items():
-                if item.__class__.__name__ != 'ArrowItem':
-                    continue
-                if not (hasattr(item, 'a') and hasattr(item, 'b')):
-                    continue
-                if item.a is not self and item.b is not self:
-                    continue
-                target = item.b if item.a is self else item.a
-                if isinstance(target, FunctionNode):
-                    if getattr(self, '_preview_mode', False):
-                        target._preview_mode = True
-                    target._check_and_execute()
-                    if not isinstance(target, SaveToFileNode):
-                        target._propagate_changes()
-        except RuntimeError:
-            # Scene or items have been deleted; ignore.
-            pass
-        finally:
-            self._propagating = False
+        self.controller.set_param(self, param_name, value, commit=not preview_mode)
+
+    def get_parameters(self) -> Dict[str, Any]:
+        return {} if self.gnode is None else dict(self.gnode.params)
 
 
 class SaveToFileNode(FunctionNode):
-    """Saves the input image to disk. Side-effecting and stateful, so it keeps
-    its own compute rather than using a pure registry function."""
+    """Saves its (passed-through) input image to ./output on a committed eval.
+
+    The registry entry's compute is a pass-through, so the backend result is
+    just the input image; the disk write is a view-layer side effect fired by
+    ``on_commit`` (never during a parameter preview).
+    """
 
     def __init__(self, icon_size: int, grid_size: int = 12):
         super().__init__(REGISTRY["save_to_file"], icon_size, grid_size)
 
-    def _compute(self, inputs: List[np.ndarray]) -> Optional[np.ndarray]:
-        """Write the input image to ./output and return it unchanged for chaining."""
+    def on_commit(self) -> None:
+        image = self.get_output_image()
+        if image is not None:
+            self._write_to_disk(image)
+
+    def _write_to_disk(self, image) -> None:
         import os
         import time
-
-        input_image = inputs[0]
-
-        # Never write while propagating or during a parameter preview (slider drag).
-        if getattr(self, '_propagating', False) or getattr(self, '_preview_mode', False):
-            return input_image
-
         try:
             output_dir = "./output"
             os.makedirs(output_dir, exist_ok=True)
@@ -534,11 +483,12 @@ class SaveToFileNode(FunctionNode):
             if not hasattr(self, '_node_index'):
                 self._node_index = id(self) % 10000
 
-            process_timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(self._process_start_time))
-            default_filename = f"save_to_file_{process_timestamp}_{self._node_index}.png"
+            ts = time.strftime("%Y%m%d_%H%M%S", time.localtime(self._process_start_time))
+            default_filename = f"save_to_file_{ts}_{self._node_index}.png"
 
-            filename = self._parameters.get("filename", "")
-            use_custom = self._parameters.get("use_custom", False)
+            params = self.get_parameters()
+            filename = params.get("filename", "")
+            use_custom = params.get("use_custom", False)
             if not use_custom or not filename:
                 filename = default_filename
 
@@ -546,11 +496,9 @@ class SaveToFileNode(FunctionNode):
                 filename += '.png'
 
             filepath = os.path.join(output_dir, filename)
-            if cv2.imwrite(filepath, input_image):
+            if cv2.imwrite(filepath, image):
                 print(f"Image saved to: {filepath}")
-                return input_image
-            print(f"Failed to save image to: {filepath}")
-            return None
+            else:
+                print(f"Failed to save image to: {filepath}")
         except Exception as e:
             print(f"Error saving image: {e}")
-            return None

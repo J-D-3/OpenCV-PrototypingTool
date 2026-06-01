@@ -15,10 +15,11 @@ Qt to the view layer. `operations.py` is verified Qt-free by the smoke test.
 ```
 core/                 backend — pure Python, no Qt
   operations.py       the Operation registry (compute + metadata + param schema)
-  graph.py            (Phase 1b) GraphModel: nodes + edges, the topology source of truth
-  engine.py           (Phase 3) DAG evaluator: topo order, dirty propagation, caching
+  graph.py            GraphModel: nodes + edges, the topology source of truth
+  engine.py           DAG evaluator: topo order, dirty propagation, caching, error capture
 
 ui/                   frontend — PyQt6 view layer
+  controller.py       GraphController: bridges view items <-> model/engine
   image_utils.py      cv_to_qimage and (Phase 4) display normalization
   nodes.py            Node / ImageNode / FunctionNode / SaveToFileNode graphics items
   arrow.py            ArrowItem (edge graphics)
@@ -29,8 +30,23 @@ ui/                   frontend — PyQt6 view layer
 
 app.py                entrypoint (argparse + QApplication)
 main.py               thin launcher -> app.main()
-smoke_test.py         headless safety net (run with QT_QPA_PLATFORM=offscreen)
+smoke_test.py         headless GUI safety net (QT_QPA_PLATFORM=offscreen)
+engine_test.py        headless backend tests (no Qt at all)
 ```
+
+## Data flow (how a change propagates)
+
+1. A view item's `set_parameter` / `add_input_connection` calls the
+   `GraphController` (it never touches other view items directly).
+2. The controller mutates the `GraphModel` (edge added, param set) and marks the
+   affected backend node — and everything downstream — dirty.
+3. The `Engine` re-evaluates dirty nodes in topological order, caching clean
+   ones, and records any failure on the node (`GraphNode.error`).
+4. The controller refreshes exactly the recomputed view items
+   (`refresh_from_model`) and fires `on_commit` side effects (e.g. save-to-file)
+   only on committed — not preview — recomputes.
+
+This replaced the old recursive scene-walking + re-entrancy flags.
 
 ### Internal dependency direction (no cycles)
 `operations` ← `nodes` ← `arrow`, `viewer`, `canvas` ← `main_window` ← `app`.
@@ -48,7 +64,8 @@ does not cycle at runtime.
 | Change node appearance / icons | `ui/nodes.py`. |
 | Change canvas behaviour (drag, connect, grid) | `ui/canvas.py`. |
 | Change the inspector window | `ui/viewer.py`. |
-| Change evaluation / propagation | `core/engine.py` (Phase 3). |
+| Change evaluation / propagation | `core/engine.py`. |
+| Change how the view drives the backend | `ui/controller.py`. |
 
 ## Run / test
 ```powershell

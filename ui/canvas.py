@@ -6,6 +6,7 @@ import cv2
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.operations import by_label
+from ui.controller import GraphController
 from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode
 from ui.arrow import ArrowItem
 
@@ -24,6 +25,8 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         )
         self._scene = QtWidgets.QGraphicsScene(self)
         self.setScene(self._scene)
+        # The backend graph + evaluator for everything on this canvas.
+        self.controller = GraphController()
         # Scene will follow the viewport size to fill the right side
         self._scene.setSceneRect(QtCore.QRectF(self.viewport().rect()))
         # Not scrollable; fill the space provided by the splitter
@@ -356,7 +359,8 @@ class ImageDropWidget(QtWidgets.QWidget):
             item = SaveToFileNode(icon_size=self.icon_size, grid_size=12)
         else:
             item = FunctionNode(op, icon_size=self.icon_size, grid_size=12)
-        
+
+        self.view.controller.register_op(item)
         self.view._scene.addItem(item)
         if scene_pos is None:
             rect = self.view._scene.sceneRect()
@@ -402,6 +406,7 @@ class ImageDropWidget(QtWidgets.QWidget):
     def add_icon(self, image_bgr, scene_pos: Optional[QtCore.QPointF] = None) -> None:
         # Create an ImageNode with the loaded image
         item = ImageNode(image_bgr, icon_size=self.icon_size, grid_size=12)
+        self.view.controller.register_source(item, image_bgr)
         self.view._scene.addItem(item)
 
         # Default drop position to center

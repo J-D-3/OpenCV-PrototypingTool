@@ -69,21 +69,25 @@ This is a **working prototype** being revived. The environment is now set up
       subclasses into one Operation-driven node (+ thin `SaveToFileNode`);
       sidebar tree and node factory are now generated from the registry.
       Adding an OpenCV function is now ~one registry entry.
+- [x] **Reorg** — split into `core/` (Qt-free backend) and `ui/` (PyQt6
+      frontend) packages; see [ARCHITECTURE.md](ARCHITECTURE.md).
+- [x] **Phase 1b — GraphModel.** Graph topology now lives in
+      `core/graph.py` (nodes + edges); Qt items are thin views bound to it
+      through `ui/controller.py`.
+- [x] **Phase 3 — DAG evaluator.** `core/engine.py` does topological
+      evaluation with dirty propagation, output caching, and per-node error
+      capture (shown as a red border). Replaced the recursive scene-walking +
+      re-entrancy flags. Covered by `engine_test.py` (Qt-free).
 
 ### Roadmap
 
-A phased refactor toward the goal: rapidly wire OpenCV chains, expose every
+Remaining phases toward the goal: rapidly wire OpenCV chains, expose every
 parameter with live downstream updates, and inspect each node's result —
 including ops whose output is not itself an image (e.g. findContours, drawn
 back onto the input, with key stats like #contours shown in the GUI).
 
-- **Phase 1b** — extract graph topology into a standalone `GraphModel`
-  (nodes + edges as the source of truth) so Qt items purely observe it and
-  pipelines can be serialized. *(pairs with Phase 3)*
-- **Phase 2** — declarative parameter widgets auto-generated from each op's
-  schema (delete the hand-written per-function control panels).
-- **Phase 3** — real DAG evaluator: topological order, dirty propagation,
-  output caching, per-node error surfacing.
+- **Phase 2 (next)** — declarative parameter widgets auto-generated from each
+  op's schema (delete the hand-written per-function control panels).
 - **Phase 4** — typed data envelope (Image/Contours/Histogram/Labels/…) +
   type-dispatching, signal-driven inspector (image viewer, `render_preview`
   for non-image ops, `summary` key-info panel).
@@ -93,8 +97,9 @@ back onto the input, with key stats like #contours shown in the GUI).
 
 ### Known issues
 - Sidebar categories *Geometry* and *Fourier* are present-but-empty placeholders.
-- No way to delete nodes or edges yet.
+- No way to delete nodes or edges yet (the GraphModel supports it; no UI yet).
 - `cv_to_qimage` does not normalize float / non-8-bit images (matters for Fourier).
+- The inspector still polls (100 ms) for changes; it becomes signal-driven in Phase 4.
 
 ---
 
@@ -105,4 +110,8 @@ back onto the input, with key stats like #contours shown in the GUI).
   (`on_reset_zoom`, `ArrowItem.itemChange`). Broadened the smoke test into a
   safety net. **Phase 1a:** added the Qt-free `operations.py` registry,
   collapsed the per-function node subclasses into one Operation-driven node,
-  and generated the sidebar/factory from the registry.
+  and generated the sidebar/factory from the registry. **Reorg:** split into
+  `core/` (backend) and `ui/` (frontend) packages + ARCHITECTURE.md.
+  **Phase 1b + 3:** moved graph topology into `core/graph.py` and added the
+  `core/engine.py` DAG evaluator (topo order, dirty propagation, caching,
+  error capture) wired through `ui/controller.py`; added `engine_test.py`.
