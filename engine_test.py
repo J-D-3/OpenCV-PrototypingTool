@@ -9,6 +9,7 @@ import cv2
 from core.operations import REGISTRY
 from core.graph import GraphModel
 from core.engine import Engine
+from core.batch import Batch
 from core import persistence
 
 
@@ -232,6 +233,43 @@ def test_conversions():
     print("OK  conversions: space-aware, arbitrary input -> target space")
 
 
+def test_batched():
+    imgs = [np.full((10, 10, 3), v, np.uint8) for v in (10, 100, 200)]
+
+    # One chain, three images: blur maps over the batch (constant -> constant).
+    m = GraphModel()
+    s = m.add_node(op=None, source_image=Batch(imgs))
+    b = _op(m, "blur", kernel_size=3)
+    m.add_edge(s, b)
+    Engine(m).evaluate_all()
+    assert isinstance(b.output, Batch) and len(b.output) == 3
+    assert [int(x.mean()) for x in b.output.items] == [10, 100, 200]
+
+    # Broadcast: a single reference image diffs against every batch element.
+    ref = m.add_node(op=None, source_image=np.zeros((10, 10, 3), np.uint8))
+    d = _op(m, "diff")
+    m.add_edge(s, d)
+    m.add_edge(ref, d)
+    Engine(m).evaluate_all()
+    assert isinstance(d.output, Batch) and len(d.output) == 3
+    assert [int(x.mean()) for x in d.output.items] == [10, 100, 200]
+
+    # Mismatched batch lengths (>1) are an error, not a crash.
+    s2 = m.add_node(op=None, source_image=Batch(imgs[:2]))
+    d2 = _op(m, "diff")
+    m.add_edge(s, d2)
+    m.add_edge(s2, d2)
+    Engine(m).evaluate_all()
+    assert d2.error is not None
+
+    # Batch sources survive save/load.
+    doc = json.loads(json.dumps(persistence.to_dict(m, {})))
+    m2, _pos = persistence.from_dict(doc)
+    batch_sources = [n for n in m2.nodes.values() if n.is_source and isinstance(n.source_image, Batch)]
+    assert any(len(b.source_image) == 3 for b in batch_sources), "batch source not persisted"
+    print("OK  batched: op maps over a batch; single inputs broadcast; persists")
+
+
 def test_cycle_prevention():
     m = GraphModel()
     a = _op(m, "blur")
@@ -254,8 +292,9 @@ def main():
     test_fourier_roundtrip()
     test_more_ops()
     test_conversions()
+    test_batched()
     test_cycle_prevention()
-    print("\nENGINE OK: 12 backend tests passed")
+    print("\nENGINE OK: 13 backend tests passed")
 
 
 if __name__ == "__main__":

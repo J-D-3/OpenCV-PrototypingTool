@@ -30,6 +30,7 @@ class GraphController:
         self.engine = Engine(self.model)
         self.signals = ControllerSignals()
         self._qt_by_gid: Dict[int, object] = {}
+        self.preview_index = 0   # which batch element every node currently shows
 
     # --- registration ------------------------------------------------------
     def register_source(self, qt_node, image) -> None:
@@ -57,6 +58,12 @@ class GraphController:
 
     def recompute_all(self) -> None:
         self._recompute(commit=True)
+
+    def set_preview_index(self, index: int) -> None:
+        """Change which batch element every node previews and re-render views."""
+        self.preview_index = max(0, index)
+        for qt in self._qt_by_gid.values():
+            qt.refresh_from_model()
 
     def unregister(self, qt_node) -> None:
         gn = getattr(qt_node, "gnode", None)

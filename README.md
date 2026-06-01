@@ -124,6 +124,12 @@ This is a **working prototype** being revived. The environment is now set up
       (`ui/inspector_pane.py`): image view + pixel-neighbourhood viewer
       (3/9/27/81, freeze on click) + per-channel histogram with range filtering
       that masks the preview.
+- [x] **Batched multi-image processing.** "Open Images... (batch)" creates one
+      source holding N images; the engine maps every op over the batch
+      (`core/batch.py`), so one chain processes many images. Two-input ops
+      zip/broadcast (e.g. diff every frame against one reference). A frame slider
+      in the inspector scrubs which element all nodes preview; Save-to-File
+      writes every element; batch sources are persisted.
 
 All planned phases are complete. Adding a new operation is cheap: define one
 `Operation` in `core/operations.py` (+ optional `render_preview`/`summary`), and
@@ -133,6 +139,7 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ### Future ideas
 - Undo/redo on the canvas; multi-input rewire; drag connection endpoints.
 - More ops as needed (template matching, warps, feature detectors, …).
+- Batch sources from a folder; per-element filenames carried through to Save.
 
 ### Known issues
 - Reduce Colors / contour ops work in whatever space they receive; for the HSL

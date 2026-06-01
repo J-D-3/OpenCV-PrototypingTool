@@ -18,10 +18,16 @@ from typing import List
 import numpy as np
 
 from core.graph import GraphModel, GraphNode
+from core.batch import Batch
 
 
 def _infer_space(arr) -> str:
     """Best-effort color space from an array's channel count."""
+    if isinstance(arr, Batch):
+        for it in arr.items:
+            if isinstance(it, np.ndarray):
+                return _infer_space(it)
+        return "unknown"
     if not isinstance(arr, np.ndarray):
         return "unknown"
     if arr.ndim == 2 or (arr.ndim == 3 and arr.shape[2] == 1):
@@ -69,22 +75,47 @@ class Engine:
 
         op = node.op
         try:
-            if getattr(op, "space_aware", False):
-                in_space = input_nodes[0].color_space if input_nodes else "unknown"
-                result = op.compute(inputs, node.params, in_space)
+            batches = [i for i in inputs if isinstance(i, Batch)]
+            if batches:
+                node.output, node.error = self._run_batched(op, inputs, batches,
+                                                            node.params, input_nodes)
             else:
-                result = op.compute(inputs, node.params)
-            if result is None:
-                node.output = None
-                node.error = "operation returned no result (see console)"
-            else:
+                result = self._call(op, inputs, node.params, input_nodes)
                 node.output = result
-                node.error = None
+                node.error = None if result is not None else "operation returned no result (see console)"
         except Exception as e:  # noqa: BLE001 — surface, don't crash the UI
             node.output = None
             node.error = f"{type(e).__name__}: {e}"
         node.color_space = self._derive_space(op, input_nodes, node.output)
         node.dirty = False
+
+    def _call(self, op, inputs, params, input_nodes):
+        if getattr(op, "space_aware", False):
+            in_space = input_nodes[0].color_space if input_nodes else "unknown"
+            return op.compute(inputs, params, in_space)
+        return op.compute(inputs, params)
+
+    def _run_batched(self, op, inputs, batches, params, input_nodes):
+        """Map the op over a batch: zip equal-length batches; broadcast singles
+        (and length-1 batches) against the batch length."""
+        n = max(len(b) for b in batches)
+        for b in batches:
+            if len(b) not in (1, n):
+                raise ValueError(f"batch size mismatch: {len(b)} vs {n}")
+        results = []
+        first_error = None
+        for k in range(n):
+            elem = [(inp.items[k if len(inp) > 1 else 0] if isinstance(inp, Batch) else inp)
+                    for inp in inputs]
+            if any(e is None for e in elem):
+                results.append(None)
+                continue
+            try:
+                results.append(self._call(op, elem, params, input_nodes))
+            except Exception as e:  # noqa: BLE001
+                results.append(None)
+                first_error = first_error or f"{type(e).__name__}: {e}"
+        return Batch(results), first_error
 
     def evaluate_all(self) -> List[GraphNode]:
         """Evaluate every dirty node in dependency order.

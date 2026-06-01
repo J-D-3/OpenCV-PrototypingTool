@@ -493,6 +493,52 @@ def check_inspector_pane(app) -> None:
     print("OK  inspector pane: colors, channel-clear, log toggle, zoom-to-cursor")
 
 
+def check_batch(app) -> None:
+    import os
+    import glob
+    from core.batch import Batch
+
+    w = make_window(app)
+    imgs = [np.full((20, 24, 3), v, np.uint8) for v in (20, 120, 220)]
+    src = w.drop_widget.add_images(imgs)          # one batch source of 3 images
+    blur = add_func(w, "Blur")
+    save = add_func(w, "Save to File")
+
+    pattern = os.path.join("output", "batch_smoke_DELETEME*")
+    for f in glob.glob(pattern):
+        os.remove(f)
+    save.set_parameter("use_custom", True)
+    save.set_parameter("filename", "batch_smoke_DELETEME.png")
+
+    connect(w, src, blur)
+    connect(w, blur, save)                        # commit -> save writes every element
+    app.processEvents()
+
+    # The chain ran once but produced a batch of 3 results.
+    assert isinstance(blur.gnode.output, Batch) and len(blur.gnode.output) == 3
+
+    # The frame index selects which element every node previews.
+    ctrl = w.drop_widget.view.controller
+    ctrl.set_preview_index(0)
+    assert int(blur.get_output_image().mean()) == 20
+    ctrl.set_preview_index(2)
+    assert int(blur.get_output_image().mean()) == 220
+
+    # Save-to-File wrote one file per image.
+    files = glob.glob(pattern)
+    assert len(files) == 3, f"expected 3 saved files, got {len(files)}"
+    for f in files:
+        os.remove(f)
+
+    # Selecting the batch source shows the frame slider (range 0..2).
+    src.setSelected(True)
+    app.processEvents()
+    assert w.inspector_pane._frame_widget.isVisible()
+    assert w.inspector_pane._frame_slider.maximum() == 2
+    w.close()
+    print("OK  batched: one chain over 3 images; per-frame preview + save-all")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -513,6 +559,7 @@ def main() -> int:
         check_fourier_chain,
         check_rewire,
         check_inspector_pane,
+        check_batch,
     ]
     for chk in checks:
         chk(app)

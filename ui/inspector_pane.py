@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from core.batch import Batch
 from ui.image_utils import cv_to_qimage, to_uint8
 
 
@@ -498,6 +499,18 @@ class InspectorPane(QtWidgets.QWidget):
         self._title.setStyleSheet("font-weight: bold;")
         layout.addWidget(self._title)
 
+        # Batch frame selector (visible only when the selected node holds >1 image).
+        frame_row = QtWidgets.QHBoxLayout()
+        self._frame_label = QtWidgets.QLabel("")
+        self._frame_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._frame_slider.valueChanged.connect(self._on_frame)
+        frame_row.addWidget(self._frame_label)
+        frame_row.addWidget(self._frame_slider)
+        self._frame_widget = QtWidgets.QWidget()
+        self._frame_widget.setLayout(frame_row)
+        self._frame_widget.setVisible(False)
+        layout.addWidget(self._frame_widget)
+
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         self._image = ImagePanel()
         self._neigh = NeighborhoodPanel()
@@ -534,7 +547,29 @@ class InspectorPane(QtWidgets.QWidget):
             self._recompute(reset=False)
 
     # --- internals ---------------------------------------------------------
+    def _on_frame(self, value: int) -> None:
+        if self._node is None or self._node.controller is None:
+            return
+        self._node.controller.set_preview_index(value)  # re-render every node thumbnail
+        self._recompute(reset=False)                    # and the pane's own element
+
+    def _update_frame_controls(self) -> None:
+        full = self._node.gnode.output if (self._node is not None and getattr(self._node, "gnode", None)) else None
+        n = len(full) if isinstance(full, Batch) else 1
+        controller = getattr(self._node, "controller", None)
+        if n > 1 and controller is not None:
+            idx = min(controller.preview_index, n - 1)
+            self._frame_slider.blockSignals(True)
+            self._frame_slider.setRange(0, n - 1)
+            self._frame_slider.setValue(idx)
+            self._frame_slider.blockSignals(False)
+            self._frame_label.setText(f"Image {idx + 1}/{n}")
+            self._frame_widget.setVisible(True)
+        else:
+            self._frame_widget.setVisible(False)
+
     def _recompute(self, reset: bool) -> None:
+        self._update_frame_controls()
         raw = self._node.get_preview_image() if self._node is not None else None
         if not isinstance(raw, np.ndarray):
             self._disp = None

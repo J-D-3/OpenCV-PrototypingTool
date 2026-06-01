@@ -7,6 +7,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.operations import by_label
 from core import persistence
+from core.batch import Batch
 from ui.controller import GraphController
 from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode
 from ui.arrow import ArrowItem
@@ -436,14 +437,27 @@ class ImageDropWidget(QtWidgets.QWidget):
     def dropEvent(self, event: QtGui.QDropEvent) -> None:
         event.ignore()
 
+    _IMG_FILTER = "Image Files (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All Files (*.*)"
+
     def browse_for_image(self) -> None:
-        filter_str = "Image Files (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All Files (*.*)"
-        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open Image", str(Path.cwd()), filter_str)
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open Image", str(Path.cwd()), self._IMG_FILTER)
         if file_path:
             path = Path(file_path)
             # Place at center when opened from dialog
             self.load_image_from_path(path, None)
             self.imageLoaded.emit(path)
+
+    def browse_for_images(self) -> None:
+        """Open several images as a single batch source (one chain, many images)."""
+        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Open Images", str(Path.cwd()), self._IMG_FILTER)
+        images = [cv2.imread(p) for p in paths]
+        images = [im for im in images if im is not None]
+        if not images:
+            return
+        if len(images) == 1:
+            self.add_icon(images[0])
+        else:
+            self.add_images(images)
 
     def load_image_from_path(self, path: Path, scene_pos: Optional[QtCore.QPointF] = None) -> None:
         image = cv2.imread(str(path))
@@ -473,6 +487,20 @@ class ImageDropWidget(QtWidgets.QWidget):
         gx = round(scene_pos.x() / 12) * 12
         gy = round(scene_pos.y() / 12) * 12
         item.setPos(gx, gy)
+        self.instruction.setText("")
+        return item
+
+    def add_images(self, images, scene_pos: Optional[QtCore.QPointF] = None):
+        """Create one batch source node holding several images."""
+        batch = Batch(images)
+        item = ImageNode(batch, icon_size=self.icon_size, grid_size=12)
+        self.view.controller.register_source(item, batch)
+        self.view._scene.addItem(item)
+        if scene_pos is None:
+            rect = self.view._scene.sceneRect()
+            half = self.icon_size / 2
+            scene_pos = QtCore.QPointF(rect.center().x() - half, rect.center().y() - half)
+        item.setPos(round(scene_pos.x() / 12) * 12, round(scene_pos.y() / 12) * 12)
         self.instruction.setText("")
         return item
 

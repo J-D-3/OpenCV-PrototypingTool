@@ -27,6 +27,7 @@ import numpy as np
 
 from core.operations import REGISTRY
 from core.graph import GraphModel
+from core.batch import Batch
 
 
 def encode_image(img: np.ndarray) -> str:
@@ -54,7 +55,10 @@ def to_dict(model: GraphModel, positions: Dict[int, Tuple[float, float]]) -> dic
             "pos": list(positions.get(gid, (0.0, 0.0))),
         }
         if gn.is_source and gn.source_image is not None:
-            entry["image"] = encode_image(gn.source_image)
+            if isinstance(gn.source_image, Batch):
+                entry["images"] = [encode_image(im) for im in gn.source_image.items]
+            else:
+                entry["image"] = encode_image(gn.source_image)
         nodes.append(entry)
     edges = [{"src": e.src.id, "dst": e.dst.id, "port": e.dst_port} for e in model.edges]
     return {"version": 1, "nodes": nodes, "edges": edges}
@@ -72,7 +76,11 @@ def from_dict(d: dict):
 
     for n in d.get("nodes", []):
         if n.get("op") is None:
-            gn = model.add_node(op=None, source_image=decode_image(n.get("image", "")))
+            if "images" in n:
+                source = Batch([decode_image(s) for s in n["images"]])
+            else:
+                source = decode_image(n.get("image", ""))
+            gn = model.add_node(op=None, source_image=source)
         else:
             op = REGISTRY.get(n["op"])
             if op is None:

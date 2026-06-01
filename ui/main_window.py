@@ -78,11 +78,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.param_panel = ParameterPanel()
         param_layout.addWidget(self.param_panel)
 
+        open_imgs_btn = QtWidgets.QPushButton("Open Images... (batch)")
         save_btn = QtWidgets.QPushButton("Save Pipeline...")
         load_btn = QtWidgets.QPushButton("Load Pipeline...")
 
         sidebar.layout().addWidget(title)
         sidebar.layout().addWidget(open_btn)
+        sidebar.layout().addWidget(open_imgs_btn)
         sidebar.layout().addWidget(save_btn)
         sidebar.layout().addWidget(load_btn)
         sidebar.layout().addWidget(size_label)
@@ -116,6 +118,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(container)
 
         open_btn.clicked.connect(self.drop_widget.browse_for_image)
+        open_imgs_btn.clicked.connect(self.drop_widget.browse_for_images)
         save_btn.clicked.connect(self.save_pipeline)
         load_btn.clicked.connect(self.load_pipeline)
         self.drop_widget.imageLoaded.connect(self.on_image_loaded)

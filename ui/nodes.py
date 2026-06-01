@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.operations import REGISTRY
+from core.batch import Batch
 from ui.image_utils import cv_to_qimage
 
 if TYPE_CHECKING:
@@ -251,52 +252,72 @@ class Node(QtWidgets.QGraphicsPixmapItem):
         """Key facts to show in the inspector (e.g. {'contours': 42})."""
         return {}
 
+    # --- batch element resolution -----------------------------------------
+    def _cur_index(self, value) -> int:
+        """Current preview index clamped to a batched value's length."""
+        if isinstance(value, Batch) and value.items:
+            idx = self.controller.preview_index if self.controller is not None else 0
+            return max(0, min(idx, len(value.items) - 1))
+        return 0
+
+    def _element(self, value):
+        """Resolve the currently-previewed element of a (possibly batched) value."""
+        if isinstance(value, Batch):
+            return value.items[self._cur_index(value)] if value.items else None
+        return value
+
 
 class ImageNode(Node):
     """Node representing an input image."""
     
-    def __init__(self, source_image: np.ndarray, icon_size: int, grid_size: int = 12):
-        # Build meta for info panel
-        h, w = source_image.shape[:2]
-        channels = 1 if source_image.ndim == 2 else source_image.shape[2]
-        dtype = source_image.dtype
+    def __init__(self, source, icon_size: int, grid_size: int = 12):
+        # ``source`` is a single image or a Batch of images.
+        self._source = source
+        first = source.items[0] if isinstance(source, Batch) else source
+        h, w = first.shape[:2]
+        channels = 1 if first.ndim == 2 else first.shape[2]
+        dtype = first.dtype
         if channels == 1:
             kind = "Float" if np.issubdtype(dtype, np.floating) else "Gray"
         else:
             kind = "Float" if np.issubdtype(dtype, np.floating) else "BGR"
-        
+
         meta = {"type": kind, "w": w, "h": h, "channels": channels}
+        if isinstance(source, Batch):
+            meta["count"] = len(source)
         super().__init__(icon_size, grid_size, meta)
-        
-        self._source_image = source_image
         self._render_icon()
-    
+
     def _render_icon(self) -> None:
-        """Render the image as a thumbnail."""
+        """Render the current image (or current batch element) as a thumbnail."""
+        image = self._element(self._source)
         size = max(1, int(self._icon_size))
         thumb = QtGui.QPixmap(size, size)
         thumb.fill(QtGui.QColor(255, 255, 255))  # white background
         painter = QtGui.QPainter(thumb)
         try:
-            # Convert numpy array to QImage, then to QPixmap
-            qimage = cv_to_qimage(self._source_image)
-            pix = QtGui.QPixmap.fromImage(qimage)
-            scaled = pix.scaled(
-                size,
-                size,
-                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                QtCore.Qt.TransformationMode.SmoothTransformation,
-            )
-            x = (size - scaled.width()) // 2
-            y = (size - scaled.height()) // 2
-            painter.drawPixmap(x, y, scaled)
+            if image is not None:
+                pix = QtGui.QPixmap.fromImage(cv_to_qimage(image))
+                scaled = pix.scaled(
+                    size, size,
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+                x = (size - scaled.width()) // 2
+                y = (size - scaled.height()) // 2
+                painter.drawPixmap(x, y, scaled)
         finally:
             painter.end()
         self.setPixmap(thumb)
-    
+
+    def refresh_from_model(self) -> None:
+        # Re-render when the previewed batch element changes.
+        self._render_icon()
+        self._notify_arrows()
+
     def get_output_image(self) -> Optional[np.ndarray]:
-        """Return the source image."""
-        return self._source_image
+        """Return the source image (current element when batched)."""
+        return self._element(self._source)
     
     def _draw_specific_type_icon(self, painter: QtGui.QPainter, icon_rect: QtCore.QRectF) -> None:
         """Draw image icon (photo frame)."""
@@ -449,15 +470,17 @@ class FunctionNode(Node):
 
     # --- data: delegate to the backend via the controller ------------------
     def get_output_image(self) -> Optional[np.ndarray]:
-        return None if self.gnode is None else self.gnode.output
+        return None if self.gnode is None else self._element(self.gnode.output)
 
     def get_preview_image(self):
         """Inspector image: the op's render_preview (e.g. contours drawn onto the
-        input) if it defines one, otherwise the raw output."""
+        input) if it defines one, otherwise the raw output. Batch-aware: resolves
+        the currently-previewed element of the output and of each input."""
         out = self.get_output_image()
         render = getattr(self.op, "render_preview", None)
         if render is not None and self.gnode is not None and self.controller is not None:
-            inputs = [n.output for n in self.controller.model.inputs_of(self.gnode)]
+            inputs = [n.get_output_image() if isinstance(n, Node) else None
+                      for n in self._input_qt_nodes()]
             try:
                 preview = render(inputs, out, dict(self.gnode.params))
                 if preview is not None:
@@ -465,6 +488,13 @@ class FunctionNode(Node):
             except Exception as e:  # noqa: BLE001
                 print(f"render_preview failed for {self.op.id}: {e}")
         return out
+
+    def _input_qt_nodes(self):
+        """The Qt nodes feeding this one (so previews resolve the same element)."""
+        if self.controller is None or self.gnode is None:
+            return []
+        return [self.controller._qt_by_gid.get(src.id)
+                for src in self.controller.model.inputs_of(self.gnode)]
 
     def get_summary(self) -> Dict[str, Any]:
         """Key facts from the op's summary hook (e.g. {'contours': 42})."""
@@ -508,11 +538,16 @@ class SaveToFileNode(FunctionNode):
         super().__init__(REGISTRY["save_to_file"], icon_size, grid_size)
 
     def on_commit(self) -> None:
-        image = self.get_output_image()
-        if image is not None:
-            self._write_to_disk(image)
+        # Write the whole batch (one file per element), or the single image.
+        out = self.gnode.output if self.gnode is not None else None
+        if isinstance(out, Batch):
+            for i, image in enumerate(out.items):
+                if image is not None:
+                    self._write_to_disk(image, suffix=f"_{i:03d}")
+        elif out is not None:
+            self._write_to_disk(out)
 
-    def _write_to_disk(self, image) -> None:
+    def _write_to_disk(self, image, suffix: str = "") -> None:
         import os
         import time
         try:
@@ -525,13 +560,17 @@ class SaveToFileNode(FunctionNode):
                 self._node_index = id(self) % 10000
 
             ts = time.strftime("%Y%m%d_%H%M%S", time.localtime(self._process_start_time))
-            default_filename = f"save_to_file_{ts}_{self._node_index}.png"
+            default_filename = f"save_to_file_{ts}_{self._node_index}{suffix}.png"
 
             params = self.get_parameters()
             filename = params.get("filename", "")
             use_custom = params.get("use_custom", False)
             if not use_custom or not filename:
                 filename = default_filename
+            elif suffix:
+                # Insert the batch suffix before the extension for custom names.
+                stem, dot, ext = filename.rpartition(".")
+                filename = f"{stem}{suffix}{dot}{ext}" if dot else f"{filename}{suffix}"
 
             if not any(filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']):
                 filename += '.png'

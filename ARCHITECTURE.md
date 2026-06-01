@@ -16,6 +16,7 @@ Qt to the view layer. `operations.py` is verified Qt-free by the smoke test.
 core/                 backend — pure Python, no Qt
   operations.py       the Operation registry (compute + metadata + param schema)
   datatypes.py        port data types + connection compatibility rules
+  batch.py            Batch: a stack of images flowing on one edge (multi-image)
   graph.py            GraphModel: nodes + edges, the topology source of truth
   engine.py           DAG evaluator: topo order, dirty propagation, caching,
                       error capture, color-space tracking (for the conversions)
