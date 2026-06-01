@@ -20,8 +20,9 @@ import numpy as np
 import cv2
 from PyQt6 import QtWidgets
 
-from main import MainWindow
-from node import Node, ImageNode, FunctionNode, SaveToFileNode
+from ui.main_window import MainWindow
+from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode
+from ui.viewer import ImageViewerWindow
 
 
 # ----------------------------------------------------------------------------
@@ -189,6 +190,21 @@ def check_save_to_file(app) -> None:
     print("OK  save-to-file wrote and cleaned up output/" + fname)
 
 
+def check_inspector(app) -> None:
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    gray = add_func(w, "To Grayscale")
+    connect(w, src, gray)
+    app.processEvents()
+    viewer = ImageViewerWindow(gray)
+    viewer.show()
+    app.processEvents()
+    assert not viewer.image_label.pixmap().isNull(), "inspector showed no pixmap"
+    viewer.close()
+    w.close()
+    print("OK  inspector window renders a node's output")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -197,6 +213,7 @@ def main() -> int:
         check_two_input_sum,
         check_diff_input_order,
         check_save_to_file,
+        check_inspector,
     ]
     for chk in checks:
         chk(app)

@@ -1,0 +1,1 @@
+"""Frontend: PyQt6 view layer. Depends on core/, never the reverse."""

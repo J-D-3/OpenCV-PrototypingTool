@@ -1,0 +1,1 @@
+"""Backend: Qt-free compute/operations layer (no PyQt imports allowed here)."""

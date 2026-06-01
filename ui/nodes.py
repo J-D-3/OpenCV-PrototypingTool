@@ -1,23 +1,20 @@
+"""Qt graphics items for graph nodes (frontend view layer).
+
+One generic FunctionNode is driven by a core.operations.Operation; ImageNode
+is a source. A later phase moves graph topology into core.graph so these
+become pure observers of the model.
+"""
 import cv2
 import numpy as np
 from pathlib import Path
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from operations import REGISTRY
+from core.operations import REGISTRY
+from ui.image_utils import cv_to_qimage
 
 if TYPE_CHECKING:
-    from main import ArrowItem
-
-
-def cv_to_qimage(image_bgr) -> QtGui.QImage:
-    """Convert OpenCV BGR image to QImage."""
-    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    height, width, channel = image_rgb.shape
-    bytes_per_line = channel * width
-    qimage = QtGui.QImage(image_rgb.data, width, height, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
-    return qimage.copy()
-
+    from ui.arrow import ArrowItem
 
 class Node(QtWidgets.QGraphicsPixmapItem):
     """Base class for all nodes in the visual programming interface."""
