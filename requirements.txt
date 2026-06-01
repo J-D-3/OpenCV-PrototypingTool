@@ -1,0 +1,4 @@
+# OpenCV Prototyping Tool — runtime dependencies
+PyQt6
+opencv-python
+numpy
