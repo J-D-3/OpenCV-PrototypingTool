@@ -10,6 +10,11 @@ __pycache__/
 # Generated output images
 output/
 
+# Scratch / scaffolding files used during refactors
+_commitmsg.txt
+_tail*.py
+_probe.py
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
