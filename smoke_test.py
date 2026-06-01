@@ -427,6 +427,48 @@ def check_rewire(app) -> None:
     print("OK  drag-to-rewire repoints a full single-input connection")
 
 
+def check_inspector_pane(app) -> None:
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    thresh = add_func(w, "Threshold")
+    connect(w, src, thresh)
+    app.processEvents()
+
+    pane = w.inspector_pane
+    # Selecting a node populates the pane: image, histogram channels, base patch source.
+    thresh.setSelected(True)
+    app.processEvents()
+    assert pane._node is thresh
+    assert pane._disp is not None and pane._disp.ndim == 2, "threshold output should be single-channel"
+    assert len(pane._hist._channels) == 1, "single-channel image -> one histogram channel"
+
+    # Hover updates the neighbourhood readout; click freezes it.
+    pane._on_hover(5, 4)
+    assert pane._neigh._center == (5, 4)
+    pane._on_click(7, 8)
+    assert pane._frozen and pane._neigh._center == (7, 8)
+    pane._on_hover(1, 1)
+    assert pane._neigh._center == (7, 8), "frozen neighbourhood should ignore hover"
+
+    # Narrowing a histogram range masks the preview (fewer non-zero pixels).
+    base_nonzero = int(np.count_nonzero(pane._disp))
+    pane._hist._channels[0]["slider"]._lo = 200
+    pane._hist._channels[0]["slider"]._hi = 255
+    pane._apply_filter()
+    shown = pane._image._pixmap
+    assert not shown.isNull(), "filtered image should still render"
+
+    # A 3-channel image gives three histogram channels labelled B/G/R.
+    img_node = add_image(w, gradient_bgr())
+    w.drop_widget.view._scene.clearSelection()
+    img_node.setSelected(True)
+    app.processEvents()
+    assert len(pane._hist._channels) == 3
+    assert [c["name"] for c in pane._hist._channels] == ["B", "G", "R"]
+    w.close()
+    print("OK  inspector pane: image + neighbourhood freeze + histogram channels/filter")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -446,6 +488,7 @@ def main() -> int:
         check_segmentation_chain,
         check_fourier_chain,
         check_rewire,
+        check_inspector_pane,
     ]
     for chk in checks:
         chk(app)

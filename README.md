@@ -29,9 +29,16 @@ REM or, with the venv active:
 python main.py [optional\path\to\image.png]
 ```
 
-Canvas controls: right-drag to connect nodes, double-click to inspect a node,
-**Delete** to remove selected nodes/arrows, **S** to swap a binary op's inputs,
-and **Save/Load Pipeline** (sidebar) to persist a graph to JSON.
+Canvas controls: right-drag to connect nodes (drop on a full single-input node
+to rewire it), double-click to inspect a node, **Delete** to remove selected
+nodes/arrows, **S** to swap a binary op's inputs, and **Save/Load Pipeline**
+(sidebar) to persist a graph to JSON.
+
+The **right-hand Inspector pane** always follows the selected node and stacks:
+an image view (output / `render_preview`); a pixel-neighbourhood view (3/9/27/81
+grid) that tracks the cursor over the image — showing each pixel's position and
+per-channel value, left-click to freeze; and a histogram with per-channel
+toggles and draggable min/max ranges that mask the image to in-range pixels.
 
 ---
 
@@ -113,6 +120,10 @@ This is a **working prototype** being revived. The environment is now set up
       category, with a histogram-plot preview). Added **drag-to-rewire** (drop a
       new source on a full single-input node to re-point it) and **cycle
       prevention** on connections.
+- [x] **Live inspector pane.** A docked, selection-following pane
+      (`ui/inspector_pane.py`): image view + pixel-neighbourhood viewer
+      (3/9/27/81, freeze on click) + per-channel histogram with range filtering
+      that masks the preview.
 
 All planned phases are complete. Adding a new operation is cheap: define one
 `Operation` in `core/operations.py` (+ optional `render_preview`/`summary`), and

@@ -12,6 +12,7 @@ from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode
 from ui.canvas import ImageDropWidget, DEFAULT_ICON_SIZE
 from ui.viewer import ImageViewerWindow
 from ui.parameters import ParameterPanel
+from ui.inspector_pane import InspectorPane
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, initial_image_bgr: Optional[any], window_title: str):
@@ -98,10 +99,15 @@ class MainWindow(QtWidgets.QMainWindow):
         # Main drop/view pane
         self.drop_widget = ImageDropWidget()
 
+        # Live inspector for the currently selected node (right side).
+        self.inspector_pane = InspectorPane()
+
         splitter.addWidget(sidebar)
         splitter.addWidget(self.drop_widget)
+        splitter.addWidget(self.inspector_pane)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 0)
 
         container = QtWidgets.QWidget()
         container.setLayout(QtWidgets.QHBoxLayout())
@@ -116,6 +122,9 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Connect double-click signal to open image viewer
         self.drop_widget.view.nodeDoubleClicked.connect(self.open_image_viewer)
+
+        # Keep the live inspector pane in sync with node result changes.
+        self.drop_widget.view.controller.signals.nodeChanged.connect(self._on_pane_node_changed)
 
         def on_size_changed(value: int) -> None:
             self.drop_widget.icon_size = int(value)
@@ -160,9 +169,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 if not selected:
                     self.param_panel.clear()
                     param_group.setVisible(False)
+                    self.inspector_pane.set_node(None)
                     return
                 sel = selected[0]
                 if isinstance(sel, FunctionNode):
+                    self.inspector_pane.set_node(sel)
                     meta = getattr(sel, "_meta", None)
                     if isinstance(meta, dict):
                         info_name.setText(f"{meta.get('name','')}()")
@@ -171,6 +182,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.param_panel.set_node(sel)
                         param_group.setVisible(self.param_panel.has_controls())
                 elif isinstance(sel, ImageNode):
+                    self.inspector_pane.set_node(sel)
                     meta = getattr(sel, "_meta", None)
                     if isinstance(meta, dict):
                         info_name.setText("Image")
@@ -200,6 +212,11 @@ class MainWindow(QtWidgets.QMainWindow):
         """Open an image viewer window for the specified node."""
         viewer = ImageViewerWindow(node, self)
         viewer.show()
+
+    def _on_pane_node_changed(self, qt_node) -> None:
+        """Refresh the live inspector pane when its node recomputes."""
+        if qt_node is self.inspector_pane._node:
+            self.inspector_pane.refresh()
 
     def save_pipeline(self) -> None:
         path, _ = QtWidgets.QFileDialog.getSaveFileName(

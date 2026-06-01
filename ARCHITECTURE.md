@@ -26,7 +26,9 @@ ui/                   frontend — PyQt6 view layer
   nodes.py            Node / ImageNode / FunctionNode / SaveToFileNode graphics items
   arrow.py            ArrowItem (edge graphics)
   canvas.py           GraphicsImageView + ImageDropWidget (the node canvas)
-  viewer.py           ImageViewerWindow (per-node output inspector)
+  viewer.py           ImageViewerWindow (pinned, per-node output inspector)
+  inspector_pane.py   InspectorPane: docked live inspector that follows the
+                      selection (image + pixel-neighbourhood + histogram filter)
   parameters.py       ParameterPanel auto-generated from a node's ParamSpec schema
   main_window.py      MainWindow (sidebar + canvas + parameter panel)
 

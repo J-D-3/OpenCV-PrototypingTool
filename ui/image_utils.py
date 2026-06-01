@@ -4,7 +4,7 @@ import numpy as np
 from PyQt6 import QtGui
 
 
-def _to_uint8(arr: np.ndarray) -> np.ndarray:
+def to_uint8(arr: np.ndarray) -> np.ndarray:
     """Normalize any numeric array to displayable uint8.
 
     uint8 passes through; everything else (float magnitudes, int16/32, etc.) is
@@ -32,7 +32,7 @@ def cv_to_qimage(image) -> QtGui.QImage:
     if image is None:
         return QtGui.QImage()
 
-    arr = _to_uint8(image)
+    arr = to_uint8(image)
 
     if arr.ndim == 2:
         h, w = arr.shape
