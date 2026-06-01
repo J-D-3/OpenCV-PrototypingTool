@@ -83,6 +83,13 @@ This is a **working prototype** being revived. The environment is now set up
       bools, text/path); deleted the ~370-line per-function `if/elif`. A new
       operation now needs zero UI code.
 
+- [x] **Phase 4 — typed data + generalized inspection.** Added
+      `core/datatypes.py` (port types + permissive image compatibility, wired
+      into connection validation); made `cv_to_qimage` robust (gray/BGR/BGRA +
+      float normalization); made the inspector **signal-driven** (no polling)
+      and able to show an op's `render_preview` image plus a `summary`
+      key-facts line. A `run.bat` launcher was also added.
+
 ### Roadmap
 
 Remaining phases toward the goal: rapidly wire OpenCV chains, expose every
@@ -90,18 +97,14 @@ parameter with live downstream updates, and inspect each node's result —
 including ops whose output is not itself an image (e.g. findContours, drawn
 back onto the input, with key stats like #contours shown in the GUI).
 
-- **Phase 4 (next)** — typed data envelope (Image/Contours/Histogram/Labels/…) +
-  type-dispatching, signal-driven inspector (image viewer, `render_preview`
-  for non-image ops, `summary` key-info panel).
-- **Phase 5** — save/load chains (JSON) + node/edge deletion & re-wiring.
+- **Phase 5 (next)** — save/load chains (JSON) + node/edge deletion & re-wiring.
 - **Phase 6** — grow the library (Resize, GaussianBlur, FindContours,
-  cvtColor→HSV/HSL, Histogram, KMeans, ColorQuantize, DFT/Fourier).
+  cvtColor→HSV/HSL, Histogram, KMeans, ColorQuantize, DFT/Fourier). These will
+  exercise the typed-data and `render_preview`/`summary` infrastructure.
 
 ### Known issues
 - Sidebar categories *Geometry* and *Fourier* are present-but-empty placeholders.
 - No way to delete nodes or edges yet (the GraphModel supports it; no UI yet).
-- `cv_to_qimage` does not normalize float / non-8-bit images (matters for Fourier).
-- The inspector still polls (100 ms) for changes; it becomes signal-driven in Phase 4.
 
 ---
 
@@ -118,4 +121,7 @@ back onto the input, with key stats like #contours shown in the GUI).
   `core/engine.py` DAG evaluator (topo order, dirty propagation, caching,
   error capture) wired through `ui/controller.py`; added `engine_test.py`.
   **Phase 2:** auto-generated the parameter panel (`ui/parameters.py`) from
-  each op's schema and removed the per-function control code.
+  each op's schema and removed the per-function control code. **Phase 4:**
+  added `core/datatypes.py`, made `cv_to_qimage` robust (float normalization),
+  and made the inspector signal-driven with `render_preview`/`summary` support.
+  Added `run.bat`.

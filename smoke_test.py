@@ -16,6 +16,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import sys
+from dataclasses import replace
 import numpy as np
 import cv2
 from PyQt6 import QtWidgets
@@ -23,14 +24,22 @@ from PyQt6 import QtWidgets
 from ui.main_window import MainWindow
 from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode
 from ui.viewer import ImageViewerWindow
+from ui.image_utils import cv_to_qimage
 
 
 # ----------------------------------------------------------------------------
 # helpers
 # ----------------------------------------------------------------------------
-def make_window(app) -> MainWindow:
-    """A window with an empty scene (no initial image node)."""
+def make_window(app):
+    """A window with an empty scene (no initial image node).
+
+    WA_DeleteOnClose makes w.close() tear down the C++ widget tree
+    deterministically, so repeatedly creating windows across checks does not
+    accumulate half-destroyed Qt objects (which can crash on later GC).
+    """
+    from PyQt6 import QtCore
     w = MainWindow(None, "smoke")
+    w.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
     w.show()
     app.processEvents()
     return w
@@ -227,6 +236,54 @@ def check_parameter_panel(app) -> None:
     print("OK  parameter panel auto-builds controls from the op schema")
 
 
+def check_display_conversion(app) -> None:
+    # grayscale (single channel)
+    q = cv_to_qimage(np.zeros((10, 12), np.uint8))
+    assert not q.isNull() and (q.width(), q.height()) == (12, 10)
+    # float (e.g. Fourier magnitude) -> normalized, no crash
+    q = cv_to_qimage(np.random.rand(8, 8).astype(np.float32) * 1000)
+    assert not q.isNull()
+    # BGR
+    q = cv_to_qimage(np.zeros((6, 7, 3), np.uint8))
+    assert (q.width(), q.height()) == (7, 6)
+    print("OK  cv_to_qimage handles gray / float / bgr")
+
+
+def check_preview_and_summary(app) -> None:
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    thresh = add_func(w, "Threshold")
+    blur = add_func(w, "Blur")
+    connect(w, src, thresh)
+    connect(w, thresh, blur)
+    app.processEvents()
+
+    # Stub render_preview + summary on blur's op (does not touch the registry).
+    blur.op = replace(
+        blur.op,
+        render_preview=lambda inputs, out, params: np.full_like(out, 7),
+        summary=lambda out, params: {"pixels": int(out.size)},
+    )
+    preview = blur.get_preview_image()
+    assert preview is not None and int(preview.flat[0]) == 7, "render_preview not used"
+    assert blur.get_summary().get("pixels") == blur.get_output_image().size
+
+    # Signal-driven: an upstream change fires nodeChanged for the downstream node.
+    changed = []
+    blur.controller.signals.nodeChanged.connect(changed.append)
+    thresh.set_parameter("threshold_value", 99, preview_mode=False)
+    app.processEvents()
+    assert blur in changed, "downstream node change did not signal"
+
+    viewer = ImageViewerWindow(blur)
+    viewer.show()
+    app.processEvents()
+    assert viewer.summary_label.isVisible() and "pixels" in viewer.summary_label.text()
+    viewer.close()
+    w.close()
+    print("OK  inspector is signal-driven and uses render_preview + summary")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -237,9 +294,12 @@ def main() -> int:
         check_save_to_file,
         check_inspector,
         check_parameter_panel,
+        check_display_conversion,
+        check_preview_and_summary,
     ]
     for chk in checks:
         chk(app)
+        app.processEvents()   # let WA_DeleteOnClose tear closed windows down now
     print(f"\nSMOKE OK: {len(checks)} checks passed")
     return 0
 

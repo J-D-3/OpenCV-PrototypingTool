@@ -16,6 +16,7 @@ from ui.image_utils import cv_to_qimage
 if TYPE_CHECKING:
     from ui.arrow import ArrowItem
 
+
 class Node(QtWidgets.QGraphicsPixmapItem):
     """Base class for all nodes in the visual programming interface."""
     
@@ -242,6 +243,14 @@ class Node(QtWidgets.QGraphicsPixmapItem):
         """Hook fired after a committed (non-preview) recompute. Override as needed."""
         pass
 
+    def get_preview_image(self):
+        """Image to show in the inspector. Defaults to the node's output."""
+        return self.get_output_image()
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Key facts to show in the inspector (e.g. {'contours': 42})."""
+        return {}
+
 
 class ImageNode(Node):
     """Node representing an input image."""
@@ -435,6 +444,32 @@ class FunctionNode(Node):
     # --- data: delegate to the backend via the controller ------------------
     def get_output_image(self) -> Optional[np.ndarray]:
         return None if self.gnode is None else self.gnode.output
+
+    def get_preview_image(self):
+        """Inspector image: the op's render_preview (e.g. contours drawn onto the
+        input) if it defines one, otherwise the raw output."""
+        out = self.get_output_image()
+        render = getattr(self.op, "render_preview", None)
+        if render is not None and self.gnode is not None and self.controller is not None:
+            inputs = [n.output for n in self.controller.model.inputs_of(self.gnode)]
+            try:
+                preview = render(inputs, out, dict(self.gnode.params))
+                if preview is not None:
+                    return preview
+            except Exception as e:  # noqa: BLE001
+                print(f"render_preview failed for {self.op.id}: {e}")
+        return out
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Key facts from the op's summary hook (e.g. {'contours': 42})."""
+        summarize = getattr(self.op, "summary", None)
+        if summarize is None or self.gnode is None:
+            return {}
+        try:
+            return summarize(self.get_output_image(), dict(self.gnode.params)) or {}
+        except Exception as e:  # noqa: BLE001
+            print(f"summary failed for {self.op.id}: {e}")
+            return {}
 
     def can_accept_input(self, input_node: Node) -> bool:
         if self.controller is None:

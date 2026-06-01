@@ -11,14 +11,24 @@ from __future__ import annotations
 
 from typing import Dict
 
+from PyQt6 import QtCore
+
 from core.graph import GraphModel
 from core.engine import Engine
+from core import datatypes
+
+
+class ControllerSignals(QtCore.QObject):
+    """One signal hub per canvas (cheaper than a QObject per node).
+    Emits the Qt node item whose result just changed."""
+    nodeChanged = QtCore.pyqtSignal(object)
 
 
 class GraphController:
     def __init__(self):
         self.model = GraphModel()
         self.engine = Engine(self.model)
+        self.signals = ControllerSignals()
         self._qt_by_gid: Dict[int, object] = {}
 
     # --- registration ------------------------------------------------------
@@ -46,7 +56,17 @@ class GraphController:
     # --- topology / parameters --------------------------------------------
     def can_connect(self, src_qt, dst_qt) -> bool:
         gn = dst_qt.gnode
-        return len(self.model.incoming(gn)) < gn.arity
+        port_index = len(self.model.incoming(gn))
+        if port_index >= gn.arity:
+            return False  # all input ports already filled
+        in_type = dst_qt.op.inputs[port_index].type
+        return datatypes.compatible(self._output_type(src_qt), in_type)
+
+    def _output_type(self, qt) -> str:
+        gn = qt.gnode
+        if gn.is_source:
+            return datatypes.IMAGE
+        return qt.op.outputs[0].type
 
     def connect(self, src_qt, dst_qt) -> bool:
         if not self.can_connect(src_qt, dst_qt):
@@ -70,3 +90,4 @@ class GraphController:
             qt.refresh_from_model()
             if commit:
                 qt.on_commit()
+            self.signals.nodeChanged.emit(qt)

@@ -15,12 +15,13 @@ Qt to the view layer. `operations.py` is verified Qt-free by the smoke test.
 ```
 core/                 backend — pure Python, no Qt
   operations.py       the Operation registry (compute + metadata + param schema)
+  datatypes.py        port data types + connection compatibility rules
   graph.py            GraphModel: nodes + edges, the topology source of truth
   engine.py           DAG evaluator: topo order, dirty propagation, caching, error capture
 
 ui/                   frontend — PyQt6 view layer
   controller.py       GraphController: bridges view items <-> model/engine
-  image_utils.py      cv_to_qimage and (Phase 4) display normalization
+  image_utils.py      cv_to_qimage: gray/BGR/BGRA + float normalization for display
   nodes.py            Node / ImageNode / FunctionNode / SaveToFileNode graphics items
   arrow.py            ArrowItem (edge graphics)
   canvas.py           GraphicsImageView + ImageDropWidget (the node canvas)
