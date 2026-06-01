@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from core import datatypes
+from core.batch import Batch
 
 
 # --- Ports ------------------------------------------------------------------
@@ -72,6 +73,11 @@ class Operation:
     # compute() argument.
     out_space: str = "auto"
     space_aware: bool = False
+    # variadic: accepts arbitrarily many inputs (the single declared input port
+    # is a template). raw: the engine passes inputs as-is (no per-element batch
+    # fan-out) so the op can assemble/consume batches itself.
+    variadic: bool = False
+    raw: bool = False
 
     def defaults(self) -> dict:
         return {p.name: p.default for p in self.params}
@@ -563,6 +569,35 @@ def _compute_noop(inputs, p):
     return inputs[0] if inputs else None
 
 
+def _to_bgr3(im):
+    """Normalize an image to 3-channel BGR (so a batch is homogeneous)."""
+    if im is None:
+        return None
+    if im.ndim == 2:
+        return cv2.cvtColor(im, cv2.COLOR_GRAY2BGR)
+    if im.ndim == 3 and im.shape[2] == 1:
+        return cv2.cvtColor(im[:, :, 0], cv2.COLOR_GRAY2BGR)
+    if im.ndim == 3 and im.shape[2] == 4:
+        return cv2.cvtColor(im, cv2.COLOR_BGRA2BGR)
+    return im
+
+
+def _compute_create_batch(inputs, p):
+    """Assemble a Batch from arbitrarily many image inputs (raw + variadic).
+
+    Inputs that are themselves batches are flattened in. Every element is
+    normalized to 3-channel BGR so the resulting batch is homogeneous.
+    """
+    items = []
+    for inp in inputs:
+        if isinstance(inp, Batch):
+            items.extend(inp.items)
+        elif inp is not None:
+            items.append(inp)
+    out = [_to_bgr3(im) for im in items if im is not None]
+    return Batch(out) if out else None
+
+
 # ---------------------------------------------------------------------------
 # registry
 # ---------------------------------------------------------------------------
@@ -608,6 +643,13 @@ OPS: list = [
         ],
         compute=_compute_noop, color=(76, 175, 80), out_space="passthrough",
         in_label="Mat (Any)", out_label="File",
+    ),
+    Operation(
+        id="create_batch", label="Create Batch", category="Input/Output",
+        inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE)],
+        params=[], compute=_compute_create_batch, color=(121, 134, 203),
+        in_label="Mat (any) ×N", out_label="Batch (BGR)",
+        out_space="bgr", variadic=True, raw=True,
     ),
     Operation(
         id="to_grayscale", label="To Grayscale", category="Conversions",

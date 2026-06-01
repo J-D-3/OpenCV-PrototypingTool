@@ -270,6 +270,26 @@ def test_batched():
     print("OK  batched: op maps over a batch; single inputs broadcast; persists")
 
 
+def test_create_batch():
+    a = np.full((10, 10, 3), 10, np.uint8)
+    b = np.full((10, 12), 50, np.uint8)        # grayscale, different size
+    c = np.full((10, 10, 3), 200, np.uint8)
+    m = GraphModel()
+    sa, sb, sc = (m.add_node(op=None, source_image=x) for x in (a, b, c))
+    cb = _op(m, "create_batch")
+    for s in (sa, sb, sc):
+        m.add_edge(s, cb)
+    blur = _op(m, "blur", kernel_size=3)
+    m.add_edge(cb, blur)
+    Engine(m).evaluate_all()
+
+    assert isinstance(cb.output, Batch) and len(cb.output) == 3, "should assemble a batch of 3"
+    assert all(x.ndim == 3 and x.shape[2] == 3 for x in cb.output.items), "all elements normalized to BGR"
+    assert int(cb.output.items[1].mean()) == 50, "grayscale input promoted to 3-channel"
+    assert isinstance(blur.output, Batch) and len(blur.output) == 3, "downstream fans out over the batch"
+    print("OK  create_batch: variadic inputs -> one homogeneous BGR batch")
+
+
 def test_cycle_prevention():
     m = GraphModel()
     a = _op(m, "blur")
@@ -293,8 +313,9 @@ def main():
     test_more_ops()
     test_conversions()
     test_batched()
+    test_create_batch()
     test_cycle_prevention()
-    print("\nENGINE OK: 13 backend tests passed")
+    print("\nENGINE OK: 14 backend tests passed")
 
 
 if __name__ == "__main__":

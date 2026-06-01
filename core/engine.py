@@ -57,8 +57,13 @@ class Engine:
             node.dirty = False
             return
 
+        op = node.op
+        variadic = getattr(op, "variadic", False)
+        raw = getattr(op, "raw", False)
+
         input_nodes = self.graph.inputs_of(node)
-        if len(input_nodes) != node.arity:
+        ready = len(input_nodes) >= 1 if variadic else len(input_nodes) == node.arity
+        if not ready:
             node.output = None
             node.error = None
             node.color_space = "unknown"
@@ -66,23 +71,29 @@ class Engine:
             return
 
         inputs = [n.output for n in input_nodes]
-        if any(img is None for img in inputs):
+        # Non-raw ops need every input present; raw ops (e.g. Create Batch) get
+        # the inputs as-is and decide what to do with missing/batched ones.
+        if not raw and any(img is None for img in inputs):
             node.output = None
             node.error = None
             node.color_space = "unknown"
             node.dirty = False
             return
 
-        op = node.op
         try:
-            batches = [i for i in inputs if isinstance(i, Batch)]
-            if batches:
-                node.output, node.error = self._run_batched(op, inputs, batches,
-                                                            node.params, input_nodes)
-            else:
+            if raw:
                 result = self._call(op, inputs, node.params, input_nodes)
                 node.output = result
                 node.error = None if result is not None else "operation returned no result (see console)"
+            else:
+                batches = [i for i in inputs if isinstance(i, Batch)]
+                if batches:
+                    node.output, node.error = self._run_batched(op, inputs, batches,
+                                                                node.params, input_nodes)
+                else:
+                    result = self._call(op, inputs, node.params, input_nodes)
+                    node.output = result
+                    node.error = None if result is not None else "operation returned no result (see console)"
         except Exception as e:  # noqa: BLE001 — surface, don't crash the UI
             node.output = None
             node.error = f"{type(e).__name__}: {e}"

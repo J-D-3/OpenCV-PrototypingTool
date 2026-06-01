@@ -130,6 +130,10 @@ This is a **working prototype** being revived. The environment is now set up
       zip/broadcast (e.g. diff every frame against one reference). A frame slider
       in the inspector scrubs which element all nodes preview; Save-to-File
       writes every element; batch sources are persisted.
+- [x] **Create Batch node.** A variadic Input/Output node that assembles a
+      batch from arbitrarily many image inputs (normalized to 3-channel BGR), so
+      you can batch the outputs of separate sources/branches — without colliding
+      with two-input ops like AND. (Enabled by `variadic`/`raw` op flags.)
 
 All planned phases are complete. Adding a new operation is cheap: define one
 `Operation` in `core/operations.py` (+ optional `render_preview`/`summary`), and

@@ -539,6 +539,37 @@ def check_batch(app) -> None:
     print("OK  batched: one chain over 3 images; per-frame preview + save-all")
 
 
+def check_create_batch(app) -> None:
+    from core.batch import Batch
+
+    w = make_window(app)
+    a = add_image(w, np.full((16, 16, 3), 30, np.uint8))
+    b = add_image(w, np.full((16, 16, 3), 130, np.uint8))
+    c = add_image(w, np.full((16, 16, 3), 230, np.uint8))
+    cb = add_func(w, "Create Batch")
+    blur = add_func(w, "Blur")
+    connect(w, a, cb)
+    connect(w, b, cb)
+    connect(w, c, cb)              # three inputs into one variadic node
+    connect(w, cb, blur)
+    app.processEvents()
+
+    assert isinstance(cb.gnode.output, Batch) and len(cb.gnode.output) == 3
+    assert isinstance(blur.gnode.output, Batch) and len(blur.gnode.output) == 3
+
+    ctrl = w.drop_widget.view.controller
+    ctrl.set_preview_index(0)
+    assert int(blur.get_output_image().mean()) == 30
+    ctrl.set_preview_index(2)
+    assert int(blur.get_output_image().mean()) == 230
+
+    # Variadic node keeps accepting more inputs.
+    d = add_image(w, np.zeros((16, 16, 3), np.uint8))
+    assert cb.can_accept_input(d)
+    w.close()
+    print("OK  Create Batch: variadic inputs -> one batch through the chain")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -560,6 +591,7 @@ def main() -> int:
         check_rewire,
         check_inspector_pane,
         check_batch,
+        check_create_batch,
     ]
     for chk in checks:
         chk(app)

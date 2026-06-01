@@ -88,20 +88,28 @@ class GraphController:
         return True
 
     # --- topology / parameters --------------------------------------------
+    _VARIADIC_CAP = 64
+
     def can_connect(self, src_qt, dst_qt) -> bool:
         gn = dst_qt.gnode
         if self.model.creates_cycle(src_qt.gnode, gn):
             return False
-        port_index = len(self.model.incoming(gn))
-        if port_index >= gn.arity:
-            return False  # all input ports already filled
-        in_type = dst_qt.op.inputs[port_index].type
+        op = dst_qt.op
+        n_in = len(self.model.incoming(gn))
+        if getattr(op, "variadic", False):
+            if n_in >= self._VARIADIC_CAP:
+                return False
+            in_type = op.inputs[0].type   # single template port for all inputs
+        else:
+            if n_in >= gn.arity:
+                return False  # all input ports already filled
+            in_type = op.inputs[n_in].type
         return datatypes.compatible(self._output_type(src_qt), in_type)
 
     def can_rewire(self, src_qt, dst_qt) -> bool:
         """A full single-input node can be re-pointed at a new (compatible) source."""
         gn = dst_qt.gnode
-        if gn.is_source or gn.arity != 1:
+        if gn.is_source or gn.arity != 1 or getattr(dst_qt.op, "variadic", False):
             return False
         if len(self.model.incoming(gn)) != 1:
             return False
