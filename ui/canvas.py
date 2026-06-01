@@ -6,6 +6,7 @@ import cv2
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.operations import by_label
+from core import persistence
 from ui.controller import GraphController
 from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode
 from ui.arrow import ArrowItem
@@ -169,6 +170,46 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
                     event.accept()
                     return
         super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        key = event.key()
+        if key in (QtCore.Qt.Key.Key_Delete, QtCore.Qt.Key.Key_Backspace):
+            self._delete_selected()
+            event.accept()
+            return
+        if key == QtCore.Qt.Key.Key_S:
+            # Swap the two inputs of a selected binary op (e.g. Diff A<->B).
+            funcs = [it for it in self._scene.selectedItems() if isinstance(it, FunctionNode)]
+            if len(funcs) == 1:
+                self.controller.swap_inputs(funcs[0])
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def _delete_selected(self) -> None:
+        for item in list(self._scene.selectedItems()):
+            if isinstance(item, ArrowItem):
+                self._delete_arrow(item)
+            elif isinstance(item, Node):
+                self._delete_node(item)
+
+    def _detach_arrow(self, arrow: ArrowItem) -> None:
+        arrow.a._unregister_arrow(arrow)
+        arrow.b._unregister_arrow(arrow)
+        if arrow.scene() is not None:
+            self._scene.removeItem(arrow)
+
+    def _delete_arrow(self, arrow: ArrowItem) -> None:
+        a, b = arrow.a, arrow.b            # a = source, b = target (see _create_arrow_between)
+        self._detach_arrow(arrow)
+        self.controller.delete_edge(a, b)
+
+    def _delete_node(self, node: Node) -> None:
+        for arrow in list(node._arrows):
+            self._detach_arrow(arrow)
+        self.controller.unregister(node)   # drops the backend node + its edges, then recomputes
+        if node.scene() is not None:
+            self._scene.removeItem(node)
 
     def _nearest_icon(self, scene_pos: QtCore.QPointF) -> Optional[Node]:
         nearest: Optional[Node] = None
@@ -350,11 +391,11 @@ class ImageDropWidget(QtWidgets.QWidget):
         # Connect view's drop signal to add icons with snapping
         self.view.fileDropped.connect(self.on_file_dropped)
 
-    def add_function_node(self, label: str, scene_pos: Optional[QtCore.QPointF] = None, meta: Optional[dict] = None) -> None:
+    def add_function_node(self, label: str, scene_pos: Optional[QtCore.QPointF] = None, meta: Optional[dict] = None):
         # Look the operation up in the registry and build the right node.
         op = by_label.get(label)
         if op is None:
-            return
+            return None
         if op.id == "save_to_file":
             item = SaveToFileNode(icon_size=self.icon_size, grid_size=12)
         else:
@@ -369,6 +410,7 @@ class ImageDropWidget(QtWidgets.QWidget):
         gx = round(scene_pos.x() / 12) * 12
         gy = round(scene_pos.y() / 12) * 12
         item.setPos(gx, gy)
+        return item
 
     #def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
     #    if event.button() == QtCore.Qt.MouseButton.LeftButton:
@@ -403,7 +445,7 @@ class ImageDropWidget(QtWidgets.QWidget):
         self.load_image_from_path(path, scene_pos)
         self.imageLoaded.emit(path)
 
-    def add_icon(self, image_bgr, scene_pos: Optional[QtCore.QPointF] = None) -> None:
+    def add_icon(self, image_bgr, scene_pos: Optional[QtCore.QPointF] = None):
         # Create an ImageNode with the loaded image
         item = ImageNode(image_bgr, icon_size=self.icon_size, grid_size=12)
         self.view.controller.register_source(item, image_bgr)
@@ -420,6 +462,48 @@ class ImageDropWidget(QtWidgets.QWidget):
         gy = round(scene_pos.y() / 12) * 12
         item.setPos(gx, gy)
         self.instruction.setText("")
+        return item
+
+    # --- save / load -------------------------------------------------------
+    def to_dict(self) -> dict:
+        controller = self.view.controller
+        positions = {
+            gid: (qt.x(), qt.y()) for gid, qt in controller._qt_by_gid.items()
+        }
+        return persistence.to_dict(controller.model, positions)
+
+    def load_dict(self, data: dict) -> None:
+        """Replace the canvas contents with a serialized pipeline."""
+        model, positions = persistence.from_dict(data)
+        controller = self.view.controller
+        self.view._scene.clear()
+        controller.adopt(model)
+
+        # Recreate a view item per backend node and bind it.
+        qt_by_gid = {}
+        for gid, gn in model.nodes.items():
+            if gn.is_source:
+                item = ImageNode(gn.source_image, icon_size=self.icon_size, grid_size=12)
+            else:
+                item = (SaveToFileNode(icon_size=self.icon_size, grid_size=12)
+                        if gn.op.id == "save_to_file"
+                        else FunctionNode(gn.op, icon_size=self.icon_size, grid_size=12))
+            controller.bind(item, gn)
+            self.view._scene.addItem(item)
+            x, y = positions.get(gid, (0.0, 0.0))
+            item.setPos(x, y)
+            qt_by_gid[gid] = item
+
+        # Recreate the arrows for each edge.
+        for edge in model.edges:
+            src = qt_by_gid.get(edge.src.id)
+            dst = qt_by_gid.get(edge.dst.id)
+            if src is not None and dst is not None:
+                self.view._scene.addItem(ArrowItem(src, dst))
+
+        if model.nodes:
+            self.instruction.setText("")
+        controller.recompute_all()
 
     def resize_all_icons(self, new_size: int) -> None:
         for item in self.view._scene.items():

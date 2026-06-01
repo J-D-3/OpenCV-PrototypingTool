@@ -16,6 +16,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import sys
+import json
 from dataclasses import replace
 import numpy as np
 import cv2
@@ -284,6 +285,61 @@ def check_preview_and_summary(app) -> None:
     print("OK  inspector is signal-driven and uses render_preview + summary")
 
 
+def check_save_load(app) -> None:
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    thresh = add_func(w, "Threshold")
+    connect(w, src, thresh)
+    app.processEvents()
+    expected = thresh.get_output_image().copy()
+
+    data = json.loads(json.dumps(w.drop_widget.to_dict()))  # round-trip through JSON
+    w.drop_widget.load_dict(data)
+    app.processEvents()
+
+    scene = w.drop_widget.view._scene
+    funcs = [it for it in scene.items() if isinstance(it, FunctionNode)]
+    imgs = [it for it in scene.items() if isinstance(it, ImageNode)]
+    assert len(funcs) == 1 and len(imgs) == 1, "node count not preserved across save/load"
+    assert np.array_equal(expected, funcs[0].get_output_image()), "result not preserved"
+    w.close()
+    print("OK  pipeline save/load round-trips structure and result")
+
+
+def check_delete_node(app) -> None:
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    blur = add_func(w, "Blur")
+    connect(w, src, blur)
+    app.processEvents()
+    assert blur.get_output_image() is not None
+
+    view = w.drop_widget.view
+    view._delete_node(src)
+    app.processEvents()
+    assert src not in view._scene.items(), "deleted node still in scene"
+    assert blur.get_output_image() is None, "downstream not re-evaluated after delete"
+    w.close()
+    print("OK  node deletion removes it and re-evaluates downstream")
+
+
+def check_input_swap(app) -> None:
+    w = make_window(app)
+    a = add_image(w, np.full((40, 40, 3), 200, np.uint8))
+    b = add_image(w, np.full((40, 40, 3), 50, np.uint8))
+    diff = add_func(w, "Diff")
+    connect(w, a, diff)
+    connect(w, b, diff)
+    app.processEvents()
+    before = diff.get_output_image().copy()      # 200-50 = 150
+    assert w.drop_widget.view.controller.swap_inputs(diff)
+    app.processEvents()
+    after = diff.get_output_image()               # 50-200 -> 0
+    assert not np.array_equal(before, after), "input swap did not change result"
+    w.close()
+    print("OK  binary-op input swap reverses the operands")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -296,6 +352,9 @@ def main() -> int:
         check_parameter_panel,
         check_display_conversion,
         check_preview_and_summary,
+        check_save_load,
+        check_delete_node,
+        check_input_swap,
     ]
     for chk in checks:
         chk(app)

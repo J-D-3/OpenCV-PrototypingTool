@@ -18,6 +18,7 @@ core/                 backend — pure Python, no Qt
   datatypes.py        port data types + connection compatibility rules
   graph.py            GraphModel: nodes + edges, the topology source of truth
   engine.py           DAG evaluator: topo order, dirty propagation, caching, error capture
+  persistence.py      to_dict / from_dict — save/load a pipeline as JSON
 
 ui/                   frontend — PyQt6 view layer
   controller.py       GraphController: bridges view items <-> model/engine
@@ -67,6 +68,14 @@ does not cycle at runtime.
 | Change the inspector window | `ui/viewer.py`. |
 | Change evaluation / propagation | `core/engine.py`. |
 | Change how the view drives the backend | `ui/controller.py`. |
+| Change the save/load format | `core/persistence.py`. |
+
+## Canvas controls
+- **Right-drag** between two nodes: create a connection.
+- **Double-click** a node: open its inspector.
+- **Delete / Backspace**: remove the selected node(s) or arrow(s).
+- **S**: swap the two inputs of a selected binary op (e.g. Diff A↔B).
+- **Save / Load Pipeline** (sidebar): persist the whole graph to JSON.
 
 ## Run / test
 ```powershell

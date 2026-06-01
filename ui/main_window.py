@@ -1,6 +1,7 @@
 """The application main window: registry-driven sidebar, canvas, and the
 parameter panel (frontend)."""
 import cv2
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -76,8 +77,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.param_panel = ParameterPanel()
         param_layout.addWidget(self.param_panel)
 
+        save_btn = QtWidgets.QPushButton("Save Pipeline...")
+        load_btn = QtWidgets.QPushButton("Load Pipeline...")
+
         sidebar.layout().addWidget(title)
         sidebar.layout().addWidget(open_btn)
+        sidebar.layout().addWidget(save_btn)
+        sidebar.layout().addWidget(load_btn)
         sidebar.layout().addWidget(size_label)
         sidebar.layout().addWidget(size_slider)
         sidebar.layout().addSpacing(8)
@@ -104,6 +110,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(container)
 
         open_btn.clicked.connect(self.drop_widget.browse_for_image)
+        save_btn.clicked.connect(self.save_pipeline)
+        load_btn.clicked.connect(self.load_pipeline)
         self.drop_widget.imageLoaded.connect(self.on_image_loaded)
         
         # Connect double-click signal to open image viewer
@@ -192,3 +200,28 @@ class MainWindow(QtWidgets.QMainWindow):
         """Open an image viewer window for the specified node."""
         viewer = ImageViewerWindow(node, self)
         viewer.show()
+
+    def save_pipeline(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Pipeline", "", "Pipeline (*.json);;All Files (*)")
+        if not path:
+            return
+        if not path.lower().endswith(".json"):
+            path += ".json"
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.drop_widget.to_dict(), f)
+        except Exception as e:  # noqa: BLE001
+            QtWidgets.QMessageBox.critical(self, "Save failed", str(e))
+
+    def load_pipeline(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Load Pipeline", "", "Pipeline (*.json);;All Files (*)")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.drop_widget.load_dict(data)
+        except Exception as e:  # noqa: BLE001
+            QtWidgets.QMessageBox.critical(self, "Load failed", str(e))

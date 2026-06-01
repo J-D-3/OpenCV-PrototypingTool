@@ -2,11 +2,13 @@
 
 Run: python engine_test.py
 """
+import json
 import numpy as np
 
 from core.operations import REGISTRY
 from core.graph import GraphModel
 from core.engine import Engine
+from core import persistence
 
 
 def _src(model, img):
@@ -101,13 +103,34 @@ def test_error_capture():
     print("OK  compute failure is captured on the node (error surfaced)")
 
 
+def test_persistence_roundtrip():
+    m = GraphModel()
+    s = _src(m, gradient())
+    t = _op(m, "threshold", threshold_value=80)
+    b = _op(m, "blur", kernel_size=7)
+    m.add_edge(s, t)
+    m.add_edge(t, b)
+    Engine(m).evaluate_all()
+    expected = b.output.copy()
+
+    d = json.loads(json.dumps(persistence.to_dict(m, {})))  # also asserts JSON-safe
+    m2, _positions = persistence.from_dict(d)
+    Engine(m2).evaluate_all()
+
+    assert len(m2.nodes) == 3 and len(m2.edges) == 2, "structure not preserved"
+    b2 = next(n for n in m2.nodes.values() if n.op and n.op.id == "blur")
+    assert b2.output is not None and np.array_equal(expected, b2.output), "result not preserved"
+    print("OK  persistence round-trips structure, params, image, and result")
+
+
 def main():
     test_linear_chain_and_caching()
     test_dirty_propagation()
     test_arity_gating()
     test_input_order()
     test_error_capture()
-    print("\nENGINE OK: 5 backend tests passed")
+    test_persistence_roundtrip()
+    print("\nENGINE OK: 6 backend tests passed")
 
 
 if __name__ == "__main__":

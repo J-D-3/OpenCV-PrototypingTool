@@ -57,6 +57,9 @@ class GraphModel:
         return gn
 
     def remove_node(self, node: GraphNode) -> None:
+        # Downstream consumers lose an input, so they must recompute.
+        for dep in self.dependents_of(node):
+            self.mark_dirty(dep)
         self.edges = [e for e in self.edges if e.src is not node and e.dst is not node]
         self.nodes.pop(node.id, None)
 

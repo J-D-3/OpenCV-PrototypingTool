@@ -45,6 +45,19 @@ class GraphController:
         qt_node.controller = self
         self._qt_by_gid[gnode.id] = qt_node
 
+    def adopt(self, model) -> None:
+        """Replace the backend with a freshly loaded model (clears bindings)."""
+        self.model = model
+        self.engine = Engine(model)
+        self._qt_by_gid.clear()
+
+    def bind(self, qt_node, gnode) -> None:
+        """Bind a view item to an existing backend node (used when loading)."""
+        self._bind(qt_node, gnode)
+
+    def recompute_all(self) -> None:
+        self._recompute(commit=True)
+
     def unregister(self, qt_node) -> None:
         gn = getattr(qt_node, "gnode", None)
         if gn is None:
@@ -52,6 +65,20 @@ class GraphController:
         self.model.remove_node(gn)
         self._qt_by_gid.pop(gn.id, None)
         self._recompute(commit=True)
+
+    def delete_edge(self, src_qt, dst_qt) -> None:
+        self.model.remove_edge(src_qt.gnode, dst_qt.gnode)
+        self._recompute(commit=True)
+
+    def swap_inputs(self, qt_node) -> bool:
+        """Swap the two incoming edges of a 2-input node (e.g. Diff A<->B)."""
+        edges = self.model.incoming(qt_node.gnode)
+        if len(edges) != 2:
+            return False
+        edges[0].dst_port, edges[1].dst_port = edges[1].dst_port, edges[0].dst_port
+        self.model.mark_dirty(qt_node.gnode)
+        self._recompute(commit=True)
+        return True
 
     # --- topology / parameters --------------------------------------------
     def can_connect(self, src_qt, dst_qt) -> bool:
