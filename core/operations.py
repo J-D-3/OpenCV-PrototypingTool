@@ -444,6 +444,102 @@ def _compute_idft(inputs, p):
         return None
 
 
+def _compute_gaussian_blur(inputs, p):
+    try:
+        k = int(p["kernel_size"])
+        if k % 2 == 0:
+            k += 1
+        return cv2.GaussianBlur(inputs[0], (k, k), float(p.get("sigma", 0.0)))
+    except Exception as e:
+        print(f"Error executing gaussian_blur: {e}")
+        return None
+
+
+def _compute_morphology(inputs, p):
+    try:
+        ksize = max(1, int(p["kernel_size"]))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (ksize, ksize))
+        return cv2.morphologyEx(inputs[0], int(p["operation"]), kernel,
+                                iterations=max(1, int(p.get("iterations", 1))))
+    except Exception as e:
+        print(f"Error executing morphology: {e}")
+        return None
+
+
+def _compute_canny(inputs, p):
+    try:
+        gray = _to_gray_u8(inputs[0])
+        ap = int(p.get("aperture", 3))
+        return cv2.Canny(gray, float(p["threshold1"]), float(p["threshold2"]), apertureSize=ap)
+    except Exception as e:
+        print(f"Error executing canny: {e}")
+        return None
+
+
+def _compute_sobel(inputs, p):
+    try:
+        gray = _to_gray_u8(inputs[0])
+        dx, dy = int(p["dx"]), int(p["dy"])
+        if dx == 0 and dy == 0:
+            dx = 1
+        k = int(p["ksize"])
+        if k % 2 == 0:
+            k += 1
+        return cv2.convertScaleAbs(cv2.Sobel(gray, cv2.CV_64F, dx, dy, ksize=k))
+    except Exception as e:
+        print(f"Error executing sobel: {e}")
+        return None
+
+
+def _compute_laplacian(inputs, p):
+    try:
+        gray = _to_gray_u8(inputs[0])
+        k = int(p["ksize"])
+        if k % 2 == 0:
+            k += 1
+        return cv2.convertScaleAbs(cv2.Laplacian(gray, cv2.CV_64F, ksize=k))
+    except Exception as e:
+        print(f"Error executing laplacian: {e}")
+        return None
+
+
+def _compute_histogram(inputs, p):
+    """Per-channel intensity histogram. Output is a HISTOGRAM payload."""
+    try:
+        img = inputs[0]
+        if img.ndim == 2:
+            hists = [cv2.calcHist([img], [0], None, [256], [0, 256])]
+        else:
+            hists = [cv2.calcHist([img], [c], None, [256], [0, 256])
+                     for c in range(img.shape[2])]
+        return {"hist": hists, "channels": len(hists)}
+    except Exception as e:
+        print(f"Error executing histogram: {e}")
+        return None
+
+
+def _render_histogram(inputs, output, p):
+    """Inspector preview: draw the histogram curve(s)."""
+    if not isinstance(output, dict):
+        return None
+    hists = output["hist"]
+    h, w = 220, 256
+    canvas = np.full((h, w, 3), 255, np.uint8)
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)] if len(hists) == 3 else [(0, 0, 0)]
+    for hist, color in zip(hists, colors):
+        norm = cv2.normalize(hist, None, 0, h - 1, cv2.NORM_MINMAX).flatten()
+        for x in range(1, w):
+            cv2.line(canvas, (x - 1, h - 1 - int(norm[x - 1])),
+                     (x, h - 1 - int(norm[x])), color, 1)
+    return canvas
+
+
+def _summary_histogram(output, p):
+    if not isinstance(output, dict):
+        return {}
+    return {"channels": int(output.get("channels", 0))}
+
+
 # save_to_file is genuinely special: it has a side effect (writing a file),
 # carries per-node state (timestamp/index), and must be suppressed during
 # preview/propagation. Its behaviour lives in node.SaveToFileNode, so its
@@ -475,6 +571,15 @@ _RETR_MODES = [
     ("List", cv2.RETR_LIST),
     ("Tree", cv2.RETR_TREE),
     ("Connected (CComp)", cv2.RETR_CCOMP),
+]
+_MORPH_OPS = [
+    ("Erode", cv2.MORPH_ERODE),
+    ("Dilate", cv2.MORPH_DILATE),
+    ("Open", cv2.MORPH_OPEN),
+    ("Close", cv2.MORPH_CLOSE),
+    ("Gradient", cv2.MORPH_GRADIENT),
+    ("Top Hat", cv2.MORPH_TOPHAT),
+    ("Black Hat", cv2.MORPH_BLACKHAT),
 ]
 
 # Registration order also determines the sidebar order within each category.
@@ -536,6 +641,59 @@ OPS: list = [
         ],
         compute=_compute_adaptive_threshold, color=(255, 152, 0),
         in_label="Mat (Gray)", out_label="Mat (Binary)",
+    ),
+    Operation(
+        id="gaussian_blur", label="Gaussian Blur", category="Local Operations",
+        inputs=[Port("in")], outputs=[Port("out")],
+        params=[
+            ParamSpec("kernel_size", 5, kind="int", min=1, max=51, step=2, odd=True,
+                      label="Kernel Size"),
+            ParamSpec("sigma", 0.0, kind="float", min=0.0, max=10.0, step=0.5, label="Sigma"),
+        ],
+        compute=_compute_gaussian_blur, color=(103, 58, 183),
+        in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
+    ),
+    Operation(
+        id="morphology", label="Morphology", category="Local Operations",
+        inputs=[Port("in")], outputs=[Port("out")],
+        params=[
+            ParamSpec("operation", cv2.MORPH_ERODE, kind="enum",
+                      choices=_MORPH_OPS, label="Operation"),
+            ParamSpec("kernel_size", 3, kind="int", min=1, max=31, label="Kernel Size"),
+            ParamSpec("iterations", 1, kind="int", min=1, max=10, label="Iterations"),
+        ],
+        compute=_compute_morphology, color=(96, 125, 139),
+        in_label="Mat (Binary/Gray)", out_label="Mat (Binary/Gray)",
+    ),
+    Operation(
+        id="canny", label="Canny Edges", category="Local Operations",
+        inputs=[Port("in")], outputs=[Port("out", datatypes.IMAGE_BINARY)],
+        params=[
+            ParamSpec("threshold1", 100, kind="int", min=0, max=500, label="Threshold 1"),
+            ParamSpec("threshold2", 200, kind="int", min=0, max=500, label="Threshold 2"),
+            ParamSpec("aperture", 3, kind="int", show=False),
+        ],
+        compute=_compute_canny, color=(255, 193, 7),
+        in_label="Mat (Gray)", out_label="Mat (Binary edges)",
+    ),
+    Operation(
+        id="sobel", label="Sobel", category="Local Operations",
+        inputs=[Port("in")], outputs=[Port("out")],
+        params=[
+            ParamSpec("dx", 1, kind="int", min=0, max=2, label="dx (x order)"),
+            ParamSpec("dy", 0, kind="int", min=0, max=2, label="dy (y order)"),
+            ParamSpec("ksize", 3, kind="int", min=1, max=7, step=2, odd=True, label="Kernel Size"),
+        ],
+        compute=_compute_sobel, color=(255, 193, 7),
+        in_label="Mat (Gray)", out_label="Mat (Gray gradient)",
+    ),
+    Operation(
+        id="laplacian", label="Laplacian", category="Local Operations",
+        inputs=[Port("in")], outputs=[Port("out")],
+        params=[ParamSpec("ksize", 3, kind="int", min=1, max=31, step=2, odd=True,
+                          label="Kernel Size")],
+        compute=_compute_laplacian, color=(255, 193, 7),
+        in_label="Mat (Gray)", out_label="Mat (Gray gradient)",
     ),
     Operation(
         id="mser", label="MSER", category="Local Operations",
@@ -658,6 +816,15 @@ OPS: list = [
         compute=_compute_idft, color=(121, 85, 72),
         in_label="Spectrum", out_label="Mat (Float)",
     ),
+    # --- Analysis ----------------------------------------------------------
+    Operation(
+        id="histogram", label="Histogram", category="Analysis",
+        inputs=[Port("in", datatypes.IMAGE)],
+        outputs=[Port("out", datatypes.HISTOGRAM)], params=[],
+        compute=_compute_histogram, color=(0, 188, 212),
+        in_label="Mat (any)", out_label="Histogram",
+        render_preview=_render_histogram, summary=_summary_histogram,
+    ),
 ]
 
 # Categories shown in the sidebar, in order. Geometry/Fourier are intentionally
@@ -668,6 +835,7 @@ CATEGORY_ORDER = [
     "Geometry",
     "Arithmetic Operations",
     "Local Operations",
+    "Analysis",
     "Color & Clustering",
     "Contours",
     "Fourier",

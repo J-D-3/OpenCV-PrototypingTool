@@ -278,12 +278,11 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         # Check if source is SaveToFile (not allowed as source)
         if isinstance(source, SaveToFileNode):
             return False
-        
-        # Check if target can accept input from source
-        if not target.can_accept_input(source):
-            return False
-        
-        return True
+
+        # Accept either a normal connection or a rewire of a full single-input node.
+        if target.can_accept_input(source):
+            return True
+        return isinstance(target, FunctionNode) and self.controller.can_rewire(source, target)
     
     def _get_connection_type(self, source: Optional[Node], target: Optional[Node]) -> str:
         """Get the type of connection: 'valid', 'invalid', or 'implicit_conversion'."""
@@ -293,15 +292,17 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         # Check if source is SaveToFile (not allowed as source)
         if isinstance(source, SaveToFileNode):
             return 'invalid'
-        
+
         # Check if target can accept input from source
         if not target.can_accept_input(source):
+            if isinstance(target, FunctionNode) and self.controller.can_rewire(source, target):
+                return 'valid'   # full single-input target -> rewire
             return 'invalid'
-        
+
         # Check for implicit conversion cases
         if self._needs_implicit_conversion(source, target):
             return 'implicit_conversion'
-        
+
         return 'valid'
     
     def _needs_implicit_conversion(self, source: Optional[Node], target: Optional[Node]) -> bool:
@@ -341,16 +342,26 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         else:
             return  # Invalid arrow combination
         
-        # Check if target can accept input from source
-        if not target_node.can_accept_input(source_node):
-            return  # Target cannot accept this input type or already has max inputs
-        
-        # Create the arrow and register the connection
-        arrow = ArrowItem(source_node, target_node)
-        self._scene.addItem(arrow)
-        
-        # Register the input connection
-        target_node.add_input_connection(source_node)
+        if target_node.can_accept_input(source_node):
+            # Create the arrow and register the connection.
+            self._scene.addItem(ArrowItem(source_node, target_node))
+            target_node.add_input_connection(source_node)
+        elif self.controller.can_rewire(source_node, target_node):
+            # Target's single input is full -> re-point it at the new source.
+            self._rewire(source_node, target_node)
+
+    def _rewire(self, source_node: Node, target_node: Node) -> None:
+        """Replace a full single-input node's connection with one from source_node."""
+        old_edges = self.controller.model.incoming(target_node.gnode)
+        old_src_qt = (self.controller._qt_by_gid.get(old_edges[0].src.id)
+                      if old_edges else None)
+        if old_src_qt is not None:
+            for arrow in list(target_node._arrows):
+                if old_src_qt in (arrow.a, arrow.b) and target_node in (arrow.a, arrow.b):
+                    self._detach_arrow(arrow)
+                    break
+        self.controller.replace_input(source_node, target_node)
+        self._scene.addItem(ArrowItem(source_node, target_node))
 
     
 

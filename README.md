@@ -108,17 +108,22 @@ This is a **working prototype** being revived. The environment is now set up
   - Fourier chain **DFT → Inverse DFT** (`SPECTRUM` payload; DFT shows the
     log-magnitude spectrum; `idft(dft(img)) == img` is verified by a test).
 
+- [x] **Extra ops + editing polish.** Added Gaussian Blur, Morphology, Canny,
+      Sobel, Laplacian (Local Operations) and a Histogram node (new *Analysis*
+      category, with a histogram-plot preview). Added **drag-to-rewire** (drop a
+      new source on a full single-input node to re-point it) and **cycle
+      prevention** on connections.
+
 All planned phases are complete. Adding a new operation is cheap: define one
 `Operation` in `core/operations.py` (+ optional `render_preview`/`summary`), and
 the sidebar, parameter panel, evaluation, and inspection all follow — see
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ### Future ideas
-- More ops: GaussianBlur, Histogram, morphology, edge detectors.
-- Drag-to-rewire an existing connection (today: delete + reconnect).
+- Undo/redo on the canvas; multi-input rewire; drag connection endpoints.
+- More ops as needed (template matching, warps, feature detectors, …).
 
 ### Known issues
-- Connections can be deleted + recreated but not drag-rewired in place.
 - Reduce Colors / contour ops work in whatever space they receive; for the HSL
   chain, append **HSL to BGR** to view the quantized result in true colors.
 
@@ -148,4 +153,6 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
   segmentation chain Shrink (Geometry) + Find/Filter Contours (Contours
   category), with contour previews drawn via `cv2.drawContours`; then the
   Fourier chain DFT / Inverse DFT (`SPECTRUM` payload, magnitude-spectrum
-  preview, round-trip verified).
+  preview, round-trip verified). Added Gaussian Blur, Morphology, Canny, Sobel,
+  Laplacian, and a Histogram node (Analysis), plus drag-to-rewire and cycle
+  prevention on connections.

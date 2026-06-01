@@ -184,6 +184,36 @@ def test_fourier_roundtrip():
     print(f"OK  fourier: idft(dft(img)) == img (max error {max_err:.2e})")
 
 
+def test_more_ops():
+    img = gradient()
+    for op_id in ("gaussian_blur", "morphology", "canny", "sobel", "laplacian"):
+        m = GraphModel()
+        s = _src(m, img)
+        o = _op(m, op_id)
+        m.add_edge(s, o)
+        Engine(m).evaluate_all()
+        assert isinstance(o.output, np.ndarray), f"{op_id} produced no image (err={o.error})"
+
+    m = GraphModel()
+    s = _src(m, img)
+    h = _op(m, "histogram")
+    m.add_edge(s, h)
+    Engine(m).evaluate_all()
+    assert isinstance(h.output, dict) and "hist" in h.output, "histogram should output a payload"
+    assert isinstance(REGISTRY["histogram"].render_preview(None, h.output, {}), np.ndarray)
+    print("OK  more ops: gaussian/morphology/canny/sobel/laplacian + histogram")
+
+
+def test_cycle_prevention():
+    m = GraphModel()
+    a = _op(m, "blur")
+    b = _op(m, "blur")
+    m.add_edge(a, b)
+    assert m.creates_cycle(b, a) is True, "b->a would close a cycle"
+    assert m.creates_cycle(a, _op(m, "blur")) is False, "fresh edge is acyclic"
+    print("OK  cycle detection prevents back-edges")
+
+
 def main():
     test_linear_chain_and_caching()
     test_dirty_propagation()
@@ -194,7 +224,9 @@ def main():
     test_color_pipeline()
     test_contours()
     test_fourier_roundtrip()
-    print("\nENGINE OK: 9 backend tests passed")
+    test_more_ops()
+    test_cycle_prevention()
+    print("\nENGINE OK: 11 backend tests passed")
 
 
 if __name__ == "__main__":

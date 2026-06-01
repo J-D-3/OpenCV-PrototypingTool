@@ -408,6 +408,25 @@ def check_fourier_chain(app) -> None:
     print("OK  Load > DFT > Inverse DFT reconstructs the image")
 
 
+def check_rewire(app) -> None:
+    w = make_window(app)
+    a = add_image(w, np.full((30, 30, 3), 10, np.uint8))
+    b = add_image(w, np.full((30, 30, 3), 200, np.uint8))
+    blur = add_func(w, "Blur")
+    connect(w, a, blur)
+    app.processEvents()
+    assert int(blur.get_output_image().mean()) < 50, "blur should reflect source A (~10)"
+
+    # Drag B onto the already-connected single-input Blur -> rewire.
+    connect(w, b, blur)
+    app.processEvents()
+    model = w.drop_widget.view.controller.model
+    assert len(model.incoming(blur.gnode)) == 1, "rewire should not add a second input"
+    assert int(blur.get_output_image().mean()) > 150, "blur should now reflect source B (~200)"
+    w.close()
+    print("OK  drag-to-rewire repoints a full single-input connection")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -426,6 +445,7 @@ def main() -> int:
         check_color_chain,
         check_segmentation_chain,
         check_fourier_chain,
+        check_rewire,
     ]
     for chk in checks:
         chk(app)

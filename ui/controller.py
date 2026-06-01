@@ -83,11 +83,34 @@ class GraphController:
     # --- topology / parameters --------------------------------------------
     def can_connect(self, src_qt, dst_qt) -> bool:
         gn = dst_qt.gnode
+        if self.model.creates_cycle(src_qt.gnode, gn):
+            return False
         port_index = len(self.model.incoming(gn))
         if port_index >= gn.arity:
             return False  # all input ports already filled
         in_type = dst_qt.op.inputs[port_index].type
         return datatypes.compatible(self._output_type(src_qt), in_type)
+
+    def can_rewire(self, src_qt, dst_qt) -> bool:
+        """A full single-input node can be re-pointed at a new (compatible) source."""
+        gn = dst_qt.gnode
+        if gn.is_source or gn.arity != 1:
+            return False
+        if len(self.model.incoming(gn)) != 1:
+            return False
+        if self.model.creates_cycle(src_qt.gnode, gn):
+            return False
+        if self.model.incoming(gn)[0].src is src_qt.gnode:
+            return False  # already wired from this source
+        return datatypes.compatible(self._output_type(src_qt), dst_qt.op.inputs[0].type)
+
+    def replace_input(self, src_qt, dst_qt) -> None:
+        """Replace a single-input node's connection with one from src_qt."""
+        gn = dst_qt.gnode
+        for edge in list(self.model.incoming(gn)):
+            self.model.remove_edge(edge.src, gn)
+        self.model.add_edge(src_qt.gnode, gn, 0)
+        self._recompute(commit=True)
 
     def _output_type(self, qt) -> str:
         gn = qt.gnode

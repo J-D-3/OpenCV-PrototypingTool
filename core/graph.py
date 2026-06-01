@@ -100,6 +100,24 @@ class GraphModel:
             n.dirty = True
             stack.extend(self.dependents_of(n))
 
+    def _reachable(self, start: GraphNode, target: GraphNode) -> bool:
+        """Is ``target`` reachable from ``start`` by following edges downstream?"""
+        stack = [start]
+        seen = set()
+        while stack:
+            n = stack.pop()
+            if n is target:
+                return True
+            if n.id in seen:
+                continue
+            seen.add(n.id)
+            stack.extend(self.dependents_of(n))
+        return False
+
+    def creates_cycle(self, src: GraphNode, dst: GraphNode) -> bool:
+        """Would adding the edge src -> dst create a cycle?"""
+        return src is dst or self._reachable(dst, src)
+
     def topo_order(self) -> List[GraphNode]:
         """Kahn topological sort. Nodes in cycles are omitted."""
         indeg = {nid: 0 for nid in self.nodes}

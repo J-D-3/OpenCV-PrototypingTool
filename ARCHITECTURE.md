@@ -71,7 +71,9 @@ does not cycle at runtime.
 | Change the save/load format | `core/persistence.py`. |
 
 ## Canvas controls
-- **Right-drag** between two nodes: create a connection.
+- **Right-drag** between two nodes: create a connection. Dropping on a full
+  single-input node **re-points** (rewires) it; connections that would form a
+  cycle are rejected.
 - **Double-click** a node: open its inspector.
 - **Delete / Backspace**: remove the selected node(s) or arrow(s).
 - **S**: swap the two inputs of a selected binary op (e.g. Diff A↔B).
