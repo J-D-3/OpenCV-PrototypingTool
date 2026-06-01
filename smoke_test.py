@@ -21,11 +21,7 @@ import cv2
 from PyQt6 import QtWidgets
 
 from main import MainWindow
-from node import (
-    Node, ImageNode, FunctionNode,
-    ToGrayscaleNode, BlurNode, ThresholdNode,
-    SumNode, DiffNode, SaveToFileNode,
-)
+from node import Node, ImageNode, FunctionNode, SaveToFileNode
 
 
 # ----------------------------------------------------------------------------
@@ -127,7 +123,7 @@ def check_two_input_sum(app) -> None:
     a = add_image(w, np.full((100, 120, 3), 40, np.uint8))
     b = add_image(w, np.full((100, 120, 3), 200, np.uint8))
     s = add_func(w, "Sum")
-    assert isinstance(s, SumNode)
+    assert s.op.id == "sum"
     connect(w, a, s)
     app.processEvents()
     assert s.get_output_image() is None, "Sum executed with only one input"
@@ -147,7 +143,7 @@ def check_diff_input_order(app) -> None:
     w1 = make_window(app)
     a1, b1 = add_image(w1, imgA), add_image(w1, imgB)
     d1 = add_func(w1, "Diff")
-    assert isinstance(d1, DiffNode)
+    assert d1.op.id == "diff"
     connect(w1, a1, d1)
     connect(w1, b1, d1)
     app.processEvents()

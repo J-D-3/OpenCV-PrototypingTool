@@ -33,8 +33,9 @@ python main.py [optional\path\to\image.png]
 
 | Path | Role |
 |------|------|
-| `main.py` | GUI shell — main window, sidebar function tree, graphics canvas (grid snap, drag-drop, arrow creation), image viewer window, per-function parameter panels |
-| `node.py` | Node model — `Node` base, `ImageNode`, `FunctionNode`, and the operation nodes (SaveToFile, Blur, Threshold, AdaptiveThreshold, ToGrayscale, ToBGR, Sum, AND, Diff, MSER) |
+| `operations.py` | **Qt-free** operation registry. Each `Operation` is declared once (id, label, category, input/output ports, parameter schema, `compute(inputs, params)`, plus optional `render_preview`/`summary` hooks for inspection). The sidebar tree and node factory are generated from this registry, so adding a function = adding one entry here. Importable and unit-testable without a GUI. |
+| `node.py` | Qt node layer — `Node` base, `ImageNode`, a single Operation-driven `FunctionNode`, and a thin `SaveToFileNode` (side-effecting save) |
+| `main.py` | GUI shell — main window, registry-generated sidebar tree, graphics canvas (grid snap, drag-drop, arrow creation), image viewer, parameter panels |
 | `output/` | Saved PNG outputs from the GUI (git-ignored) |
 | `requirements.txt` | Runtime dependencies |
 
@@ -61,17 +62,39 @@ This is a **working prototype** being revived. The environment is now set up
 - [x] Resolved the `node.py` concatenation (removed the stray duplicate import
       block / self-import; it is now one clean module).
 - [x] Removed dead/buggy code (`MainWindow.on_reset_zoom`, `ArrowItem.itemChange`).
+- [x] Smoke test broadened into a refactor safety net (two-input nodes,
+      parameter propagation, binary-op input order, save-to-file).
+- [x] **Phase 1a — compute model separated from the view.** Introduced the
+      Qt-free `operations.py` registry; collapsed the 10 `FunctionNode`
+      subclasses into one Operation-driven node (+ thin `SaveToFileNode`);
+      sidebar tree and node factory are now generated from the registry.
+      Adding an OpenCV function is now ~one registry entry.
 
-### Known issues / cleanup backlog
-- **Unfinished UI:** sidebar categories *Geometry* and *Fourier* are listed but
-  have no functions. There is no way to **delete** nodes or arrows.
-- The smoke test covers happy-path wiring only; no coverage of two-input nodes
-  (Sum/AND/Diff), parameter changes, or save-to-file.
+### Roadmap
 
-### Next steps (proposed)
-1. Either implement or remove the empty Geometry/Fourier categories.
-2. Add node/arrow deletion to the canvas.
-3. Broaden the smoke test (two-input nodes, parameters, save-to-file).
+A phased refactor toward the goal: rapidly wire OpenCV chains, expose every
+parameter with live downstream updates, and inspect each node's result —
+including ops whose output is not itself an image (e.g. findContours, drawn
+back onto the input, with key stats like #contours shown in the GUI).
+
+- **Phase 1b** — extract graph topology into a standalone `GraphModel`
+  (nodes + edges as the source of truth) so Qt items purely observe it and
+  pipelines can be serialized. *(pairs with Phase 3)*
+- **Phase 2** — declarative parameter widgets auto-generated from each op's
+  schema (delete the hand-written per-function control panels).
+- **Phase 3** — real DAG evaluator: topological order, dirty propagation,
+  output caching, per-node error surfacing.
+- **Phase 4** — typed data envelope (Image/Contours/Histogram/Labels/…) +
+  type-dispatching, signal-driven inspector (image viewer, `render_preview`
+  for non-image ops, `summary` key-info panel).
+- **Phase 5** — save/load chains (JSON) + node/edge deletion & re-wiring.
+- **Phase 6** — grow the library (Resize, GaussianBlur, FindContours,
+  cvtColor→HSV/HSL, Histogram, KMeans, ColorQuantize, DFT/Fourier).
+
+### Known issues
+- Sidebar categories *Geometry* and *Fourier* are present-but-empty placeholders.
+- No way to delete nodes or edges yet.
+- `cv_to_qimage` does not normalize float / non-8-bit images (matters for Fourier).
 
 ---
 
@@ -79,4 +102,7 @@ This is a **working prototype** being revived. The environment is now set up
 - **2026-06-01** — Revival started: git init, Python 3.13 venv, requirements,
   `.gitignore`, and this README added. Added headless smoke test. Refactored
   `node.py` (removed duplicate-import concatenation) and removed dead code
-  (`on_reset_zoom`, `ArrowItem.itemChange`).
+  (`on_reset_zoom`, `ArrowItem.itemChange`). Broadened the smoke test into a
+  safety net. **Phase 1a:** added the Qt-free `operations.py` registry,
+  collapsed the per-function node subclasses into one Operation-driven node,
+  and generated the sidebar/factory from the registry.

@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets
-from node import Node, ImageNode, FunctionNode, SaveToFileNode, BlurNode, ThresholdNode, ToGrayscaleNode, ToBGRNode, AdaptiveThresholdNode, SumNode, AndNode, DiffNode, MSERNode, cv_to_qimage
+from node import Node, ImageNode, FunctionNode, SaveToFileNode, cv_to_qimage
+from operations import by_label, ops_by_category, CATEGORY_ORDER
 
 # Default icon size constant
 DEFAULT_ICON_SIZE = 180
@@ -451,7 +452,7 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         # Check if source outputs BGR and target expects grayscale
         if len(source_image.shape) == 3 and source_image.shape[2] == 3:  # BGR image
             # Check if target is a grayscale-only function
-            if isinstance(target, (ThresholdNode, AdaptiveThresholdNode)):
+            if isinstance(target, FunctionNode) and target.op.id in ("threshold", "adaptive_threshold"):
                 return True
         
         return False
@@ -591,30 +592,14 @@ class ImageDropWidget(QtWidgets.QWidget):
         self.view.fileDropped.connect(self.on_file_dropped)
 
     def add_function_node(self, label: str, scene_pos: Optional[QtCore.QPointF] = None, meta: Optional[dict] = None) -> None:
-        # Create the appropriate function node based on the label
-        if label == "Save to File":
+        # Look the operation up in the registry and build the right node.
+        op = by_label.get(label)
+        if op is None:
+            return
+        if op.id == "save_to_file":
             item = SaveToFileNode(icon_size=self.icon_size, grid_size=12)
-        elif label == "Blur":
-            item = BlurNode(icon_size=self.icon_size, grid_size=12)
-        elif label == "Threshold":
-            item = ThresholdNode(icon_size=self.icon_size, grid_size=12)
-        elif label == "Adaptive Threshold":
-            item = AdaptiveThresholdNode(icon_size=self.icon_size, grid_size=12)
-        elif label == "To Grayscale":
-            item = ToGrayscaleNode(icon_size=self.icon_size, grid_size=12)
-        elif label == "To BGR":
-            item = ToBGRNode(icon_size=self.icon_size, grid_size=12)
-        elif label == "Sum":
-            item = SumNode(icon_size=self.icon_size, grid_size=12)
-        elif label == "AND":
-            item = AndNode(icon_size=self.icon_size, grid_size=12)
-        elif label == "Diff":
-            item = DiffNode(icon_size=self.icon_size, grid_size=12)
-        elif label == "MSER":
-            item = MSERNode(icon_size=self.icon_size, grid_size=12)
         else:
-            # Fallback to generic function node
-            item = FunctionNode(label, icon_size=self.icon_size, grid_size=12, meta=meta)
+            item = FunctionNode(op, icon_size=self.icon_size, grid_size=12)
         
         self.view._scene.addItem(item)
         if scene_pos is None:
@@ -701,7 +686,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         title = QtWidgets.QLabel("Menu")
         title.setStyleSheet("font-weight: bold;")
-        open_btn = QtWidgets.QPushButton("Open Image…")
+        open_btn = QtWidgets.QPushButton("Open Imageâ€¦")
         size_label = QtWidgets.QLabel(f"Icon size: {DEFAULT_ICON_SIZE} px")
         size_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         size_slider.setRange(24, 256)
@@ -717,65 +702,15 @@ class MainWindow(QtWidgets.QMainWindow):
         tree.setAnimated(True)
         tree.setMinimumHeight(300)
 
-        categories = [
-            "Input/Output",
-            "Conversions",
-            "Geometry",
-            "Arithmetic Operations",
-            "Local Operations",
-            "Fourier",
-        ]
-        category_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
-        for cat in categories:
-            item = QtWidgets.QTreeWidgetItem([cat])
-            item.setFlags(item.flags() & ~QtCore.Qt.ItemFlag.ItemIsSelectable)
-            tree.addTopLevelItem(item)
-            category_items[cat] = item
-
-        # Functions with simple metadata
-        # Input/Output
-        save_to_file_item = QtWidgets.QTreeWidgetItem(["Save to File"])
-        save_to_file_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"name": "save_to_file", "in": "Mat (Any)", "out": "File"})
-        category_items["Input/Output"].addChild(save_to_file_item)
-        
-        # Local Operations
-        blur_item = QtWidgets.QTreeWidgetItem(["Blur"])
-        blur_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"name": "blur", "in": "Mat (BGR/Gray)", "out": "Mat (BGR/Gray)"})
-        category_items["Local Operations"].addChild(blur_item)
-
-        thresh_item = QtWidgets.QTreeWidgetItem(["Threshold"])
-        thresh_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"name": "threshold", "in": "Mat (Gray)", "out": "Mat (Binary/Gray)"})
-        category_items["Local Operations"].addChild(thresh_item)
-        
-        adaptive_thresh_item = QtWidgets.QTreeWidgetItem(["Adaptive Threshold"])
-        adaptive_thresh_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"name": "adaptive_threshold", "in": "Mat (Gray)", "out": "Mat (Binary)"})
-        category_items["Local Operations"].addChild(adaptive_thresh_item)
-        
-        mser_item = QtWidgets.QTreeWidgetItem(["MSER"])
-        mser_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"name": "mser", "in": "Mat (Gray)", "out": "Mat (BGR)"})
-        category_items["Local Operations"].addChild(mser_item)
-        
-        # Conversions
-        to_gray_item = QtWidgets.QTreeWidgetItem(["To Grayscale"])
-        to_gray_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"name": "to_grayscale", "in": "Mat (BGR)", "out": "Mat (Gray)"})
-        category_items["Conversions"].addChild(to_gray_item)
-        
-        to_bgr_item = QtWidgets.QTreeWidgetItem(["To BGR"])
-        to_bgr_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"name": "to_bgr", "in": "Mat (Gray)", "out": "Mat (BGR)"})
-        category_items["Conversions"].addChild(to_bgr_item)
-        
-        # Arithmetic Operations
-        sum_item = QtWidgets.QTreeWidgetItem(["Sum"])
-        sum_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"name": "sum", "in": "Mat (BGR/Gray) + Mat (BGR/Gray)", "out": "Mat (BGR/Gray)"})
-        category_items["Arithmetic Operations"].addChild(sum_item)
-        
-        and_item = QtWidgets.QTreeWidgetItem(["AND"])
-        and_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"name": "and", "in": "Mat (BGR/Gray) & Mat (BGR/Gray)", "out": "Mat (BGR/Gray)"})
-        category_items["Arithmetic Operations"].addChild(and_item)
-        
-        diff_item = QtWidgets.QTreeWidgetItem(["Diff"])
-        diff_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"name": "diff", "in": "Mat (BGR/Gray) - Mat (BGR/Gray)", "out": "Mat (BGR/Gray)"})
-        category_items["Arithmetic Operations"].addChild(diff_item)
+        for cat in CATEGORY_ORDER:
+            cat_item = QtWidgets.QTreeWidgetItem([cat])
+            cat_item.setFlags(cat_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsSelectable)
+            tree.addTopLevelItem(cat_item)
+            for op in ops_by_category.get(cat, []):
+                op_item = QtWidgets.QTreeWidgetItem([op.label])
+                op_item.setData(0, QtCore.Qt.ItemDataRole.UserRole,
+                                {"name": op.id, "in": op.in_label, "out": op.out_label})
+                cat_item.addChild(op_item)
 
         tree.expandAll()
 
@@ -889,7 +824,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         info_name.setText("Image")
                         ch = meta.get('channels', '?')
                         info_types.setText(
-                            f"Size: {meta.get('w','?')}×{meta.get('h','?')}\n"
+                            f"Size: {meta.get('w','?')}Ã—{meta.get('h','?')}\n"
                             f"Channels: {ch}\n"
                             f"Type: {meta.get('type','?')}"
                         )
