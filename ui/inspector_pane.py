@@ -42,15 +42,23 @@ def channel_names(node, channels: int):
     return ["B", "G", "R"]
 
 
-# Qt draw color per channel index (channel 0/1/2 of a BGR-ordered array).
-_CURVE_COLORS = [QtGui.QColor(40, 90, 220), QtGui.QColor(30, 160, 60), QtGui.QColor(210, 50, 50)]
-_GRAY_COLOR = QtGui.QColor(60, 60, 60)
+# Draw color per channel *name* (so HLS/HSV curves aren't mislabelled blue/green/red).
+_CHANNEL_COLORS = {
+    "B": QtGui.QColor(40, 90, 220),     # blue
+    "G": QtGui.QColor(30, 160, 60),     # green
+    "R": QtGui.QColor(210, 50, 50),     # red
+    "Gray": QtGui.QColor(60, 60, 60),   # dark gray (contrast on light bg)
+    "H": QtGui.QColor(200, 0, 200),     # magenta
+    "S": QtGui.QColor(0, 150, 150),     # teal
+    "V": QtGui.QColor(90, 90, 90),      # dark gray
+    "L": QtGui.QColor(120, 120, 120),   # mid gray
+    "a": QtGui.QColor(170, 100, 40),    # olive/brown
+    "b": QtGui.QColor(40, 100, 170),    # steel blue
+}
 
 
-def _curve_color(index: int, channels: int) -> QtGui.QColor:
-    if channels == 1:
-        return _GRAY_COLOR
-    return _CURVE_COLORS[index % 3]
+def _channel_color(name: str) -> QtGui.QColor:
+    return _CHANNEL_COLORS.get(name, QtGui.QColor(40, 90, 220))
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +176,13 @@ class HistogramPanel(QtWidgets.QWidget):
         self._layout = QtWidgets.QVBoxLayout(self)
         self._layout.setContentsMargins(4, 4, 4, 4)
         self._layout.setSpacing(2)
-        self._layout.addWidget(QtWidgets.QLabel("Histogram"))
+        header = QtWidgets.QHBoxLayout()
+        header.addWidget(QtWidgets.QLabel("Histogram"))
+        header.addStretch()
+        self._log_cb = QtWidgets.QCheckBox("Log scale")
+        self._log_cb.toggled.connect(self._refresh_plot)
+        header.addWidget(self._log_cb)
+        self._layout.addLayout(header)
         self._plot = HistogramPlot()
         self._layout.addWidget(self._plot)
         self._rows_box = QtWidgets.QWidget()
@@ -180,26 +194,33 @@ class HistogramPanel(QtWidgets.QWidget):
         self._hists = []      # raw per-channel histograms (256,)
 
     def configure(self, n_channels: int, names) -> None:
-        """(Re)build one toggle+range row per channel (resets ranges)."""
+        """(Re)build one toggle+range row per channel (resets ranges).
+
+        Each row is wrapped in a QWidget so deleting it removes its child
+        widgets too — otherwise old channel labels linger and overlap.
+        """
         while self._rows.count():
             child = self._rows.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+            w = child.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
         self._channels = []
         for i in range(n_channels):
-            color = _curve_color(i, n_channels)
-            row = QtWidgets.QHBoxLayout()
+            color = _channel_color(names[i])
+            row_w = QtWidgets.QWidget()
+            row = QtWidgets.QHBoxLayout(row_w)
+            row.setContentsMargins(0, 0, 0, 0)
             cb = QtWidgets.QCheckBox(names[i])
             cb.setChecked(True)
             cb.setFixedWidth(48)
-            css = f"color: rgb({color.red()},{color.green()},{color.blue()});"
-            cb.setStyleSheet(css)
+            cb.setStyleSheet(f"color: rgb({color.red()},{color.green()},{color.blue()});")
             slider = RangeSlider(color)
             cb.toggled.connect(self._on_changed)
             slider.rangeChanged.connect(self._on_changed)
             row.addWidget(cb)
             row.addWidget(slider)
-            self._rows.addLayout(row)
+            self._rows.addWidget(row_w)
             self._channels.append({"name": names[i], "color": color, "cb": cb, "slider": slider})
 
     def set_hists(self, hists) -> None:
@@ -224,10 +245,13 @@ class HistogramPanel(QtWidgets.QWidget):
         self.rangesChanged.emit()
 
     def _refresh_plot(self):
+        log = self._log_cb.isChecked()
         curves = []
         for i, ch in enumerate(self._channels):
             if i < len(self._hists) and ch["cb"].isChecked():
                 h = self._hists[i].astype(np.float32)
+                if log:
+                    h = np.log1p(h)
                 peak = float(h.max())
                 norm = h / peak if peak > 0 else h
                 curves.append((ch["color"], norm))
@@ -249,7 +273,8 @@ class NeighborhoodView(QtWidgets.QWidget):
 
     def paintEvent(self, _e):
         p = QtGui.QPainter(self)
-        p.fillRect(self.rect(), QtGui.QColor(245, 245, 245))
+        # Light-gray backdrop that shows through the gaps as cell separators.
+        p.fillRect(self.rect(), QtGui.QColor(205, 205, 205))
         if self._patch is None:
             return
         n = self._patch.shape[0]
@@ -257,16 +282,19 @@ class NeighborhoodView(QtWidgets.QWidget):
         cell = size / n
         ox = (self.width() - cell * n) / 2
         oy = (self.height() - cell * n) / 2
+        gap = max(1.0, cell * 0.12)
         for r in range(n):
             for c in range(n):
                 b, g, rd = (int(v) for v in self._patch[r, c])
-                p.fillRect(QtCore.QRectF(ox + c * cell, oy + r * cell, cell + 1, cell + 1),
+                p.fillRect(QtCore.QRectF(ox + c * cell + gap / 2, oy + r * cell + gap / 2,
+                                         cell - gap, cell - gap),
                            QtGui.QColor(rd, g, b))
         # outline the centre cell
         mid = n // 2
         p.setPen(QtGui.QPen(QtGui.QColor(255, 215, 0), 2))
         p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-        p.drawRect(QtCore.QRectF(ox + mid * cell, oy + mid * cell, cell, cell))
+        p.drawRect(QtCore.QRectF(ox + mid * cell + gap / 2, oy + mid * cell + gap / 2,
+                                 cell - gap, cell - gap))
 
 
 class NeighborhoodPanel(QtWidgets.QWidget):
@@ -342,6 +370,9 @@ class ImagePanel(QtWidgets.QWidget):
     pixelHovered = QtCore.pyqtSignal(int, int)
     pixelClicked = QtCore.pyqtSignal(int, int)
 
+    _MIN_SCALE = 0.02
+    _MAX_SCALE = 64.0
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(160)
@@ -349,37 +380,77 @@ class ImagePanel(QtWidgets.QWidget):
         self._pixmap = QtGui.QPixmap()
         self._img_w = 0
         self._img_h = 0
-        self._draw_rect = QtCore.QRectF()
+        self._scale = 1.0                  # widget px per image px
+        self._origin = QtCore.QPointF(0, 0)  # widget pos of image (0,0)
+        self._fitted = False               # False -> recompute fit on next paint
 
     def set_image(self, image) -> None:
+        prev = (self._img_w, self._img_h)
         if image is None:
             self._pixmap = QtGui.QPixmap()
             self._img_w = self._img_h = 0
         else:
             self._img_h, self._img_w = image.shape[:2]
             self._pixmap = QtGui.QPixmap.fromImage(cv_to_qimage(image))
+        # Refit only when the image size changes (so a histogram-filter update,
+        # which keeps the same size, preserves the user's current zoom).
+        if (self._img_w, self._img_h) != prev:
+            self._fitted = False
         self.update()
+
+    def _fit(self) -> None:
+        if self._pixmap.isNull() or self._img_w == 0 or self.width() <= 0:
+            return
+        self._scale = min(self.width() / self._img_w, self.height() / self._img_h)
+        self._origin = QtCore.QPointF((self.width() - self._img_w * self._scale) / 2,
+                                      (self.height() - self._img_h * self._scale) / 2)
+        self._fitted = True
 
     def paintEvent(self, _e):
         p = QtGui.QPainter(self)
         p.fillRect(self.rect(), QtGui.QColor(30, 30, 30))
         if self._pixmap.isNull():
             return
-        scaled = self._pixmap.scaled(self.size(), QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                                     QtCore.Qt.TransformationMode.FastTransformation)
-        x = (self.width() - scaled.width()) / 2
-        y = (self.height() - scaled.height()) / 2
-        self._draw_rect = QtCore.QRectF(x, y, scaled.width(), scaled.height())
-        p.drawPixmap(QtCore.QPointF(x, y), scaled)
+        if not self._fitted:
+            self._fit()
+        target = QtCore.QRectF(self._origin.x(), self._origin.y(),
+                               self._img_w * self._scale, self._img_h * self._scale)
+        p.drawPixmap(target, self._pixmap, QtCore.QRectF(self._pixmap.rect()))
+
+    def resizeEvent(self, e):
+        self._fitted = False  # refit to the new size
+        super().resizeEvent(e)
+
+    def wheelEvent(self, e):
+        if self._pixmap.isNull():
+            return
+        self._zoom_at(e.position(), 1.2 ** (e.angleDelta().y() / 120.0))
+
+    def _zoom_at(self, pos, factor) -> None:
+        """Scale by ``factor`` keeping the image point under ``pos`` fixed."""
+        if self._pixmap.isNull():
+            return
+        if not self._fitted:
+            self._fit()
+        ix = (pos.x() - self._origin.x()) / self._scale  # image point under cursor
+        iy = (pos.y() - self._origin.y()) / self._scale
+        self._scale = max(self._MIN_SCALE, min(self._MAX_SCALE, self._scale * factor))
+        self._origin = QtCore.QPointF(pos.x() - ix * self._scale, pos.y() - iy * self._scale)
+        self._fitted = True  # custom zoom; don't auto-refit until size changes
+        self.update()
+
+    def mouseDoubleClickEvent(self, _e):
+        self._fitted = False  # reset to fit
+        self.update()
 
     def _to_image_xy(self, pos):
-        if self._pixmap.isNull() or not self._draw_rect.contains(pos):
+        if self._pixmap.isNull() or self._scale <= 0:
             return None
-        fx = (pos.x() - self._draw_rect.left()) / self._draw_rect.width()
-        fy = (pos.y() - self._draw_rect.top()) / self._draw_rect.height()
-        x = max(0, min(self._img_w - 1, int(fx * self._img_w)))
-        y = max(0, min(self._img_h - 1, int(fy * self._img_h)))
-        return x, y
+        x = int((pos.x() - self._origin.x()) / self._scale)
+        y = int((pos.y() - self._origin.y()) / self._scale)
+        if 0 <= x < self._img_w and 0 <= y < self._img_h:
+            return x, y
+        return None
 
     def mouseMoveEvent(self, e):
         xy = self._to_image_xy(e.position())

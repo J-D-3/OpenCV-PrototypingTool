@@ -20,7 +20,7 @@ import json
 from dataclasses import replace
 import numpy as np
 import cv2
-from PyQt6 import QtWidgets
+from PyQt6 import QtWidgets, QtCore
 
 from ui.main_window import MainWindow
 from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode
@@ -458,15 +458,39 @@ def check_inspector_pane(app) -> None:
     shown = pane._image._pixmap
     assert not shown.isNull(), "filtered image should still render"
 
-    # A 3-channel image gives three histogram channels labelled B/G/R.
+    # Name-based curve colors: Gray draws dark gray.
+    from ui.inspector_pane import _channel_color
+    assert pane._hist._channels[0]["color"] == _channel_color("Gray")
+
+    # Log-scale toggle recomputes the plot without error.
+    pane._hist._log_cb.setChecked(True)
+    app.processEvents()
+
+    # A 3-channel image gives three histogram channels labelled B/G/R, and the
+    # old single 'Gray' row must be cleared (no leftover widgets).
     img_node = add_image(w, gradient_bgr())
     w.drop_widget.view._scene.clearSelection()
     img_node.setSelected(True)
     app.processEvents()
     assert len(pane._hist._channels) == 3
     assert [c["name"] for c in pane._hist._channels] == ["B", "G", "R"]
+    assert pane._hist._rows.count() == 3, "stale channel rows were not cleared"
+
+    # Wheel zoom keeps the image point under the cursor anchored.
+    ip = pane._image
+    ip.resize(200, 160)
+    ip._fit()
+    base_scale = ip._scale
+    cursor = QtCore.QPointF(120.0, 90.0)
+    img_pt_before = ((cursor.x() - ip._origin.x()) / ip._scale,
+                     (cursor.y() - ip._origin.y()) / ip._scale)
+    ip._zoom_at(cursor, 2.0)
+    assert ip._scale > base_scale, "zoom-in should increase scale"
+    img_pt_after = ((cursor.x() - ip._origin.x()) / ip._scale,
+                    (cursor.y() - ip._origin.y()) / ip._scale)
+    assert abs(img_pt_before[0] - img_pt_after[0]) < 1e-6, "zoom must anchor to the cursor"
     w.close()
-    print("OK  inspector pane: image + neighbourhood freeze + histogram channels/filter")
+    print("OK  inspector pane: colors, channel-clear, log toggle, zoom-to-cursor")
 
 
 def main() -> int:
