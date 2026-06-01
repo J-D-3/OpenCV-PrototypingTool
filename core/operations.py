@@ -23,6 +23,8 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from core import datatypes
+
 
 # --- Ports ------------------------------------------------------------------
 # A richer type system (ImageBGR/Gray/Binary/Contours/...) arrives in Phase 4.
@@ -235,6 +237,90 @@ def _compute_mser(inputs, p):
         return None
 
 
+def _compute_to_hls(inputs, p):
+    try:
+        img = inputs[0]
+        if img.ndim == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        return cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
+    except Exception as e:
+        print(f"Error executing to_hls: {e}")
+        return None
+
+
+def _compute_from_hls(inputs, p):
+    try:
+        img = inputs[0]
+        if img.ndim != 3 or img.shape[2] != 3:
+            return img
+        return cv2.cvtColor(img, cv2.COLOR_HLS2BGR)
+    except Exception as e:
+        print(f"Error executing from_hls: {e}")
+        return None
+
+
+def _compute_kmeans(inputs, p):
+    """Cluster an image's pixels with k-means. Output is a clusters payload
+    (centers + per-pixel labels + shape) — not an image — consumed downstream
+    by Reduce Colors."""
+    try:
+        img = inputs[0]
+        channels = img.shape[2] if img.ndim == 3 else 1
+        data = img.reshape(-1, channels).astype(np.float32)
+        k = max(1, int(p["k"]))
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        attempts = int(p.get("attempts", 3))
+        _, labels, centers = cv2.kmeans(data, k, None, criteria, attempts,
+                                        cv2.KMEANS_RANDOM_CENTERS)
+        return {"centers": centers, "labels": labels.flatten(),
+                "shape": img.shape, "k": k}
+    except Exception as e:
+        print(f"Error executing kmeans: {e}")
+        return None
+
+
+def _render_kmeans(inputs, output, p):
+    """Inspector preview: a horizontal swatch of the cluster colors."""
+    if not isinstance(output, dict):
+        return None
+    centers = np.clip(output["centers"], 0, 255).astype(np.uint8)
+    k = len(centers)
+    if k == 0:
+        return None
+    cell_w, cell_h = 60, 80
+    swatch = np.zeros((cell_h, cell_w * k, 3), np.uint8)
+    for i, c in enumerate(centers):
+        color = tuple(int(v) for v in c) if len(c) == 3 else (int(c[0]),) * 3
+        swatch[:, i * cell_w:(i + 1) * cell_w] = color
+    return swatch
+
+
+def _summary_kmeans(output, p):
+    if not isinstance(output, dict):
+        return {}
+    labels = output.get("labels")
+    info = {"clusters": int(output.get("k", 0))}
+    if labels is not None and len(labels):
+        counts = np.bincount(labels, minlength=output.get("k", 0))
+        biggest = int(np.argmax(counts))
+        info["largest cluster"] = f"#{biggest} ({100 * counts[biggest] // len(labels)}%)"
+    return info
+
+
+def _compute_reduce_colors(inputs, p):
+    """Rebuild a quantized image from a clusters payload (centers[labels])."""
+    try:
+        clusters = inputs[0]
+        if not isinstance(clusters, dict):
+            return None
+        centers = np.clip(clusters["centers"], 0, 255).astype(np.uint8)
+        labels = clusters["labels"]
+        return centers[labels].reshape(clusters["shape"])
+    except Exception as e:
+        print(f"Error executing reduce_colors: {e}")
+        return None
+
+
 # save_to_file is genuinely special: it has a side effect (writing a file),
 # carries per-node state (timestamp/index), and must be suppressed during
 # preview/propagation. Its behaviour lives in node.SaveToFileNode, so its
@@ -361,6 +447,40 @@ OPS: list = [
         compute=_compute_diff, color=(220, 20, 60),
         in_label="Mat (BGR/Gray) - Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
+    # --- Color & Clustering ------------------------------------------------
+    Operation(
+        id="to_hls", label="Split to HSL", category="Conversions",
+        inputs=[Port("in", datatypes.IMAGE_BGR)],
+        outputs=[Port("out", datatypes.IMAGE)], params=[],
+        compute=_compute_to_hls, color=(255, 87, 34),
+        in_label="Mat (BGR)", out_label="Mat (HLS)",
+    ),
+    Operation(
+        id="from_hls", label="HSL to BGR", category="Conversions",
+        inputs=[Port("in", datatypes.IMAGE)],
+        outputs=[Port("out", datatypes.IMAGE_BGR)], params=[],
+        compute=_compute_from_hls, color=(255, 87, 34),
+        in_label="Mat (HLS)", out_label="Mat (BGR)",
+    ),
+    Operation(
+        id="kmeans", label="K-Means Cluster", category="Color & Clustering",
+        inputs=[Port("in", datatypes.IMAGE)],
+        outputs=[Port("out", datatypes.CLUSTERS)],
+        params=[
+            ParamSpec("k", 6, kind="int", min=2, max=16, label="Clusters (k)"),
+            ParamSpec("attempts", 3, kind="int", min=1, max=10, show=False),
+        ],
+        compute=_compute_kmeans, color=(0, 150, 136),
+        in_label="Mat (any)", out_label="Clusters",
+        render_preview=_render_kmeans, summary=_summary_kmeans,
+    ),
+    Operation(
+        id="reduce_colors", label="Reduce Colors", category="Color & Clustering",
+        inputs=[Port("in", datatypes.CLUSTERS)],
+        outputs=[Port("out", datatypes.IMAGE)], params=[],
+        compute=_compute_reduce_colors, color=(0, 150, 136),
+        in_label="Clusters", out_label="Mat (quantized)",
+    ),
 ]
 
 # Categories shown in the sidebar, in order. Geometry/Fourier are intentionally
@@ -371,6 +491,7 @@ CATEGORY_ORDER = [
     "Geometry",
     "Arithmetic Operations",
     "Local Operations",
+    "Color & Clustering",
     "Fourier",
 ]
 

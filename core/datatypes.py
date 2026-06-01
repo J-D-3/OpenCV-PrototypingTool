@@ -19,6 +19,7 @@ CONTOURS = "contours"
 HISTOGRAM = "histogram"
 LABELS = "labels"
 SCALAR = "scalar"
+CLUSTERS = "clusters"   # k-means result: centers + per-pixel labels + shape
 
 IMAGE_TYPES = frozenset({IMAGE, IMAGE_BGR, IMAGE_GRAY, IMAGE_BINARY, IMAGE_FLOAT})
 

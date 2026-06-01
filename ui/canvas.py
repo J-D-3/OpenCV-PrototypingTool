@@ -311,9 +311,10 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         
         # Get the output image from source to check its type
         source_image = source.get_output_image()
-        if source_image is None:
-            return False
-        
+        import numpy as np
+        if not isinstance(source_image, np.ndarray):
+            return False  # non-image output (e.g. clusters) — no implicit conversion
+
         # Check if source outputs BGR and target expects grayscale
         if len(source_image.shape) == 3 and source_image.shape[2] == 3:  # BGR image
             # Check if target is a grayscale-only function

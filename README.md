@@ -106,9 +106,11 @@ parameter with live downstream updates, and inspect each node's result —
 including ops whose output is not itself an image (e.g. findContours, drawn
 back onto the input, with key stats like #contours shown in the GUI).
 
-- **Phase 6 (next)** — grow the library (Resize, GaussianBlur, FindContours,
-  cvtColor→HSV/HSL, Histogram, KMeans, ColorQuantize, DFT/Fourier). These will
-  exercise the typed-data and `render_preview`/`summary` infrastructure.
+- **Phase 6 (in progress)** — growing the op library. Added a color-quantization
+  chain: **Split to HSL → K-Means Cluster → Reduce Colors** (the cluster node
+  emits a non-image `CLUSTERS` payload, shows a color-swatch preview + a
+  `clusters: k` summary; Reduce Colors rebuilds the quantized image). Still to
+  come: Resize, GaussianBlur, FindContours, Histogram, DFT/Fourier.
 
 ### Known issues
 - Sidebar categories *Geometry* and *Fourier* are present-but-empty placeholders.
@@ -134,3 +136,6 @@ back onto the input, with key stats like #contours shown in the GUI).
   and made the inspector signal-driven with `render_preview`/`summary` support.
   Added `run.bat`. **Phase 5:** JSON save/load of pipelines
   (`core/persistence.py`), node/edge deletion, and binary-op input swap.
+  **Phase 6 (in progress):** added Split to HSL / HSL to BGR, K-Means Cluster
+  (non-image clusters payload), and Reduce Colors — the first chain to flow
+  non-image data and use the `render_preview`/`summary` hooks.

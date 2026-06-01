@@ -123,6 +123,25 @@ def test_persistence_roundtrip():
     print("OK  persistence round-trips structure, params, image, and result")
 
 
+def test_color_pipeline():
+    m = GraphModel()
+    s = _src(m, gradient())
+    hls = _op(m, "to_hls")
+    km = _op(m, "kmeans", k=4)
+    red = _op(m, "reduce_colors")
+    m.add_edge(s, hls)
+    m.add_edge(hls, km)
+    m.add_edge(km, red)
+    Engine(m).evaluate_all()
+
+    assert isinstance(km.output, dict) and km.output["k"] == 4, "kmeans should output a clusters payload"
+    assert km.output["centers"].shape[0] == 4
+    assert red.output is not None and red.output.shape == s.source_image.shape
+    uniq = np.unique(red.output.reshape(-1, red.output.shape[2]), axis=0)
+    assert uniq.shape[0] <= 4, f"reduced image should have <= 4 colors, got {uniq.shape[0]}"
+    print("OK  color pipeline: to_hls -> kmeans -> reduce_colors (<= k colors)")
+
+
 def main():
     test_linear_chain_and_caching()
     test_dirty_propagation()
@@ -130,7 +149,8 @@ def main():
     test_input_order()
     test_error_capture()
     test_persistence_roundtrip()
-    print("\nENGINE OK: 6 backend tests passed")
+    test_color_pipeline()
+    print("\nENGINE OK: 7 backend tests passed")
 
 
 if __name__ == "__main__":

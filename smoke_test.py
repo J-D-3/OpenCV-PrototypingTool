@@ -340,6 +340,30 @@ def check_input_swap(app) -> None:
     print("OK  binary-op input swap reverses the operands")
 
 
+def check_color_chain(app) -> None:
+    # The user's target chain: Load > Split to HSL > Cluster > Reduce Colors.
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    hls = add_func(w, "Split to HSL")
+    km = add_func(w, "K-Means Cluster")
+    red = add_func(w, "Reduce Colors")
+    connect(w, src, hls)
+    connect(w, hls, km)
+    connect(w, km, red)        # CLUSTERS->CLUSTERS connection (type-validated)
+    app.processEvents()
+
+    assert isinstance(km.get_output_image(), dict), "cluster node should output a clusters payload"
+    assert km.get_summary().get("clusters") == 6, "cluster summary should report k"
+    assert isinstance(km.get_preview_image(), np.ndarray), "cluster preview should be a swatch image"
+
+    out = red.get_output_image()
+    assert isinstance(out, np.ndarray) and out.shape == gradient_bgr().shape, "reduce should output an image"
+    uniq = np.unique(out.reshape(-1, 3), axis=0)
+    assert uniq.shape[0] <= 6, f"reduced image should have <= 6 colors, got {uniq.shape[0]}"
+    w.close()
+    print("OK  Load > Split to HSL > K-Means > Reduce Colors chain runs")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -355,6 +379,7 @@ def main() -> int:
         check_save_load,
         check_delete_node,
         check_input_swap,
+        check_color_chain,
     ]
     for chk in checks:
         chk(app)

@@ -339,11 +339,21 @@ class FunctionNode(Node):
     def set_icon_size(self, icon_size: int) -> None:
         """Update the icon size and re-render (result thumbnail if available)."""
         self._icon_size = int(icon_size)
-        if self.get_output_image() is not None:
-            self._update_result_thumbnail()
+        self._render_current()
+        self._notify_arrows()
+
+    def _render_current(self) -> None:
+        """Render the node's thumbnail from its display image, or the op icon.
+
+        The display image is the op's preview (e.g. a cluster swatch), which may
+        be absent or non-image for ops whose output is not itself an image — in
+        that case we just draw the operation icon.
+        """
+        display = self.get_preview_image()
+        if isinstance(display, np.ndarray):
+            self._update_result_thumbnail(display)
         else:
             self._render_icon()
-        self._notify_arrows()
 
     def _render_icon(self) -> None:
         """Render the function node icon (label + funnel glyph)."""
@@ -402,16 +412,12 @@ class FunctionNode(Node):
 
     def refresh_from_model(self) -> None:
         """Re-render from the backend result (called by the controller)."""
-        if self.get_output_image() is not None:
-            self._update_result_thumbnail()
-        else:
-            self._render_icon()
+        self._render_current()
         self._notify_arrows()
         self.update()
 
-    def _update_result_thumbnail(self) -> None:
-        """Show the backend's current result image as the node thumbnail."""
-        image = self.get_output_image()
+    def _update_result_thumbnail(self, image) -> None:
+        """Show the given result image as the node thumbnail."""
         if image is None:
             return
 
