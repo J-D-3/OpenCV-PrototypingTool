@@ -99,24 +99,25 @@ This is a **working prototype** being revived. The environment is now set up
       to JSON (`core/persistence.py`; source images embedded as base64 PNG);
       delete nodes/edges (Delete), and swap a binary op's inputs (S).
 
-### Roadmap
-
-Remaining phases toward the goal: rapidly wire OpenCV chains, expose every
-parameter with live downstream updates, and inspect each node's result —
-including ops whose output is not itself an image (e.g. findContours, drawn
-back onto the input, with key stats like #contours shown in the GUI).
-
-- **Phase 6 (in progress)** — growing the op library. Done so far:
+- [x] **Phase 6 — op library + the three example workflows.**
   - color-quantization chain **Split to HSL → K-Means Cluster → Reduce Colors**
     (`CLUSTERS` payload; swatch preview + `clusters: k` summary);
   - segmentation chain **Shrink → Blur → Adaptive Threshold → Find Contours →
     Filter Contours** (`CONTOURS` payload; Find/Filter draw the contours via
-    `cv2.drawContours` for their preview and report the contour count).
+    `cv2.drawContours` for their preview and report the contour count);
+  - Fourier chain **DFT → Inverse DFT** (`SPECTRUM` payload; DFT shows the
+    log-magnitude spectrum; `idft(dft(img)) == img` is verified by a test).
 
-  Still to come: GaussianBlur, Histogram, DFT/Fourier.
+All planned phases are complete. Adding a new operation is cheap: define one
+`Operation` in `core/operations.py` (+ optional `render_preview`/`summary`), and
+the sidebar, parameter panel, evaluation, and inspection all follow — see
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
+### Future ideas
+- More ops: GaussianBlur, Histogram, morphology, edge detectors.
+- Drag-to-rewire an existing connection (today: delete + reconnect).
 
 ### Known issues
-- The *Fourier* sidebar category is still a present-but-empty placeholder.
 - Connections can be deleted + recreated but not drag-rewired in place.
 - Reduce Colors / contour ops work in whatever space they receive; for the HSL
   chain, append **HSL to BGR** to view the quantized result in true colors.
@@ -145,4 +146,6 @@ back onto the input, with key stats like #contours shown in the GUI).
   (non-image clusters payload), and Reduce Colors — the first chain to flow
   non-image data and use the `render_preview`/`summary` hooks; then the
   segmentation chain Shrink (Geometry) + Find/Filter Contours (Contours
-  category), with contour previews drawn via `cv2.drawContours`.
+  category), with contour previews drawn via `cv2.drawContours`; then the
+  Fourier chain DFT / Inverse DFT (`SPECTRUM` payload, magnitude-spectrum
+  preview, round-trip verified).

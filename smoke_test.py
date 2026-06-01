@@ -388,6 +388,26 @@ def check_segmentation_chain(app) -> None:
     print("OK  Shrink > Blur > Adaptive Threshold > Find Contours > Filter chain runs")
 
 
+def check_fourier_chain(app) -> None:
+    # Load > DFT > Inverse DFT, and verify the reconstruction matches the input.
+    w = make_window(app)
+    img = gradient_bgr()
+    src = add_image(w, img)
+    dft = add_func(w, "DFT")
+    idft = add_func(w, "Inverse DFT")
+    connect(w, src, dft)
+    connect(w, dft, idft)
+    app.processEvents()
+
+    assert isinstance(dft.get_output_image(), dict), "DFT should output a spectrum payload"
+    assert isinstance(dft.get_preview_image(), np.ndarray), "DFT preview should be a magnitude image"
+    back = idft.get_output_image()
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    assert back is not None and np.allclose(back, gray, atol=1e-2), "idft(dft(img)) != img"
+    w.close()
+    print("OK  Load > DFT > Inverse DFT reconstructs the image")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -405,6 +425,7 @@ def main() -> int:
         check_input_swap,
         check_color_chain,
         check_segmentation_chain,
+        check_fourier_chain,
     ]
     for chk in checks:
         chk(app)

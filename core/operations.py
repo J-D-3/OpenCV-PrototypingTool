@@ -404,6 +404,46 @@ def _summary_filter_contours(output, p):
     return {"kept": len(output.get("contours", [])), "of": int(output.get("_total", 0))}
 
 
+def _compute_dft(inputs, p):
+    """Forward DFT of a grayscale image. Output is a SPECTRUM payload holding the
+    full complex transform so the inverse DFT can reconstruct the image."""
+    try:
+        gray = _to_gray_u8(inputs[0]).astype(np.float32)
+        dft = cv2.dft(gray, flags=cv2.DFT_COMPLEX_OUTPUT)
+        return {"dft": dft, "shape": gray.shape}
+    except Exception as e:
+        print(f"Error executing dft: {e}")
+        return None
+
+
+def _render_dft(inputs, output, p):
+    """Inspector preview: the log-magnitude spectrum, low frequencies centered."""
+    if not isinstance(output, dict):
+        return None
+    dft = output["dft"]
+    mag = cv2.magnitude(dft[:, :, 0], dft[:, :, 1])
+    return np.fft.fftshift(np.log1p(mag))   # float; cv_to_qimage normalizes for display
+
+
+def _summary_dft(output, p):
+    if not isinstance(output, dict):
+        return {}
+    h, w = output.get("shape", (0, 0))[:2]
+    return {"size": f"{w}x{h}"}
+
+
+def _compute_idft(inputs, p):
+    """Inverse DFT back to a real image. DFT_SCALE makes idft(dft(x)) == x."""
+    try:
+        spec = inputs[0]
+        if not isinstance(spec, dict):
+            return None
+        return cv2.idft(spec["dft"], flags=cv2.DFT_SCALE | cv2.DFT_REAL_OUTPUT)
+    except Exception as e:
+        print(f"Error executing idft: {e}")
+        return None
+
+
 # save_to_file is genuinely special: it has a side effect (writing a file),
 # carries per-node state (timestamp/index), and must be suppressed during
 # preview/propagation. Its behaviour lives in node.SaveToFileNode, so its
@@ -601,6 +641,22 @@ OPS: list = [
         compute=_compute_filter_contours, color=(233, 30, 99),
         in_label="Contours", out_label="Contours",
         render_preview=_render_filter_contours, summary=_summary_filter_contours,
+    ),
+    # --- Fourier -----------------------------------------------------------
+    Operation(
+        id="dft", label="DFT", category="Fourier",
+        inputs=[Port("in", datatypes.IMAGE)],
+        outputs=[Port("out", datatypes.SPECTRUM)], params=[],
+        compute=_compute_dft, color=(121, 85, 72),
+        in_label="Mat (Gray)", out_label="Spectrum",
+        render_preview=_render_dft, summary=_summary_dft,
+    ),
+    Operation(
+        id="idft", label="Inverse DFT", category="Fourier",
+        inputs=[Port("in", datatypes.SPECTRUM)],
+        outputs=[Port("out", datatypes.IMAGE_FLOAT)], params=[],
+        compute=_compute_idft, color=(121, 85, 72),
+        in_label="Spectrum", out_label="Mat (Float)",
     ),
 ]
 

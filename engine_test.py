@@ -165,6 +165,25 @@ def test_contours():
     print("OK  contours: find + drawContours preview + area filter")
 
 
+def test_fourier_roundtrip():
+    rng = np.arange(32 * 48, dtype=np.uint8).reshape(32, 48)  # deterministic gray image
+    m = GraphModel()
+    s = _src(m, rng)
+    d = _op(m, "dft")
+    i = _op(m, "idft")
+    m.add_edge(s, d)
+    m.add_edge(d, i)
+    Engine(m).evaluate_all()
+
+    assert isinstance(d.output, dict) and "dft" in d.output, "DFT should output a spectrum payload"
+    back = i.output
+    assert back is not None, "inverse DFT produced no result"
+    # idft(dft(img)) == img  (DFT_SCALE makes the round-trip exact up to float error)
+    max_err = float(np.abs(back - rng.astype(np.float32)).max())
+    assert max_err < 1e-2, f"round-trip error too large: {max_err}"
+    print(f"OK  fourier: idft(dft(img)) == img (max error {max_err:.2e})")
+
+
 def main():
     test_linear_chain_and_caching()
     test_dirty_propagation()
@@ -174,7 +193,8 @@ def main():
     test_persistence_roundtrip()
     test_color_pipeline()
     test_contours()
-    print("\nENGINE OK: 8 backend tests passed")
+    test_fourier_roundtrip()
+    print("\nENGINE OK: 9 backend tests passed")
 
 
 if __name__ == "__main__":
