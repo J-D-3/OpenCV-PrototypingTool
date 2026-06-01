@@ -321,6 +321,89 @@ def _compute_reduce_colors(inputs, p):
         return None
 
 
+def _compute_shrink(inputs, p):
+    try:
+        img = inputs[0]
+        scale = float(p["scale"])
+        if scale <= 0 or scale == 1.0:
+            return img
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        return cv2.resize(img, None, fx=scale, fy=scale, interpolation=interp)
+    except Exception as e:
+        print(f"Error executing shrink: {e}")
+        return None
+
+
+def _to_gray_u8(img):
+    gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return gray if gray.dtype == np.uint8 else gray.astype(np.uint8)
+
+
+def _compute_find_contours(inputs, p):
+    """Find contours in a (binary) image. Output is a CONTOURS payload carrying
+    the contours plus a BGR background to draw them on for inspection."""
+    try:
+        img = inputs[0]
+        gray = _to_gray_u8(img)
+        contours, hierarchy = cv2.findContours(gray, int(p["mode"]), cv2.CHAIN_APPROX_SIMPLE)
+        background = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        return {"contours": list(contours), "hierarchy": hierarchy,
+                "shape": img.shape, "background": background}
+    except Exception as e:
+        print(f"Error executing find_contours: {e}")
+        return None
+
+
+def _draw_contours_preview(payload, contours):
+    bg = payload.get("background")
+    if bg is None:
+        return None
+    out = bg.copy()
+    cv2.drawContours(out, contours, -1, (0, 255, 0), 2)
+    return out
+
+
+def _render_find_contours(inputs, output, p):
+    if not isinstance(output, dict):
+        return None
+    return _draw_contours_preview(output, output.get("contours", []))
+
+
+def _summary_find_contours(output, p):
+    if not isinstance(output, dict):
+        return {}
+    return {"contours": len(output.get("contours", []))}
+
+
+def _compute_filter_contours(inputs, p):
+    """Keep only contours whose area is within [min_area, max_area]."""
+    try:
+        payload = inputs[0]
+        if not isinstance(payload, dict):
+            return None
+        lo, hi = float(p["min_area"]), float(p["max_area"])
+        kept = [c for c in payload.get("contours", []) if lo <= cv2.contourArea(c) <= hi]
+        out = dict(payload)
+        out["contours"] = kept
+        out["_total"] = len(payload.get("contours", []))
+        return out
+    except Exception as e:
+        print(f"Error executing contour_filter: {e}")
+        return None
+
+
+def _render_filter_contours(inputs, output, p):
+    if not isinstance(output, dict):
+        return None
+    return _draw_contours_preview(output, output.get("contours", []))
+
+
+def _summary_filter_contours(output, p):
+    if not isinstance(output, dict):
+        return {}
+    return {"kept": len(output.get("contours", [])), "of": int(output.get("_total", 0))}
+
+
 # save_to_file is genuinely special: it has a side effect (writing a file),
 # carries per-node state (timestamp/index), and must be suppressed during
 # preview/propagation. Its behaviour lives in node.SaveToFileNode, so its
@@ -346,6 +429,12 @@ _ADAPTIVE_THRESH_TYPES = [
 _ADAPTIVE_METHODS = [
     ("Mean C", cv2.ADAPTIVE_THRESH_MEAN_C),
     ("Gaussian C", cv2.ADAPTIVE_THRESH_GAUSSIAN_C),
+]
+_RETR_MODES = [
+    ("External", cv2.RETR_EXTERNAL),
+    ("List", cv2.RETR_LIST),
+    ("Tree", cv2.RETR_TREE),
+    ("Connected (CComp)", cv2.RETR_CCOMP),
 ]
 
 # Registration order also determines the sidebar order within each category.
@@ -481,6 +570,38 @@ OPS: list = [
         compute=_compute_reduce_colors, color=(0, 150, 136),
         in_label="Clusters", out_label="Mat (quantized)",
     ),
+    # --- Geometry ----------------------------------------------------------
+    Operation(
+        id="shrink", label="Shrink", category="Geometry",
+        inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE)],
+        params=[ParamSpec("scale", 0.5, kind="float", min=0.1, max=1.0, step=0.05,
+                          label="Scale")],
+        compute=_compute_shrink, color=(63, 81, 181),
+        in_label="Mat (any)", out_label="Mat (any)",
+    ),
+    # --- Contours ----------------------------------------------------------
+    Operation(
+        id="find_contours", label="Find Contours", category="Contours",
+        inputs=[Port("in", datatypes.IMAGE)],
+        outputs=[Port("out", datatypes.CONTOURS)],
+        params=[ParamSpec("mode", cv2.RETR_EXTERNAL, kind="enum",
+                          choices=_RETR_MODES, label="Retrieval Mode")],
+        compute=_compute_find_contours, color=(233, 30, 99),
+        in_label="Mat (Binary)", out_label="Contours",
+        render_preview=_render_find_contours, summary=_summary_find_contours,
+    ),
+    Operation(
+        id="contour_filter", label="Filter Contours", category="Contours",
+        inputs=[Port("in", datatypes.CONTOURS)],
+        outputs=[Port("out", datatypes.CONTOURS)],
+        params=[
+            ParamSpec("min_area", 50, kind="int", min=0, max=20000, label="Min Area"),
+            ParamSpec("max_area", 100000, kind="int", min=0, max=1000000, label="Max Area"),
+        ],
+        compute=_compute_filter_contours, color=(233, 30, 99),
+        in_label="Contours", out_label="Contours",
+        render_preview=_render_filter_contours, summary=_summary_filter_contours,
+    ),
 ]
 
 # Categories shown in the sidebar, in order. Geometry/Fourier are intentionally
@@ -492,6 +613,7 @@ CATEGORY_ORDER = [
     "Arithmetic Operations",
     "Local Operations",
     "Color & Clustering",
+    "Contours",
     "Fourier",
 ]
 

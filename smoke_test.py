@@ -364,6 +364,30 @@ def check_color_chain(app) -> None:
     print("OK  Load > Split to HSL > K-Means > Reduce Colors chain runs")
 
 
+def check_segmentation_chain(app) -> None:
+    # Shrink > Blur > Adaptive Threshold > Find Contours > Filter Contours.
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    chain = [add_func(w, n) for n in
+             ("Shrink", "Blur", "Adaptive Threshold", "Find Contours", "Filter Contours")]
+    prev = src
+    for node in chain:
+        connect(w, prev, node)
+        prev = node
+    app.processEvents()
+
+    find, filt = chain[3], chain[4]
+    fc_out = find.get_output_image()
+    assert isinstance(fc_out, dict) and "contours" in fc_out, "find_contours should output a contours payload"
+    assert isinstance(find.get_preview_image(), np.ndarray), "contours preview should be a drawn image"
+    assert "contours" in find.get_summary()
+    flt_out = filt.get_output_image()
+    assert isinstance(flt_out, dict) and len(flt_out["contours"]) <= len(fc_out["contours"])
+    assert "kept" in filt.get_summary()
+    w.close()
+    print("OK  Shrink > Blur > Adaptive Threshold > Find Contours > Filter chain runs")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -380,6 +404,7 @@ def main() -> int:
         check_delete_node,
         check_input_swap,
         check_color_chain,
+        check_segmentation_chain,
     ]
     for chk in checks:
         chk(app)

@@ -106,15 +106,20 @@ parameter with live downstream updates, and inspect each node's result —
 including ops whose output is not itself an image (e.g. findContours, drawn
 back onto the input, with key stats like #contours shown in the GUI).
 
-- **Phase 6 (in progress)** — growing the op library. Added a color-quantization
-  chain: **Split to HSL → K-Means Cluster → Reduce Colors** (the cluster node
-  emits a non-image `CLUSTERS` payload, shows a color-swatch preview + a
-  `clusters: k` summary; Reduce Colors rebuilds the quantized image). Still to
-  come: Resize, GaussianBlur, FindContours, Histogram, DFT/Fourier.
+- **Phase 6 (in progress)** — growing the op library. Done so far:
+  - color-quantization chain **Split to HSL → K-Means Cluster → Reduce Colors**
+    (`CLUSTERS` payload; swatch preview + `clusters: k` summary);
+  - segmentation chain **Shrink → Blur → Adaptive Threshold → Find Contours →
+    Filter Contours** (`CONTOURS` payload; Find/Filter draw the contours via
+    `cv2.drawContours` for their preview and report the contour count).
+
+  Still to come: GaussianBlur, Histogram, DFT/Fourier.
 
 ### Known issues
-- Sidebar categories *Geometry* and *Fourier* are present-but-empty placeholders.
+- The *Fourier* sidebar category is still a present-but-empty placeholder.
 - Connections can be deleted + recreated but not drag-rewired in place.
+- Reduce Colors / contour ops work in whatever space they receive; for the HSL
+  chain, append **HSL to BGR** to view the quantized result in true colors.
 
 ---
 
@@ -138,4 +143,6 @@ back onto the input, with key stats like #contours shown in the GUI).
   (`core/persistence.py`), node/edge deletion, and binary-op input swap.
   **Phase 6 (in progress):** added Split to HSL / HSL to BGR, K-Means Cluster
   (non-image clusters payload), and Reduce Colors — the first chain to flow
-  non-image data and use the `render_preview`/`summary` hooks.
+  non-image data and use the `render_preview`/`summary` hooks; then the
+  segmentation chain Shrink (Geometry) + Find/Filter Contours (Contours
+  category), with contour previews drawn via `cv2.drawContours`.

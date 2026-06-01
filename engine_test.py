@@ -4,6 +4,7 @@ Run: python engine_test.py
 """
 import json
 import numpy as np
+import cv2
 
 from core.operations import REGISTRY
 from core.graph import GraphModel
@@ -142,6 +143,28 @@ def test_color_pipeline():
     print("OK  color pipeline: to_hls -> kmeans -> reduce_colors (<= k colors)")
 
 
+def test_contours():
+    img = np.zeros((80, 80, 3), np.uint8)
+    cv2.rectangle(img, (5, 5), (24, 24), (255, 255, 255), -1)    # small (~361 px area)
+    cv2.rectangle(img, (40, 40), (70, 70), (255, 255, 255), -1)  # large (~841 px area)
+
+    m = GraphModel()
+    s = _src(m, img)
+    fc = _op(m, "find_contours")
+    flt = _op(m, "contour_filter", min_area=500, max_area=10_000_000)
+    m.add_edge(s, fc)
+    m.add_edge(fc, flt)
+    Engine(m).evaluate_all()
+
+    assert isinstance(fc.output, dict) and len(fc.output["contours"]) == 2, "should find both squares"
+    assert len(flt.output["contours"]) == 1, "area filter should drop the small square"
+
+    preview = REGISTRY["find_contours"].render_preview(None, fc.output, {})
+    assert isinstance(preview, np.ndarray) and preview.ndim == 3, "contours preview should be a BGR image"
+    assert REGISTRY["find_contours"].summary(fc.output, {})["contours"] == 2
+    print("OK  contours: find + drawContours preview + area filter")
+
+
 def main():
     test_linear_chain_and_caching()
     test_dirty_propagation()
@@ -150,7 +173,8 @@ def main():
     test_error_capture()
     test_persistence_roundtrip()
     test_color_pipeline()
-    print("\nENGINE OK: 7 backend tests passed")
+    test_contours()
+    print("\nENGINE OK: 8 backend tests passed")
 
 
 if __name__ == "__main__":
