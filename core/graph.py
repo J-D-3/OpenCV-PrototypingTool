@@ -24,6 +24,7 @@ class GraphNode:
         # filled in by the engine:
         self.output = source_image         # sources start with their image
         self.error: Optional[str] = None
+        self.color_space: str = "unknown"  # "bgr"|"gray"|"hls"|"binary"|"unknown"
         self.dirty: bool = True
 
     @property

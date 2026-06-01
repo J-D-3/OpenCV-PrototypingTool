@@ -17,7 +17,8 @@ core/                 backend — pure Python, no Qt
   operations.py       the Operation registry (compute + metadata + param schema)
   datatypes.py        port data types + connection compatibility rules
   graph.py            GraphModel: nodes + edges, the topology source of truth
-  engine.py           DAG evaluator: topo order, dirty propagation, caching, error capture
+  engine.py           DAG evaluator: topo order, dirty propagation, caching,
+                      error capture, color-space tracking (for the conversions)
   persistence.py      to_dict / from_dict — save/load a pipeline as JSON
 
 ui/                   frontend — PyQt6 view layer

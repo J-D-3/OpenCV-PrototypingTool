@@ -107,7 +107,7 @@ This is a **working prototype** being revived. The environment is now set up
       delete nodes/edges (Delete), and swap a binary op's inputs (S).
 
 - [x] **Phase 6 — op library + the three example workflows.**
-  - color-quantization chain **Split to HSL → K-Means Cluster → Reduce Colors**
+  - color-quantization chain **To HSL → K-Means Cluster → Reduce Colors**
     (`CLUSTERS` payload; swatch preview + `clusters: k` summary);
   - segmentation chain **Shrink → Blur → Adaptive Threshold → Find Contours →
     Filter Contours** (`CONTOURS` payload; Find/Filter draw the contours via
@@ -136,7 +136,8 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 
 ### Known issues
 - Reduce Colors / contour ops work in whatever space they receive; for the HSL
-  chain, append **HSL to BGR** to view the quantized result in true colors.
+  chain, append **To BGR** to view the quantized result in true colors (the
+  conversion is color-space aware, so it correctly maps HLS → BGR).
 
 ---
 
@@ -158,7 +159,7 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
   and made the inspector signal-driven with `render_preview`/`summary` support.
   Added `run.bat`. **Phase 5:** JSON save/load of pipelines
   (`core/persistence.py`), node/edge deletion, and binary-op input swap.
-  **Phase 6 (in progress):** added Split to HSL / HSL to BGR, K-Means Cluster
+  **Phase 6 (in progress):** added color-space conversions, K-Means Cluster
   (non-image clusters payload), and Reduce Colors — the first chain to flow
   non-image data and use the `render_preview`/`summary` hooks; then the
   segmentation chain Shrink (Geometry) + Find/Filter Contours (Contours
@@ -166,4 +167,6 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
   Fourier chain DFT / Inverse DFT (`SPECTRUM` payload, magnitude-spectrum
   preview, round-trip verified). Added Gaussian Blur, Morphology, Canny, Sobel,
   Laplacian, and a Histogram node (Analysis), plus drag-to-rewire and cycle
-  prevention on connections.
+  prevention on connections. Added the live inspector pane. Collapsed the four
+  conversion nodes into three space-aware ones (To Grayscale / To BGR / To HSL)
+  that accept any input — the engine now tracks each node's color space.

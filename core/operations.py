@@ -66,6 +66,12 @@ class Operation:
     out_label: str = ""
     render_preview: Optional[Callable[[list, Any, dict], np.ndarray]] = None
     summary: Optional[Callable[[Any, dict], dict]] = None
+    # Color-space tracking (see core.engine): out_space is "bgr"|"gray"|"hls"|
+    # "binary" (fixed), "passthrough" (= first input's space), or "auto" (infer
+    # from the output array). space_aware ops receive the input space as a 3rd
+    # compute() argument.
+    out_space: str = "auto"
+    space_aware: bool = False
 
     def defaults(self) -> dict:
         return {p.name: p.default for p in self.params}
@@ -126,19 +132,39 @@ def _compute_adaptive_threshold(inputs, p):
         return None
 
 
-def _compute_to_grayscale(inputs, p):
+# --- color-space conversions (space-aware: they receive the input space) -----
+# A single op per target space delegates to the right cv2 conversion based on
+# the input's tracked color space (the engine passes it in). One source array
+# of 3 channels is ambiguous (BGR vs HLS) on its own, which is why the space
+# tag matters.
+def _is_single_channel(img):
+    return img.ndim == 2 or (img.ndim == 3 and img.shape[2] == 1)
+
+
+def _as_bgr(img, space):
+    """Return a 3-channel BGR image given its current color space."""
+    if _is_single_channel(img):
+        gray = img if img.ndim == 2 else img[:, :, 0]
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    if space == "hls":
+        return cv2.cvtColor(img, cv2.COLOR_HLS2BGR)
+    return img  # already BGR (or unknown 3-channel, assumed BGR)
+
+
+def _compute_to_grayscale(inputs, p, in_space):
     try:
         img = inputs[0]
-        return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+        if _is_single_channel(img):
+            return img if img.ndim == 2 else img[:, :, 0]
+        return cv2.cvtColor(_as_bgr(img, in_space), cv2.COLOR_BGR2GRAY)
     except Exception as e:
         print(f"Error executing to_grayscale: {e}")
         return None
 
 
-def _compute_to_bgr(inputs, p):
+def _compute_to_bgr(inputs, p, in_space):
     try:
-        img = inputs[0]
-        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR) if img.ndim == 2 else img
+        return _as_bgr(inputs[0], in_space)
     except Exception as e:
         print(f"Error executing to_bgr: {e}")
         return None
@@ -237,25 +263,14 @@ def _compute_mser(inputs, p):
         return None
 
 
-def _compute_to_hls(inputs, p):
+def _compute_to_hls(inputs, p, in_space):
     try:
         img = inputs[0]
-        if img.ndim == 2:
-            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        return cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
+        if not _is_single_channel(img) and in_space == "hls":
+            return img  # already HLS
+        return cv2.cvtColor(_as_bgr(img, in_space), cv2.COLOR_BGR2HLS)
     except Exception as e:
         print(f"Error executing to_hls: {e}")
-        return None
-
-
-def _compute_from_hls(inputs, p):
-    try:
-        img = inputs[0]
-        if img.ndim != 3 or img.shape[2] != 3:
-            return img
-        return cv2.cvtColor(img, cv2.COLOR_HLS2BGR)
-    except Exception as e:
-        print(f"Error executing from_hls: {e}")
         return None
 
 
@@ -591,27 +606,29 @@ OPS: list = [
             ParamSpec("filename", "", kind="path"),
             ParamSpec("use_custom", False, kind="bool", label="Use custom filename"),
         ],
-        compute=_compute_noop, color=(76, 175, 80),
+        compute=_compute_noop, color=(76, 175, 80), out_space="passthrough",
         in_label="Mat (Any)", out_label="File",
     ),
     Operation(
         id="to_grayscale", label="To Grayscale", category="Conversions",
-        inputs=[Port("in")], outputs=[Port("out")], params=[],
-        compute=_compute_to_grayscale, color=(96, 96, 96),
-        in_label="Mat (BGR)", out_label="Mat (Gray)",
+        inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE_GRAY)],
+        params=[], compute=_compute_to_grayscale, color=(96, 96, 96),
+        in_label="Mat (any)", out_label="Mat (Gray)",
+        out_space="gray", space_aware=True,
     ),
     Operation(
         id="to_bgr", label="To BGR", category="Conversions",
-        inputs=[Port("in")], outputs=[Port("out")], params=[],
-        compute=_compute_to_bgr, color=(33, 150, 243),
-        in_label="Mat (Gray)", out_label="Mat (BGR)",
+        inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE_BGR)],
+        params=[], compute=_compute_to_bgr, color=(33, 150, 243),
+        in_label="Mat (any)", out_label="Mat (BGR)",
+        out_space="bgr", space_aware=True,
     ),
     Operation(
         id="blur", label="Blur", category="Local Operations",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[ParamSpec("kernel_size", 15, kind="int", min=1, max=101, step=2, odd=True,
                           label="Kernel Size")],
-        compute=_compute_blur, color=(156, 39, 176),
+        compute=_compute_blur, color=(156, 39, 176), out_space="passthrough",
         in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
@@ -650,7 +667,7 @@ OPS: list = [
                       label="Kernel Size"),
             ParamSpec("sigma", 0.0, kind="float", min=0.0, max=10.0, step=0.5, label="Sigma"),
         ],
-        compute=_compute_gaussian_blur, color=(103, 58, 183),
+        compute=_compute_gaussian_blur, color=(103, 58, 183), out_space="passthrough",
         in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
@@ -662,7 +679,7 @@ OPS: list = [
             ParamSpec("kernel_size", 3, kind="int", min=1, max=31, label="Kernel Size"),
             ParamSpec("iterations", 1, kind="int", min=1, max=10, label="Iterations"),
         ],
-        compute=_compute_morphology, color=(96, 125, 139),
+        compute=_compute_morphology, color=(96, 125, 139), out_space="passthrough",
         in_label="Mat (Binary/Gray)", out_label="Mat (Binary/Gray)",
     ),
     Operation(
@@ -719,35 +736,29 @@ OPS: list = [
         inputs=[Port("a"), Port("b")], outputs=[Port("out")],
         params=[ParamSpec("alpha", 0.5, kind="float", min=0.0, max=1.0, step=0.01,
                           label="Alpha (Weight)")],
-        compute=_compute_sum, color=(128, 0, 128),
+        compute=_compute_sum, color=(128, 0, 128), out_space="passthrough",
         in_label="Mat (BGR/Gray) + Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
         id="and", label="AND", category="Arithmetic Operations",
         inputs=[Port("a"), Port("b")], outputs=[Port("out")], params=[],
-        compute=_compute_and, color=(0, 0, 139),
+        compute=_compute_and, color=(0, 0, 139), out_space="passthrough",
         in_label="Mat (BGR/Gray) & Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
         id="diff", label="Diff", category="Arithmetic Operations",
         inputs=[Port("a"), Port("b")], outputs=[Port("out")], params=[],
-        compute=_compute_diff, color=(220, 20, 60),
+        compute=_compute_diff, color=(220, 20, 60), out_space="passthrough",
         in_label="Mat (BGR/Gray) - Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     # --- Color & Clustering ------------------------------------------------
     Operation(
-        id="to_hls", label="Split to HSL", category="Conversions",
-        inputs=[Port("in", datatypes.IMAGE_BGR)],
+        id="to_hls", label="To HSL", category="Conversions",
+        inputs=[Port("in", datatypes.IMAGE)],
         outputs=[Port("out", datatypes.IMAGE)], params=[],
         compute=_compute_to_hls, color=(255, 87, 34),
-        in_label="Mat (BGR)", out_label="Mat (HLS)",
-    ),
-    Operation(
-        id="from_hls", label="HSL to BGR", category="Conversions",
-        inputs=[Port("in", datatypes.IMAGE)],
-        outputs=[Port("out", datatypes.IMAGE_BGR)], params=[],
-        compute=_compute_from_hls, color=(255, 87, 34),
-        in_label="Mat (HLS)", out_label="Mat (BGR)",
+        in_label="Mat (any)", out_label="Mat (HLS)",
+        out_space="hls", space_aware=True,
     ),
     Operation(
         id="kmeans", label="K-Means Cluster", category="Color & Clustering",
@@ -757,7 +768,7 @@ OPS: list = [
             ParamSpec("k", 6, kind="int", min=2, max=16, label="Clusters (k)"),
             ParamSpec("attempts", 3, kind="int", min=1, max=10, show=False),
         ],
-        compute=_compute_kmeans, color=(0, 150, 136),
+        compute=_compute_kmeans, color=(0, 150, 136), out_space="passthrough",
         in_label="Mat (any)", out_label="Clusters",
         render_preview=_render_kmeans, summary=_summary_kmeans,
     ),
@@ -765,7 +776,7 @@ OPS: list = [
         id="reduce_colors", label="Reduce Colors", category="Color & Clustering",
         inputs=[Port("in", datatypes.CLUSTERS)],
         outputs=[Port("out", datatypes.IMAGE)], params=[],
-        compute=_compute_reduce_colors, color=(0, 150, 136),
+        compute=_compute_reduce_colors, color=(0, 150, 136), out_space="passthrough",
         in_label="Clusters", out_label="Mat (quantized)",
     ),
     # --- Geometry ----------------------------------------------------------

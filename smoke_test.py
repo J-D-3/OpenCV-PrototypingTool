@@ -341,10 +341,10 @@ def check_input_swap(app) -> None:
 
 
 def check_color_chain(app) -> None:
-    # The user's target chain: Load > Split to HSL > Cluster > Reduce Colors.
+    # The user's target chain: Load > To HSL > Cluster > Reduce Colors.
     w = make_window(app)
     src = add_image(w, gradient_bgr())
-    hls = add_func(w, "Split to HSL")
+    hls = add_func(w, "To HSL")
     km = add_func(w, "K-Means Cluster")
     red = add_func(w, "Reduce Colors")
     connect(w, src, hls)
@@ -361,7 +361,7 @@ def check_color_chain(app) -> None:
     uniq = np.unique(out.reshape(-1, 3), axis=0)
     assert uniq.shape[0] <= 6, f"reduced image should have <= 6 colors, got {uniq.shape[0]}"
     w.close()
-    print("OK  Load > Split to HSL > K-Means > Reduce Colors chain runs")
+    print("OK  Load > To HSL > K-Means > Reduce Colors chain runs")
 
 
 def check_segmentation_chain(app) -> None:

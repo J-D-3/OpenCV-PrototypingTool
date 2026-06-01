@@ -29,13 +29,15 @@ from ui.image_utils import cv_to_qimage, to_uint8
 def channel_names(node, channels: int):
     if channels == 1:
         return ["Gray"]
+    # Prefer the engine-tracked color space, fall back to the op's output label.
+    space = (getattr(getattr(node, "gnode", None), "color_space", "") or "").lower()
     out = ""
     op = getattr(node, "op", None)
     if op is not None:
         out = (op.out_label or "").upper()
-    if "HLS" in out or "HSL" in out:
+    if space == "hls" or "HLS" in out or "HSL" in out:
         return ["H", "L", "S"]
-    if "HSV" in out:
+    if space == "hsv" or "HSV" in out:
         return ["H", "S", "V"]
     if "LAB" in out:
         return ["L", "a", "b"]

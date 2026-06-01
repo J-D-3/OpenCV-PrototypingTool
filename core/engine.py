@@ -15,18 +15,39 @@ from __future__ import annotations
 
 from typing import List
 
+import numpy as np
+
 from core.graph import GraphModel, GraphNode
+
+
+def _infer_space(arr) -> str:
+    """Best-effort color space from an array's channel count."""
+    if not isinstance(arr, np.ndarray):
+        return "unknown"
+    if arr.ndim == 2 or (arr.ndim == 3 and arr.shape[2] == 1):
+        return "gray"
+    return "bgr"
 
 
 class Engine:
     def __init__(self, graph: GraphModel):
         self.graph = graph
 
+    @staticmethod
+    def _derive_space(op, input_nodes, output) -> str:
+        rule = getattr(op, "out_space", "auto")
+        if rule == "passthrough":
+            return input_nodes[0].color_space if input_nodes else "unknown"
+        if rule in ("bgr", "gray", "hls", "binary"):
+            return rule
+        return _infer_space(output)
+
     def evaluate(self, node: GraphNode) -> None:
         """Evaluate a single node, assuming its inputs are already evaluated."""
         if node.is_source:
             node.output = node.source_image
             node.error = None
+            node.color_space = _infer_space(node.source_image)
             node.dirty = False
             return
 
@@ -34,6 +55,7 @@ class Engine:
         if len(input_nodes) != node.arity:
             node.output = None
             node.error = None
+            node.color_space = "unknown"
             node.dirty = False
             return
 
@@ -41,11 +63,17 @@ class Engine:
         if any(img is None for img in inputs):
             node.output = None
             node.error = None
+            node.color_space = "unknown"
             node.dirty = False
             return
 
+        op = node.op
         try:
-            result = node.op.compute(inputs, node.params)
+            if getattr(op, "space_aware", False):
+                in_space = input_nodes[0].color_space if input_nodes else "unknown"
+                result = op.compute(inputs, node.params, in_space)
+            else:
+                result = op.compute(inputs, node.params)
             if result is None:
                 node.output = None
                 node.error = "operation returned no result (see console)"
@@ -55,6 +83,7 @@ class Engine:
         except Exception as e:  # noqa: BLE001 — surface, don't crash the UI
             node.output = None
             node.error = f"{type(e).__name__}: {e}"
+        node.color_space = self._derive_space(op, input_nodes, node.output)
         node.dirty = False
 
     def evaluate_all(self) -> List[GraphNode]:

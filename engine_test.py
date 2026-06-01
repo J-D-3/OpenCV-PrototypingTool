@@ -204,6 +204,34 @@ def test_more_ops():
     print("OK  more ops: gaussian/morphology/canny/sobel/laplacian + histogram")
 
 
+def test_conversions():
+    bgr = gradient()  # source inferred as BGR
+
+    # BGR -> To HSL -> To BGR round-trips, and the engine tracks the spaces.
+    m = GraphModel()
+    s = _src(m, bgr)
+    h = _op(m, "to_hls")
+    b = _op(m, "to_bgr")
+    m.add_edge(s, h)
+    m.add_edge(h, b)
+    Engine(m).evaluate_all()
+    assert h.color_space == "hls" and b.color_space == "bgr", "spaces not tracked"
+    assert int(np.abs(b.output.astype(int) - bgr.astype(int)).max()) <= 3, "hls<->bgr not reversible"
+
+    # To Grayscale delegates correctly from HLS (reconstruct BGR, then gray) and
+    # matches converting straight from BGR.
+    g_from_hls = REGISTRY["to_grayscale"].compute([h.output], {}, "hls")
+    g_from_bgr = REGISTRY["to_grayscale"].compute([bgr], {}, "bgr")
+    assert int(np.abs(g_from_hls.astype(int) - g_from_bgr.astype(int)).max()) <= 3
+    assert g_from_hls.ndim == 2, "grayscale output should be single channel"
+
+    # A single-channel input is promoted to BGR by To BGR.
+    gray = REGISTRY["to_grayscale"].compute([bgr], {}, "bgr")
+    promoted = REGISTRY["to_bgr"].compute([gray], {}, "gray")
+    assert promoted.ndim == 3 and promoted.shape[2] == 3
+    print("OK  conversions: space-aware, arbitrary input -> target space")
+
+
 def test_cycle_prevention():
     m = GraphModel()
     a = _op(m, "blur")
@@ -225,8 +253,9 @@ def main():
     test_contours()
     test_fourier_roundtrip()
     test_more_ops()
+    test_conversions()
     test_cycle_prevention()
-    print("\nENGINE OK: 11 backend tests passed")
+    print("\nENGINE OK: 12 backend tests passed")
 
 
 if __name__ == "__main__":
