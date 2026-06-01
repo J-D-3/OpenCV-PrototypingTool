@@ -56,28 +56,27 @@ This is a **working prototype** being revived. The environment is now set up
 - [x] Virtual environment (`.venv`, Python 3.13) created.
 - [x] `requirements.txt` and `.gitignore` added.
 - [x] Dependencies install cleanly; all modules import.
+- [x] Headless smoke test (`smoke_test.py`) — builds the window offscreen and
+      runs an image → grayscale → blur pipeline.
+- [x] Resolved the `node.py` concatenation (removed the stray duplicate import
+      block / self-import; it is now one clean module).
+- [x] Removed dead/buggy code (`MainWindow.on_reset_zoom`, `ArrowItem.itemChange`).
 
 ### Known issues / cleanup backlog
-- **`node.py` is two files concatenated.** Around line 860 a second
-  `import cv2 … from node import FunctionNode, Node` block begins (the
-  Sum/AND/Diff/MSER nodes). The module re-imports itself. Should be split into
-  two modules or genuinely merged with the duplicate imports removed.
-- **Dead / buggy code:**
-  - `MainWindow.on_reset_zoom` (main.py) calls a non-existent `view.reset_zoom()`.
-  - `ArrowItem.itemChange` (main.py) references `self.grid_size` / `self.pixmap()`
-    that the class never defines (harmless only because arrows aren't movable).
 - **Unfinished UI:** sidebar categories *Geometry* and *Fourier* are listed but
   have no functions. There is no way to **delete** nodes or arrows.
-- **No tests.**
+- The smoke test covers happy-path wiring only; no coverage of two-input nodes
+  (Sum/AND/Diff), parameter changes, or save-to-file.
 
 ### Next steps (proposed)
-1. Refactor `node.py` (resolve the concatenation / duplicate imports).
-2. Remove dead code; add node/arrow deletion to the canvas.
-3. Either implement or remove the empty Geometry/Fourier categories.
-4. Add a smoke test that constructs the window headlessly.
+1. Either implement or remove the empty Geometry/Fourier categories.
+2. Add node/arrow deletion to the canvas.
+3. Broaden the smoke test (two-input nodes, parameters, save-to-file).
 
 ---
 
 ## Changelog
 - **2026-06-01** — Revival started: git init, Python 3.13 venv, requirements,
-  `.gitignore`, and this README added.
+  `.gitignore`, and this README added. Added headless smoke test. Refactored
+  `node.py` (removed duplicate-import concatenation) and removed dead code
+  (`on_reset_zoom`, `ArrowItem.itemChange`).

@@ -857,11 +857,6 @@ class AdaptiveThresholdNode(FunctionNode):
     def get_parameters(self) -> Dict[str, Any]:
         """Get current parameters."""
         return self._parameters.copy()
-import cv2
-import numpy as np
-from typing import Optional, Dict, Any
-from PyQt6 import QtCore, QtGui, QtWidgets
-from node import FunctionNode, Node
 
 
 class SumNode(FunctionNode):

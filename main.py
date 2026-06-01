@@ -556,20 +556,6 @@ class ArrowItem(QtWidgets.QGraphicsPathItem):
         head.closeSubpath()
         return head
 
-    def itemChange(self, change: QtWidgets.QGraphicsItem.GraphicsItemChange, value):
-        if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionChange:
-            new_pos: QtCore.QPointF = value
-            x = round(new_pos.x() / self.grid_size) * self.grid_size
-            y = round(new_pos.y() / self.grid_size) * self.grid_size
-            # Keep within scene rect if possible
-            scene = self.scene()
-            if scene is not None:
-                rect = scene.sceneRect()
-                x = max(rect.left(), min(rect.right() - self.pixmap().width(), x))
-                y = max(rect.top(), min(rect.bottom() - self.pixmap().height(), y))
-            return QtCore.QPointF(x, y)
-        return super().itemChange(change, value)
-
 
 class ImageDropWidget(QtWidgets.QWidget):
     imageLoaded = QtCore.pyqtSignal(Path)
@@ -914,8 +900,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.drop_widget.view._scene.selectionChanged.connect(on_scene_selection_changed)
 
-        # Remove zoom shortcut from previous viewer, no longer applicable
-
         if initial_image_bgr is not None:
             self.drop_widget.add_icon(initial_image_bgr, None)
 
@@ -923,10 +907,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_image_loaded(self, path: Path) -> None:
         self.setWindowTitle(f"Image - {path.name}")
 
-    @QtCore.pyqtSlot()
-    def on_reset_zoom(self) -> None:
-        self.drop_widget.view.reset_zoom()
-    
     @QtCore.pyqtSlot(Node)
     def open_image_viewer(self, node: Node) -> None:
         """Open an image viewer window for the specified node."""
