@@ -143,18 +143,32 @@ class HistogramPlot(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(120)
-        self._curves = []   # list of (color, normalized np.ndarray[256]) for enabled channels
+        self._curves = []    # list of (color, normalized np.ndarray[256])
+        self._markers = []   # list of (color, lo, hi) — range handles to draw as lines
 
-    def set_curves(self, curves):
+    def set_data(self, curves, markers):
         self._curves = curves
+        self._markers = markers
         self.update()
 
     def paintEvent(self, _e):
         p = QtGui.QPainter(self)
         p.fillRect(self.rect(), QtGui.QColor(250, 250, 250))
         w, h = self.width(), self.height()
-        if not self._curves or w < 4:
+        if w < 4:
             return
+
+        # Range markers: a vertical line at each non-default handle (skip 0 / 255).
+        for color, lo, hi in self._markers:
+            pen = QtGui.QPen(color, 1, QtCore.Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            if lo > 0:
+                x = w * lo / 255
+                p.drawLine(QtCore.QPointF(x, 0), QtCore.QPointF(x, h))
+            if hi < 255:
+                x = w * hi / 255
+                p.drawLine(QtCore.QPointF(x, 0), QtCore.QPointF(x, h))
+
         for color, norm in self._curves:
             p.setPen(QtGui.QPen(color, 1))
             path = QtGui.QPainterPath()
@@ -238,7 +252,7 @@ class HistogramPanel(QtWidgets.QWidget):
     def clear(self):
         self.configure(0, [])
         self._hists = []
-        self._plot.set_curves([])
+        self._plot.set_data([], [])
 
     def _on_changed(self):
         self._refresh_plot()
@@ -247,6 +261,7 @@ class HistogramPanel(QtWidgets.QWidget):
     def _refresh_plot(self):
         log = self._log_cb.isChecked()
         curves = []
+        markers = []
         for i, ch in enumerate(self._channels):
             if i < len(self._hists) and ch["cb"].isChecked():
                 h = self._hists[i].astype(np.float32)
@@ -255,7 +270,9 @@ class HistogramPanel(QtWidgets.QWidget):
                 peak = float(h.max())
                 norm = h / peak if peak > 0 else h
                 curves.append((ch["color"], norm))
-        self._plot.set_curves(curves)
+                lo, hi = ch["slider"].values()
+                markers.append((ch["color"], lo, hi))
+        self._plot.set_data(curves, markers)
 
 
 # ---------------------------------------------------------------------------
