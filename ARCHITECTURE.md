@@ -25,7 +25,7 @@ ui/                   frontend — PyQt6 view layer
   arrow.py            ArrowItem (edge graphics)
   canvas.py           GraphicsImageView + ImageDropWidget (the node canvas)
   viewer.py           ImageViewerWindow (per-node output inspector)
-  parameters.py       (Phase 2) ParameterPanel auto-generated from a node's schema
+  parameters.py       ParameterPanel auto-generated from a node's ParamSpec schema
   main_window.py      MainWindow (sidebar + canvas + parameter panel)
 
 app.py                entrypoint (argparse + QApplication)
@@ -60,7 +60,7 @@ does not cycle at runtime.
 | **Add an OpenCV operation** | Add one `Operation` entry in `core/operations.py` (id, label, category, ports, param schema, a `compute(inputs, params)` function). The sidebar and node factory pick it up automatically. |
 | Give an op a non-image preview (e.g. draw contours) | Set its `render_preview(inputs, output, params) -> image` hook (consumed from Phase 4). |
 | Show key stats for an op (e.g. #contours) | Set its `summary(output, params) -> dict` hook (consumed from Phase 4). |
-| Change how a parameter control looks | `ui/parameters.py` (Phase 2); the widget is derived from the `ParamSpec.kind`. |
+| Change how a parameter control looks | `ui/parameters.py`; the widget is derived from the `ParamSpec.kind`. |
 | Change node appearance / icons | `ui/nodes.py`. |
 | Change canvas behaviour (drag, connect, grid) | `ui/canvas.py`. |
 | Change the inspector window | `ui/viewer.py`. |

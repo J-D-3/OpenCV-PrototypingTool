@@ -78,6 +78,10 @@ This is a **working prototype** being revived. The environment is now set up
       evaluation with dirty propagation, output caching, and per-node error
       capture (shown as a red border). Replaced the recursive scene-walking +
       re-entrancy flags. Covered by `engine_test.py` (Qt-free).
+- [x] **Phase 2 — auto-generated parameters.** `ui/parameters.py` builds the
+      controls from each op's `ParamSpec` schema (int/float sliders, enums,
+      bools, text/path); deleted the ~370-line per-function `if/elif`. A new
+      operation now needs zero UI code.
 
 ### Roadmap
 
@@ -86,9 +90,7 @@ parameter with live downstream updates, and inspect each node's result —
 including ops whose output is not itself an image (e.g. findContours, drawn
 back onto the input, with key stats like #contours shown in the GUI).
 
-- **Phase 2 (next)** — declarative parameter widgets auto-generated from each
-  op's schema (delete the hand-written per-function control panels).
-- **Phase 4** — typed data envelope (Image/Contours/Histogram/Labels/…) +
+- **Phase 4 (next)** — typed data envelope (Image/Contours/Histogram/Labels/…) +
   type-dispatching, signal-driven inspector (image viewer, `render_preview`
   for non-image ops, `summary` key-info panel).
 - **Phase 5** — save/load chains (JSON) + node/edge deletion & re-wiring.
@@ -115,3 +117,5 @@ back onto the input, with key stats like #contours shown in the GUI).
   **Phase 1b + 3:** moved graph topology into `core/graph.py` and added the
   `core/engine.py` DAG evaluator (topo order, dirty propagation, caching,
   error capture) wired through `ui/controller.py`; added `engine_test.py`.
+  **Phase 2:** auto-generated the parameter panel (`ui/parameters.py`) from
+  each op's schema and removed the per-function control code.

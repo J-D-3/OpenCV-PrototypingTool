@@ -47,6 +47,7 @@ class ParamSpec:
     odd: bool = False            # value constrained to odd numbers (kernels)
     choices: Optional[list] = None  # list of (label, value) for choice/enum
     label: Optional[str] = None  # display label; defaults to name.title()
+    show: bool = True            # render a control in the parameter panel?
 
 
 @dataclass
@@ -332,10 +333,10 @@ OPS: list = [
                       label="Max Variation"),
             ParamSpec("min_diversity", 0.2, kind="float", min=0.0, max=1.0, step=0.01,
                       label="Min Diversity"),
-            ParamSpec("max_evolution", 200, kind="int"),
-            ParamSpec("area_threshold", 1.01, kind="float"),
-            ParamSpec("min_margin", 0.003, kind="float"),
-            ParamSpec("edge_blur_size", 5, kind="int"),
+            ParamSpec("max_evolution", 200, kind="int", show=False),
+            ParamSpec("area_threshold", 1.01, kind="float", show=False),
+            ParamSpec("min_margin", 0.003, kind="float", show=False),
+            ParamSpec("edge_blur_size", 5, kind="int", show=False),
         ],
         compute=_compute_mser, color=(34, 139, 34),
         in_label="Mat (Gray)", out_label="Mat (BGR)",

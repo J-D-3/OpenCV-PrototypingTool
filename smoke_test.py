@@ -205,6 +205,28 @@ def check_inspector(app) -> None:
     print("OK  inspector window renders a node's output")
 
 
+def check_parameter_panel(app) -> None:
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    thresh = add_func(w, "Threshold")
+    connect(w, src, thresh)
+    app.processEvents()
+
+    scene = w.drop_widget.view._scene
+    thresh.setSelected(True)        # fires the scene selection handler
+    app.processEvents()
+    assert w.param_panel.has_controls(), "threshold should expose auto-built controls"
+
+    # An op with no parameters should produce no controls.
+    scene.clearSelection()
+    gray = add_func(w, "To Grayscale")
+    gray.setSelected(True)
+    app.processEvents()
+    assert not w.param_panel.has_controls(), "no-param op should expose no controls"
+    w.close()
+    print("OK  parameter panel auto-builds controls from the op schema")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -214,6 +236,7 @@ def main() -> int:
         check_diff_input_order,
         check_save_to_file,
         check_inspector,
+        check_parameter_panel,
     ]
     for chk in checks:
         chk(app)
