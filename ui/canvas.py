@@ -32,13 +32,14 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         # Highlight the selected node (yellow) + its whole data flow (green).
         self._scene.selectionChanged.connect(self._update_flow_highlight)
         # Scene will follow the viewport size to fill the right side
-        self._scene.setSceneRect(QtCore.QRectF(self.viewport().rect()))
-        # Not scrollable; fill the space provided by the splitter
-        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # Disable built-in zoom/pan; we only place draggable icons
+        # A roomy canvas (~2x the viewport, growing to fit the nodes), scrollable
+        # and zoomable (Ctrl+wheel) for large pipelines.
+        self._zoom_level = 1.0
+        self._update_scene_rect()
+        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setDragMode(QtWidgets.QGraphicsView.DragMode.NoDrag)
-        self.setTransformationAnchor(QtWidgets.QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        self.setTransformationAnchor(QtWidgets.QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QtWidgets.QGraphicsView.ViewportAnchor.AnchorViewCenter)
         # Accept drops directly on the view
         self.setAcceptDrops(True)
@@ -76,9 +77,27 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
                                       and a.id in flow_ids and b.id in flow_ids)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        # Keep scene rect matched to available view size
-        self._scene.setSceneRect(QtCore.QRectF(0, 0, self.viewport().width(), self.viewport().height()))
+        self._update_scene_rect()
         super().resizeEvent(event)
+
+    def _update_scene_rect(self) -> None:
+        """Scene is ~2x the viewport so there's room to lay out many nodes, and
+        always grows to enclose the existing nodes (+ margin)."""
+        vw = max(self.viewport().width(), 400)
+        vh = max(self.viewport().height(), 400)
+        rect = QtCore.QRectF(0, 0, vw * 2, vh * 2)
+        items = self._scene.itemsBoundingRect()
+        if not items.isEmpty():
+            rect = rect.united(items.adjusted(-120, -120, 120, 120))
+        self._scene.setSceneRect(rect)
+
+    def _zoom(self, factor: float) -> None:
+        target = max(0.3, min(3.0, self._zoom_level * factor))
+        factor = target / self._zoom_level
+        if abs(factor - 1.0) < 1e-3:
+            return
+        self._zoom_level = target
+        self.scale(factor, factor)
 
     def drawBackground(self, painter: QtGui.QPainter, rect: QtCore.QRectF) -> None:
         # Fill background gray
@@ -239,8 +258,15 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
             self._scene.removeItem(node)
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
-        # Scroll the batch element shown by the node under the cursor.
-        node = self._nearest_icon(self.mapToScene(event.position().toPoint()))
+        # Ctrl+wheel zooms the canvas.
+        if event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier:
+            self._zoom(1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15)
+            event.accept()
+            return
+        # Wheel directly over a batch node scrolls its frames; otherwise it
+        # scrolls the (now larger) canvas as usual.
+        item = self._scene.itemAt(self.mapToScene(event.position().toPoint()), self.transform())
+        node = item if isinstance(item, Node) else None
         step = 1 if event.angleDelta().y() < 0 else -1
         if self._scroll_batch(node, step):
             event.accept()
@@ -506,10 +532,13 @@ class ImageDropWidget(QtWidgets.QWidget):
 
         self.view.controller.register_op(item)
         self.view._scene.addItem(item)
+        self.view._update_scene_rect()
         if scene_pos is None:
-            rect = self.view._scene.sceneRect()
+            # Drop into the middle of what's currently visible (not the middle of
+            # the much larger scene, which may be scrolled off-screen).
+            center = self.view.mapToScene(self.view.viewport().rect().center())
             half = self.icon_size / 2
-            scene_pos = QtCore.QPointF(rect.center().x() - half, rect.center().y() - half)
+            scene_pos = QtCore.QPointF(center.x() - half, center.y() - half)
         gx = round(scene_pos.x() / 12) * 12
         gy = round(scene_pos.y() / 12) * 12
         item.setPos(gx, gy)

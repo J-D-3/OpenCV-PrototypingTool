@@ -827,6 +827,24 @@ def check_function_search(app) -> None:
     print("OK  function search filters by name/category/cv:: call; info panel fixed 200px")
 
 
+def check_canvas_zoom_scroll(app) -> None:
+    w = make_window(app)
+    view = w.drop_widget.view
+    vp = view.viewport().rect()
+    sr = view._scene.sceneRect()
+    assert sr.width() >= vp.width() * 1.8 and sr.height() >= vp.height() * 1.8, \
+        "scene should be ~2x the viewport so large pipelines have room to scroll"
+    assert view.horizontalScrollBarPolicy() == QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    z0 = view._zoom_level
+    view._zoom(1.15)
+    assert view._zoom_level > z0, "Ctrl+wheel zoom-in raises the zoom level"
+    for _ in range(40):
+        view._zoom(0.5)
+    assert view._zoom_level >= 0.3, "zoom-out is clamped"
+    w.close()
+    print("OK  canvas: 2x scrollable scene + clamped zoom")
+
+
 def check_flow_highlight(app) -> None:
     from ui.arrow import ArrowItem
     w = make_window(app)
@@ -924,6 +942,7 @@ def main() -> int:
         check_save_nonimage,
         check_export_code,
         check_function_search,
+        check_canvas_zoom_scroll,
         check_flow_highlight,
         check_background_eval,
     ]
