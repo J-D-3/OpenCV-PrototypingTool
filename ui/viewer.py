@@ -12,7 +12,6 @@ from PyQt6 import QtWidgets
 from ui.nodes import Node
 from ui.image_utils import to_uint8
 from ui.inspector_pane import ImagePanel, channel_names
-from ui.parameters import ParameterPanel
 
 
 class ImageViewerWindow(QtWidgets.QMainWindow):
@@ -43,14 +42,7 @@ class ImageViewerWindow(QtWidgets.QMainWindow):
         self._readout.setStyleSheet("font-family: monospace;")
         layout.addWidget(self._readout)
 
-        # Parameters (only for operation nodes that declare any).
-        self._params = None
-        if getattr(getattr(node, "op", None), "params", None):
-            self._params = ParameterPanel()
-            box = QtWidgets.QGroupBox("Parameters")
-            QtWidgets.QVBoxLayout(box).addWidget(self._params)
-            layout.addWidget(box)
-            self._params.set_node(node)
+        # (Parameters are edited only in the main window's panel.)
 
         self._disp = None          # uint8 display image for pixel sampling
         self._names = ["B", "G", "R"]

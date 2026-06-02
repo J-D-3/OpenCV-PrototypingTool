@@ -211,12 +211,12 @@ def check_inspector(app) -> None:
     app.processEvents()
     assert not viewer._image._pixmap.isNull(), "inspector showed no image"
     assert "×" in viewer._meta.text(), "inspector should show size metadata"
-    assert viewer._params is not None, "inspector should show the node's parameters"
+    assert not hasattr(viewer, "_params"), "params are edited only in the main window panel"
     viewer._on_hover(3, 4)
     assert "x=3 y=4" in viewer._readout.text(), "inspector should show the pixel readout"
     viewer.close()
     w.close()
-    print("OK  dedicated inspector: image, metadata, params, pixel readout")
+    print("OK  dedicated inspector: image, metadata, pixel readout")
 
 
 def check_parameter_panel(app) -> None:
