@@ -26,6 +26,7 @@ ui/                   frontend — PyQt6 view layer
   controller.py       GraphController: bridges view items <-> model/engine
   image_utils.py      cv_to_qimage: gray/BGR/BGRA + float normalization for display
   nodes.py            Node / ImageNode / FunctionNode / SaveToFileNode graphics items
+  node_icons.py       per-operation corner glyphs (hand-drawn, keyed by op id)
   arrow.py            ArrowItem (edge graphics)
   canvas.py           GraphicsImageView + ImageDropWidget (the node canvas)
   viewer.py           ImageViewerWindow (pinned, per-node output inspector)
@@ -80,6 +81,8 @@ does not cycle at runtime.
   single-input node **re-points** (rewires) it; connections that would form a
   cycle are rejected.
 - **Double-click** a node: open its inspector.
+- **Mouse wheel** over a batch node: scroll through its images (the frame index
+  is shared with the inspector pane's slider).
 - **Delete / Backspace**: remove the selected node(s) or arrow(s).
 - **S**: swap the two inputs of a selected binary op (e.g. Diff A↔B).
 - **Save / Load Pipeline** (sidebar): persist the whole graph to JSON.

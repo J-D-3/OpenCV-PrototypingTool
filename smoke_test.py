@@ -20,7 +20,7 @@ import json
 from dataclasses import replace
 import numpy as np
 import cv2
-from PyQt6 import QtWidgets, QtCore
+from PyQt6 import QtWidgets, QtCore, QtGui
 
 from ui.main_window import MainWindow
 from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode
@@ -570,6 +570,39 @@ def check_create_batch(app) -> None:
     print("OK  Create Batch: variadic inputs -> one batch through the chain")
 
 
+def check_node_icons_and_scroll(app) -> None:
+    import core.operations as ops
+    from ui import node_icons
+
+    # Every operation's glyph draws without error.
+    pm = QtGui.QPixmap(16, 16)
+    for op_id in ops.REGISTRY:
+        p = QtGui.QPainter(pm)
+        node_icons.draw(p, QtCore.QRectF(0, 0, 16, 16), op_id, QtGui.QColor(50, 50, 50))
+        p.end()
+
+    w = make_window(app)
+    # A freshly added function node shows its rendered icon immediately, not the
+    # gray placeholder (sample a white interior pixel away from text/border).
+    f = add_func(w, "Blur")
+    size = f.pixmap().width()
+    col = f.pixmap().toImage().pixelColor(size // 2, size - 6)
+    # Rendered function icon has a light-green background (200,255,200); the
+    # unrendered placeholder is gray (200,200,200) — distinguish by the green.
+    assert col.green() > 240 and col.red() < 230, \
+        "function node should render its green icon immediately, not the gray placeholder"
+
+    # Mouse-wheel scrolls a batch node's previewed element (clamped).
+    src = w.drop_widget.add_images([np.full((10, 10, 3), v, np.uint8) for v in (10, 100, 200)])
+    view = w.drop_widget.view
+    assert view._scroll_batch(src, 1) and view.controller.preview_index == 1
+    view._scroll_batch(src, 9)
+    assert view.controller.preview_index == 2
+    assert view._scroll_batch(f, 1) is False, "non-batch node should not scroll"
+    w.close()
+    print("OK  node glyphs draw; immediate label; batch wheel-scroll")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -592,6 +625,7 @@ def main() -> int:
         check_inspector_pane,
         check_batch,
         check_create_batch,
+        check_node_icons_and_scroll,
     ]
     for chk in checks:
         chk(app)

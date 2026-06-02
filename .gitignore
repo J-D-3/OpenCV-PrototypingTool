@@ -2,6 +2,10 @@
 .venv/
 venv/
 
+# Subversion
+.svn/
+svn/
+
 # Python caches
 __pycache__/
 *.py[cod]

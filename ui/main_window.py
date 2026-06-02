@@ -126,8 +126,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # Connect double-click signal to open image viewer
         self.drop_widget.view.nodeDoubleClicked.connect(self.open_image_viewer)
 
-        # Keep the live inspector pane in sync with node result changes.
+        # Keep the live inspector pane in sync with node result changes and with
+        # the previewed batch element (which the canvas wheel can also change).
         self.drop_widget.view.controller.signals.nodeChanged.connect(self._on_pane_node_changed)
+        self.drop_widget.view.controller.signals.previewIndexChanged.connect(
+            lambda _i: self.inspector_pane.refresh())
 
         def on_size_changed(value: int) -> None:
             self.drop_widget.icon_size = int(value)

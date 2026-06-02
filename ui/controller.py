@@ -19,9 +19,9 @@ from core import datatypes
 
 
 class ControllerSignals(QtCore.QObject):
-    """One signal hub per canvas (cheaper than a QObject per node).
-    Emits the Qt node item whose result just changed."""
-    nodeChanged = QtCore.pyqtSignal(object)
+    """One signal hub per canvas (cheaper than a QObject per node)."""
+    nodeChanged = QtCore.pyqtSignal(object)        # the Qt node whose result changed
+    previewIndexChanged = QtCore.pyqtSignal(int)   # the batch element being previewed
 
 
 class GraphController:
@@ -61,9 +61,13 @@ class GraphController:
 
     def set_preview_index(self, index: int) -> None:
         """Change which batch element every node previews and re-render views."""
-        self.preview_index = max(0, index)
+        index = max(0, index)
+        if index == self.preview_index:
+            return
+        self.preview_index = index
         for qt in self._qt_by_gid.values():
             qt.refresh_from_model()
+        self.signals.previewIndexChanged.emit(index)
 
     def unregister(self, qt_node) -> None:
         gn = getattr(qt_node, "gnode", None)

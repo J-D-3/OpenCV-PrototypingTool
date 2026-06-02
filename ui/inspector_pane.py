@@ -548,10 +548,10 @@ class InspectorPane(QtWidgets.QWidget):
 
     # --- internals ---------------------------------------------------------
     def _on_frame(self, value: int) -> None:
-        if self._node is None or self._node.controller is None:
-            return
-        self._node.controller.set_preview_index(value)  # re-render every node thumbnail
-        self._recompute(reset=False)                    # and the pane's own element
+        # set_preview_index refreshes all node thumbnails and emits
+        # previewIndexChanged, which refreshes this pane (see MainWindow wiring).
+        if self._node is not None and self._node.controller is not None:
+            self._node.controller.set_preview_index(value)
 
     def _update_frame_controls(self) -> None:
         full = self._node.gnode.output if (self._node is not None and getattr(self._node, "gnode", None)) else None

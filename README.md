@@ -30,9 +30,11 @@ python main.py [optional\path\to\image.png]
 ```
 
 Canvas controls: right-drag to connect nodes (drop on a full single-input node
-to rewire it), double-click to inspect a node, **Delete** to remove selected
-nodes/arrows, **S** to swap a binary op's inputs, and **Save/Load Pipeline**
-(sidebar) to persist a graph to JSON.
+to rewire it), double-click to inspect a node, **mouse-wheel over a batch node**
+to scroll its images, **Delete** to remove selected nodes/arrows, **S** to swap
+a binary op's inputs, and **Save/Load Pipeline** (sidebar) to persist a graph to
+JSON. Each node shows an operation-specific icon; batch nodes show an `i/N`
+frame badge.
 
 The **right-hand Inspector pane** always follows the selected node and stacks:
 an image view (output / `render_preview`); a pixel-neighbourhood view (3/9/27/81

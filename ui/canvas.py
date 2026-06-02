@@ -212,6 +212,32 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         if node.scene() is not None:
             self._scene.removeItem(node)
 
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
+        # Scroll the batch element shown by the node under the cursor.
+        node = self._nearest_icon(self.mapToScene(event.position().toPoint()))
+        step = 1 if event.angleDelta().y() < 0 else -1
+        if self._scroll_batch(node, step):
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def _batch_len(self, node) -> int:
+        gn = getattr(node, "gnode", None)
+        if gn is None:
+            return 1
+        val = gn.source_image if gn.is_source else getattr(gn, "output", None)
+        return len(val) if isinstance(val, Batch) else 1
+
+    def _scroll_batch(self, node, step: int) -> bool:
+        if node is None:
+            return False
+        n = self._batch_len(node)
+        if n <= 1:
+            return False
+        self.controller.set_preview_index(
+            max(0, min(self.controller.preview_index + step, n - 1)))
+        return True
+
     def _nearest_icon(self, scene_pos: QtCore.QPointF) -> Optional[Node]:
         nearest: Optional[Node] = None
         best_dist2 = float('inf')

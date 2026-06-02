@@ -12,6 +12,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.operations import REGISTRY
 from core.batch import Batch
+from ui import node_icons
 from ui.image_utils import cv_to_qimage
 
 if TYPE_CHECKING:
@@ -266,6 +267,37 @@ class Node(QtWidgets.QGraphicsPixmapItem):
             return value.items[self._cur_index(value)] if value.items else None
         return value
 
+    def _batch_value(self):
+        """This node's batched value (source for sources, output otherwise)."""
+        gn = getattr(self, "gnode", None)
+        if gn is None:
+            return None
+        return gn.source_image if gn.is_source else getattr(gn, "output", None)
+
+    def _draw_batch_badge(self, painter: QtGui.QPainter, size: int) -> None:
+        """Overlay an 'i/N' frame counter when this node holds a batch."""
+        value = self._batch_value()
+        if not (isinstance(value, Batch) and len(value) > 1):
+            return
+        text = f"{self._cur_index(value) + 1}/{len(value)}"
+        painter.save()
+        try:
+            font = painter.font()
+            font.setPixelSize(max(9, int(size * 0.12)))
+            font.setBold(True)
+            painter.setFont(font)
+            fm = painter.fontMetrics()
+            w = fm.horizontalAdvance(text) + 8
+            h = fm.height() + 2
+            rect = QtCore.QRectF(size - w - 2, size - h - 2, w, h)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(QtGui.QColor(0, 0, 0, 170))
+            painter.drawRoundedRect(rect, 3, 3)
+            painter.setPen(QtGui.QColor(255, 255, 255))
+            painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, text)
+        finally:
+            painter.restore()
+
 
 class ImageNode(Node):
     """Node representing an input image."""
@@ -306,6 +338,7 @@ class ImageNode(Node):
                 x = (size - scaled.width()) // 2
                 y = (size - scaled.height()) // 2
                 painter.drawPixmap(x, y, scaled)
+            self._draw_batch_badge(painter, size)
         finally:
             painter.end()
         self.setPixmap(thumb)
@@ -320,25 +353,9 @@ class ImageNode(Node):
         return self._element(self._source)
     
     def _draw_specific_type_icon(self, painter: QtGui.QPainter, icon_rect: QtCore.QRectF) -> None:
-        """Draw image icon (photo frame)."""
-        painter.save()
-        try:
-            # Blue color for image nodes
-            painter.setPen(QtGui.QPen(QtGui.QColor(33, 150, 243), 2))
-            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-            
-            # Draw photo frame (rectangle with diagonal lines)
-            frame_rect = icon_rect.adjusted(2, 2, -2, -2)
-            painter.drawRect(frame_rect)
-            
-            # Draw diagonal lines (like a photo)
-            center = frame_rect.center()
-            painter.drawLine(frame_rect.topLeft(), center)
-            painter.drawLine(frame_rect.topRight(), center)
-            painter.drawLine(frame_rect.bottomLeft(), center)
-            painter.drawLine(frame_rect.bottomRight(), center)
-        finally:
-            painter.restore()
+        """Photo icon for a single image; a stacked-heap icon for a batch."""
+        key = "batch" if isinstance(self._source, Batch) else "image"
+        node_icons.draw_key(painter, icon_rect, key, QtGui.QColor(33, 150, 243))
 
 
 class FunctionNode(Node):
@@ -355,6 +372,7 @@ class FunctionNode(Node):
         self._label = op.label
         meta = {"name": op.id, "in": op.in_label, "out": op.out_label}
         super().__init__(icon_size, grid_size, meta)
+        self._render_icon()  # show the labelled icon immediately (not the gray box)
 
     # --- rendering ---------------------------------------------------------
     def set_icon_size(self, icon_size: int) -> None:
@@ -421,15 +439,9 @@ class FunctionNode(Node):
         self.setPixmap(pix)
 
     def _draw_specific_type_icon(self, painter: QtGui.QPainter, icon_rect: QtCore.QRectF) -> None:
-        """Draw a generic marker tinted with the operation's color."""
-        painter.save()
-        try:
-            r, g, b = self.op.color
-            painter.setPen(QtGui.QPen(QtGui.QColor(r, g, b), 1))
-            painter.setBrush(QtGui.QBrush(QtGui.QColor(r, g, b)))
-            painter.drawEllipse(icon_rect.center(), 4, 4)
-        finally:
-            painter.restore()
+        """Draw an operation-specific glyph tinted with the operation's color."""
+        r, g, b = self.op.color
+        node_icons.draw(painter, icon_rect, self.op.id, QtGui.QColor(r, g, b))
 
     def refresh_from_model(self) -> None:
         """Re-render from the backend result (called by the controller)."""
@@ -464,6 +476,7 @@ class FunctionNode(Node):
             painter.setPen(pen)
             painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
             painter.drawRect(1, 1, size - 2, size - 2)
+            self._draw_batch_badge(painter, size)
         finally:
             painter.end()
         self.setPixmap(thumb)
