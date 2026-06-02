@@ -857,6 +857,34 @@ def check_live_slider(app) -> None:
     print("OK  live slider: Filter Contours area evaluates while dragging")
 
 
+def check_histogram_views(app) -> None:
+    from ui.inspector_pane import _ch_value_label
+    w = make_window(app)
+    img = np.zeros((40, 60, 3), np.uint8)
+    img[:, :, 0] = 200; img[:, :, 2] = 100
+    src = add_image(w, img)
+    w.inspector_pane.set_node(src)
+    app.processEvents()
+    hp = w.inspector_pane._hist
+    assert [c["name"] for c in hp._channels] == ["B", "G", "R"]
+    assert not hp._view_combo.isHidden(), "BGR/HSL toggle shown for colour images"
+
+    hp._view_combo.setCurrentText("HSL")          # -> recompute as HSL
+    app.processEvents()
+    chans = hp._channels
+    assert [c["name"] for c in chans] == ["H", "L", "S"]
+    assert chans[0]["vmax"] == 179, "Hue spans its real 0..179 range, not 0..255"
+    assert chans[1]["vmax"] == 255 and chans[2]["vmax"] == 255
+    assert _ch_value_label("H", 90) == "180°", "Hue value shown in degrees"
+
+    g = add_image(w, np.zeros((30, 30), np.uint8))
+    w.inspector_pane.set_node(g)
+    app.processEvents()
+    assert hp._view_combo.isHidden(), "no BGR/HSL toggle for a single-channel image"
+    w.close()
+    print("OK  histogram: BGR/HSL toggle, Hue 0..179 axis, degree value labels")
+
+
 def check_large_image_render(app) -> None:
     from ui.image_utils import downscale_max
     big = np.zeros((3000, 4000, 3), np.uint8)
@@ -992,6 +1020,7 @@ def main() -> int:
         check_export_code,
         check_function_search,
         check_live_slider,
+        check_histogram_views,
         check_large_image_render,
         check_canvas_zoom_scroll,
         check_flow_highlight,

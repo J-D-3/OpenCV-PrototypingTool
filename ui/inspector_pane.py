@@ -65,29 +65,48 @@ def _channel_color(name: str) -> QtGui.QColor:
     return _CHANNEL_COLORS.get(name, QtGui.QColor(40, 90, 220))
 
 
+# Per-channel raw value range. OpenCV stores Hue as 0..179 (2 deg / unit); every
+# other channel is 0..255.
+def _ch_vmax(name: str) -> int:
+    return 179 if name == "H" else 255
+
+
+def _ch_value_label(name: str, raw: int) -> str:
+    """Human value for a raw channel reading — Hue shown in degrees (0..358)."""
+    if name == "H":
+        return f"{int(round(raw * 2))}°"
+    return str(int(raw))
+
+
 # ---------------------------------------------------------------------------
 # RangeSlider — a two-handle 0..255 selector
 # ---------------------------------------------------------------------------
 class RangeSlider(QtWidgets.QWidget):
     rangeChanged = QtCore.pyqtSignal()
 
-    def __init__(self, color: QtGui.QColor, parent=None):
+    def __init__(self, color: QtGui.QColor, parent=None, vmax: int = 255):
         super().__init__(parent)
         self.setFixedHeight(22)
         self.setMinimumWidth(140)
-        self._lo, self._hi = 0, 255
+        self._vmax = vmax
+        self._lo, self._hi = 0, vmax
         self._color = color
         self._drag = None  # 'lo' | 'hi' | None
         self._margin = 5
+
+    def set_vmax(self, vmax: int) -> None:
+        self._vmax = max(1, int(vmax))
+        self._lo, self._hi = 0, self._vmax
+        self.update()
 
     def values(self):
         return self._lo, self._hi
 
     def is_full(self) -> bool:
-        return self._lo <= 0 and self._hi >= 255
+        return self._lo <= 0 and self._hi >= self._vmax
 
     def reset(self):
-        self._lo, self._hi = 0, 255
+        self._lo, self._hi = 0, self._vmax
         self.update()
 
     def _track_rect(self):
@@ -96,13 +115,13 @@ class RangeSlider(QtWidgets.QWidget):
 
     def _val_to_x(self, v):
         t = self._track_rect()
-        return t.left() + int(t.width() * v / 255)
+        return t.left() + int(t.width() * v / self._vmax)
 
     def _x_to_val(self, x):
         t = self._track_rect()
         if t.width() <= 0:
             return 0
-        return int(round(255 * (x - t.left()) / t.width()))
+        return int(round(self._vmax * (x - t.left()) / t.width()))
 
     def paintEvent(self, _e):
         p = QtGui.QPainter(self)
@@ -131,7 +150,7 @@ class RangeSlider(QtWidgets.QWidget):
         self._drag = None
 
     def _apply(self, x):
-        v = max(0, min(255, self._x_to_val(x)))
+        v = max(0, min(self._vmax, self._x_to_val(x)))
         if self._drag == 'lo':
             self._lo = min(v, self._hi)
         else:
@@ -161,9 +180,23 @@ class HistogramPlot(QtWidgets.QWidget):
         self._markers = markers
         self.update()
 
-    def _x(self, value, w):
+    def _x(self, value, w, vmax):
         span = max(1, w - self._pad_left - self._pad_right)
-        return self._pad_left + span * value / 255.0
+        return self._pad_left + span * value / float(vmax)
+
+    def _draw_marker(self, p, color, x, h, raw, name):
+        """A dashed line + an 'x = <value>' tag (Hue in degrees) at the handle."""
+        p.setPen(QtGui.QPen(color, 1, QtCore.Qt.PenStyle.DashLine))
+        p.drawLine(QtCore.QPointF(x, 0), QtCore.QPointF(x, h))
+        text = f"x={_ch_value_label(name, raw)}"
+        fm = p.fontMetrics()
+        tw = fm.horizontalAdvance(text)
+        tx = x + 2 if x + 2 + tw < self.width() else x - 2 - tw   # keep on-screen
+        p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255)))
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):          # halo for legibility
+            p.drawText(QtCore.QPointF(tx + dx, fm.ascent() + 1 + dy), text)
+        p.setPen(QtGui.QPen(color))
+        p.drawText(QtCore.QPointF(tx, fm.ascent() + 1), text)
 
     def paintEvent(self, _e):
         p = QtGui.QPainter(self)
@@ -172,31 +205,27 @@ class HistogramPlot(QtWidgets.QWidget):
         if w < 4:
             return
 
-        # Range markers: a vertical line at each non-default handle (skip 0 / 255).
-        for color, lo, hi in self._markers:
-            p.setPen(QtGui.QPen(color, 1, QtCore.Qt.PenStyle.DashLine))
+        # Range markers: a vertical line + value tag at each non-default handle.
+        for color, lo, hi, vmax, name in self._markers:
             if lo > 0:
-                x = self._x(lo, w)
-                p.drawLine(QtCore.QPointF(x, 0), QtCore.QPointF(x, h))
-            if hi < 255:
-                x = self._x(hi, w)
-                p.drawLine(QtCore.QPointF(x, 0), QtCore.QPointF(x, h))
+                self._draw_marker(p, color, self._x(lo, w, vmax), h, lo, name)
+            if hi < vmax:
+                self._draw_marker(p, color, self._x(hi, w, vmax), h, hi, name)
 
-        for color, norm in self._curves:
+        for color, norm, vmax in self._curves:
             p.setPen(QtGui.QPen(color, 1))
             path = QtGui.QPainterPath()
-            for i in range(256):
-                x = self._x(i, w)
+            n = len(norm)
+            for i in range(n):
+                x = self._x(i, w, vmax)
                 y = h - 1 - norm[i] * (h - 2)
-                if i == 0:
-                    path.moveTo(x, y)
-                else:
-                    path.lineTo(x, y)
+                (path.moveTo if i == 0 else path.lineTo)(x, y)
             p.drawPath(path)
 
 
 class HistogramPanel(QtWidgets.QWidget):
     rangesChanged = QtCore.pyqtSignal()
+    viewChanged = QtCore.pyqtSignal()      # BGR <-> HSL toggle
 
     _CB_W = 28          # checkbox+label column width
     _ROW_SPACING = 2    # gap between checkbox and slider
@@ -210,6 +239,11 @@ class HistogramPanel(QtWidgets.QWidget):
         header = QtWidgets.QHBoxLayout()
         header.addWidget(QtWidgets.QLabel("Histogram"))
         header.addStretch()
+        # BGR <-> HSL view (only meaningful for a 3-channel image).
+        self._view_combo = QtWidgets.QComboBox()
+        self._view_combo.addItems(["BGR", "HSL"])
+        self._view_combo.currentIndexChanged.connect(lambda _i: self.viewChanged.emit())
+        header.addWidget(self._view_combo)
         self._log_cb = QtWidgets.QCheckBox("Log scale")
         self._log_cb.toggled.connect(self._refresh_plot)
         header.addWidget(self._log_cb)
@@ -243,23 +277,31 @@ class HistogramPanel(QtWidgets.QWidget):
                 w.setParent(None)
                 w.deleteLater()
         self._channels = []
+        self._view_combo.setVisible(n_channels == 3)   # only colour images toggle
         for i in range(n_channels):
             color = _channel_color(names[i])
+            vmax = _ch_vmax(names[i])
             row_w = QtWidgets.QWidget()
             row = QtWidgets.QHBoxLayout(row_w)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(self._ROW_SPACING)
+            # The checkbox label IS the channel indicator (B/G/R/H/S/L), in colour.
             cb = QtWidgets.QCheckBox(names[i])
             cb.setChecked(True)
             cb.setFixedWidth(self._CB_W)
-            cb.setStyleSheet(f"color: rgb({color.red()},{color.green()},{color.blue()});")
-            slider = RangeSlider(color)
+            cb.setStyleSheet(f"color: rgb({color.red()},{color.green()},{color.blue()}); font-weight: bold;")
+            cb.setToolTip(f"{names[i]} channel (0..{vmax})")
+            slider = RangeSlider(color, vmax=vmax)
             cb.toggled.connect(self._on_changed)
             slider.rangeChanged.connect(self._on_changed)
             row.addWidget(cb)
             row.addWidget(slider)
             self._rows.addWidget(row_w)
-            self._channels.append({"name": names[i], "color": color, "cb": cb, "slider": slider})
+            self._channels.append({"name": names[i], "color": color, "vmax": vmax,
+                                   "cb": cb, "slider": slider})
+
+    def color_view(self) -> str:
+        return "hsl" if self._view_combo.currentText() == "HSL" else "bgr"
 
     def set_hists(self, hists) -> None:
         self._hists = hists
@@ -293,9 +335,9 @@ class HistogramPanel(QtWidgets.QWidget):
                     h = np.log1p(h)
                 peak = float(h.max())
                 norm = h / peak if peak > 0 else h
-                curves.append((ch["color"], norm))
+                curves.append((ch["color"], norm, ch["vmax"]))
                 lo, hi = ch["slider"].values()
-                markers.append((ch["color"], lo, hi))
+                markers.append((ch["color"], lo, hi, ch["vmax"], ch["name"]))
         self._plot.set_data(curves, markers)
 
 
@@ -603,7 +645,9 @@ class InspectorPane(QtWidgets.QWidget):
         layout.addWidget(splitter, 1)
 
         self._node = None
-        self._disp = None       # uint8 display image (unfiltered)
+        self._disp = None       # uint8 display image (unfiltered, native channels)
+        self._chan_img = None   # the BGR/HSL view the histogram + filter operate on
+        self._vmaxes = []       # per-channel raw value max (Hue -> 179)
         self._channels = 0
         self._names = []
         self._frozen = False
@@ -613,6 +657,7 @@ class InspectorPane(QtWidgets.QWidget):
         self._image.pixelClicked.connect(self._on_click)
         self._image.pixelReleased.connect(self._on_release)
         self._hist.rangesChanged.connect(self._apply_filter)
+        self._hist.viewChanged.connect(lambda: self._recompute(reset=True))
 
     # --- public API --------------------------------------------------------
     def set_node(self, node) -> None:
@@ -693,40 +738,72 @@ class InspectorPane(QtWidgets.QWidget):
         disp = to_uint8(raw)
         self._disp = disp
         channels = 1 if disp.ndim == 2 else disp.shape[2]
-        self._names = channel_names(self._node, channels)
+        self._names = channel_names(self._node, channels)   # native — for the pixel readout
         h, w = disp.shape[:2]
         self._meta.setText(f"{w}×{h}   {self._type_text(self._node, channels)}   {channels} ch")
 
-        if reset or channels != self._channels:
-            self._hist.configure(channels, self._names)
-            self._channels = channels
+        # The histogram + filter operate on the chosen BGR/HSL view of the image.
+        self._chan_img, view_names, self._vmaxes = self._channel_view(disp, channels)
+        nch = len(view_names)
+        if reset or nch != self._channels:
+            self._hist.configure(nch, view_names)
+            self._channels = nch
         if reset:
             self._neigh.reset_center()
-        self._hist.set_hists(self._compute_hists(disp, channels))
+        self._hist.set_hists(self._compute_hists(self._chan_img, self._vmaxes))
         self._apply_filter()   # updates both the image and the neighbourhood
 
-    @staticmethod
-    def _compute_hists(disp, channels):
+    def _native_space(self) -> str:
+        return (getattr(getattr(self._node, "gnode", None), "color_space", "") or "").lower()
+
+    def _to_bgr(self, disp):
+        sp = self._native_space()
+        try:
+            if sp == "hls":
+                return cv2.cvtColor(disp, cv2.COLOR_HLS2BGR)
+            if sp == "hsv":
+                return cv2.cvtColor(disp, cv2.COLOR_HSV2BGR)
+            if sp == "lab":
+                return cv2.cvtColor(disp, cv2.COLOR_Lab2BGR)
+        except cv2.error:
+            pass
+        return disp   # already BGR / unknown 3-channel
+
+    def _channel_view(self, disp, channels):
+        """(chan_img, names, vmaxes) the histogram + filter use, per the BGR/HSL
+        toggle. Grayscale ignores the toggle."""
         if channels == 1:
-            return [cv2.calcHist([disp], [0], None, [256], [0, 256]).flatten()]
-        return [cv2.calcHist([disp], [c], None, [256], [0, 256]).flatten()
-                for c in range(channels)]
+            return disp, ["Gray"], [255]
+        bgr = self._to_bgr(disp)
+        if self._hist.color_view() == "hsl":
+            hls = cv2.cvtColor(bgr, cv2.COLOR_BGR2HLS)   # OpenCV order: H, L, S
+            names = ["H", "L", "S"]
+            return hls, names, [_ch_vmax(n) for n in names]
+        names = ["B", "G", "R"]
+        return bgr, names, [_ch_vmax(n) for n in names]
+
+    @staticmethod
+    def _compute_hists(img, vmaxes):
+        n = 1 if img.ndim == 2 else img.shape[2]
+        return [cv2.calcHist([img], [c], None, [vmaxes[c] + 1], [0, vmaxes[c] + 1]).flatten()
+                for c in range(n)]
 
     def _filtered_image(self):
-        """The display image with the histogram ranges masked out (pixels outside
-        any active range set to black). Returns None if no node/image."""
-        if self._disp is None:
+        """The (native) display image with the histogram ranges masked out — pixels
+        whose chosen-view channels fall outside an active range are set to black."""
+        if self._disp is None or self._chan_img is None:
             return None
-        disp = self._disp
-        mask = np.ones(disp.shape[:2], dtype=bool)
+        chan = self._chan_img
+        mask = np.ones(self._disp.shape[:2], dtype=bool)
         for i, (enabled, lo, hi) in enumerate(self._hist.ranges()):
-            if not enabled or (lo <= 0 and hi >= 255):
+            vm = self._vmaxes[i] if i < len(self._vmaxes) else 255
+            if not enabled or (lo <= 0 and hi >= vm):
                 continue
-            ch = disp if disp.ndim == 2 else disp[:, :, i]
+            ch = chan if chan.ndim == 2 else chan[:, :, i]
             mask &= (ch >= lo) & (ch <= hi)
         if mask.all():
-            return disp
-        out = disp.copy()
+            return self._disp
+        out = self._disp.copy()
         out[~mask] = 0
         return out
 
