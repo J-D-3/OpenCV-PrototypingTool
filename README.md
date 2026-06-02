@@ -111,7 +111,7 @@ This is a **working prototype** being revived. The environment is now set up
 - [x] **Phase 6 — op library + the three example workflows.**
   - color-quantization chain **To HSL → K-Means Cluster → Reduce Colors**
     (`CLUSTERS` payload; swatch preview + `clusters: k` summary);
-  - segmentation chain **Shrink → Blur → Adaptive Threshold → Find Contours →
+  - segmentation chain **Resize → Blur → Adaptive Threshold → Find Contours →
     Filter Contours** (`CONTOURS` payload; Find/Filter draw the contours via
     `cv2.drawContours` for their preview and report the contour count);
   - Fourier chain **DFT → Inverse DFT** (`SPECTRUM` payload; DFT shows the
@@ -176,7 +176,7 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
   **Phase 6 (in progress):** added color-space conversions, K-Means Cluster
   (non-image clusters payload), and Reduce Colors — the first chain to flow
   non-image data and use the `render_preview`/`summary` hooks; then the
-  segmentation chain Shrink (Geometry) + Find/Filter Contours (Contours
+  segmentation chain Resize (Geometry) + Find/Filter Contours (Contours
   category), with contour previews drawn via `cv2.drawContours`; then the
   Fourier chain DFT / Inverse DFT (`SPECTRUM` payload, magnitude-spectrum
   preview, round-trip verified). Added Gaussian Blur, Morphology, Canny, Sobel,

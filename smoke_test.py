@@ -365,11 +365,11 @@ def check_color_chain(app) -> None:
 
 
 def check_segmentation_chain(app) -> None:
-    # Shrink > Blur > Adaptive Threshold > Find Contours > Filter Contours.
+    # Resize > Blur > Adaptive Threshold > Find Contours > Filter Contours.
     w = make_window(app)
     src = add_image(w, gradient_bgr())
     chain = [add_func(w, n) for n in
-             ("Shrink", "Blur", "Adaptive Threshold", "Find Contours", "Filter Contours")]
+             ("Resize", "Blur", "Adaptive Threshold", "Find Contours", "Filter Contours")]
     prev = src
     for node in chain:
         connect(w, prev, node)
@@ -385,7 +385,7 @@ def check_segmentation_chain(app) -> None:
     assert isinstance(flt_out, dict) and len(flt_out["contours"]) <= len(fc_out["contours"])
     assert "kept" in filt.get_summary()
     w.close()
-    print("OK  Shrink > Blur > Adaptive Threshold > Find Contours > Filter chain runs")
+    print("OK  Resize > Blur > Adaptive Threshold > Find Contours > Filter chain runs")
 
 
 def check_fourier_chain(app) -> None:

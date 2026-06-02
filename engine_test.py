@@ -290,6 +290,17 @@ def test_create_batch():
     print("OK  create_batch: variadic inputs -> one homogeneous BGR batch")
 
 
+def test_resize():
+    m = GraphModel()
+    s = _src(m, np.zeros((20, 30, 3), np.uint8))
+    r = _op(m, "resize", scale=2.0)
+    m.add_edge(s, r)
+    Engine(m).evaluate_all()
+    assert r.output is not None and r.output.shape[:2] == (40, 60), "resize should scale up"
+    assert "interpolation" in REGISTRY["resize"].defaults(), "resize exposes interpolation mode"
+    print("OK  resize: scale (up/down) + interpolation mode")
+
+
 def test_cycle_prevention():
     m = GraphModel()
     a = _op(m, "blur")
@@ -314,8 +325,9 @@ def main():
     test_conversions()
     test_batched()
     test_create_batch()
+    test_resize()
     test_cycle_prevention()
-    print("\nENGINE OK: 14 backend tests passed")
+    print("\nENGINE OK: 15 backend tests passed")
 
 
 if __name__ == "__main__":

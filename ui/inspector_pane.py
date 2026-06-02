@@ -22,6 +22,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.batch import Batch
 from ui.image_utils import cv_to_qimage, to_uint8
+from ui.widgets import LineSplitter
 
 
 # ---------------------------------------------------------------------------
@@ -573,10 +574,8 @@ class InspectorPane(QtWidgets.QWidget):
         self._meta.setStyleSheet("color: #666;")
         layout.addWidget(self._meta)
 
-        # Three views, ~1/3 each, with visible drag handles between them.
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
-        splitter.setHandleWidth(1)
-        splitter.setStyleSheet("QSplitter::handle { background: #888888; }")
+        # Three views, ~1/3 each, with a thin 1px handle (wide grab area) between.
+        splitter = LineSplitter(QtCore.Qt.Orientation.Vertical)
         self._image = ImagePanel()
         self._neigh = NeighborhoodPanel()
         self._hist = HistogramPanel()

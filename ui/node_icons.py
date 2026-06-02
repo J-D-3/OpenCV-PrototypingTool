@@ -13,7 +13,7 @@ ICON_BY_OP = {
     "to_grayscale": "convert",
     "to_bgr": "convert",
     "to_hls": "convert",
-    "shrink": "resize",
+    "resize": "resize",
     "blur": "blur",
     "gaussian_blur": "blur",
     "threshold": "threshold",

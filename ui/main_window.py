@@ -13,6 +13,8 @@ from ui.canvas import ImageDropWidget, DEFAULT_ICON_SIZE
 from ui.viewer import ImageViewerWindow
 from ui.parameters import ParameterPanel
 from ui.inspector_pane import InspectorPane
+from ui.widgets import LineSplitter
+
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, initial_image_bgr: Optional[any], window_title: str):
@@ -20,7 +22,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(window_title)
         self.resize(1500, 1000)
 
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        splitter = LineSplitter(QtCore.Qt.Orientation.Horizontal)
 
         # Sidebar
         sidebar = QtWidgets.QWidget()

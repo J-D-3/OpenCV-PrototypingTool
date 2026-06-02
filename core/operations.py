@@ -342,16 +342,15 @@ def _compute_reduce_colors(inputs, p):
         return None
 
 
-def _compute_shrink(inputs, p):
+def _compute_resize(inputs, p):
     try:
         img = inputs[0]
         scale = float(p["scale"])
         if scale <= 0 or scale == 1.0:
             return img
-        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
-        return cv2.resize(img, None, fx=scale, fy=scale, interpolation=interp)
+        return cv2.resize(img, None, fx=scale, fy=scale, interpolation=int(p["interpolation"]))
     except Exception as e:
-        print(f"Error executing shrink: {e}")
+        print(f"Error executing resize: {e}")
         return None
 
 
@@ -622,6 +621,13 @@ _RETR_MODES = [
     ("Tree", cv2.RETR_TREE),
     ("Connected (CComp)", cv2.RETR_CCOMP),
 ]
+_INTERP_MODES = [
+    ("Area (shrink)", cv2.INTER_AREA),
+    ("Linear", cv2.INTER_LINEAR),
+    ("Cubic", cv2.INTER_CUBIC),
+    ("Nearest", cv2.INTER_NEAREST),
+    ("Lanczos4", cv2.INTER_LANCZOS4),
+]
 _MORPH_OPS = [
     ("Erode", cv2.MORPH_ERODE),
     ("Dilate", cv2.MORPH_DILATE),
@@ -823,11 +829,14 @@ OPS: list = [
     ),
     # --- Geometry ----------------------------------------------------------
     Operation(
-        id="shrink", label="Shrink", category="Geometry",
+        id="resize", label="Resize", category="Geometry",
         inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE)],
-        params=[ParamSpec("scale", 0.5, kind="float", min=0.1, max=1.0, step=0.05,
-                          label="Scale")],
-        compute=_compute_shrink, color=(63, 81, 181),
+        params=[
+            ParamSpec("scale", 0.5, kind="float", min=0.1, max=4.0, step=0.05, label="Scale"),
+            ParamSpec("interpolation", cv2.INTER_AREA, kind="enum",
+                      choices=_INTERP_MODES, label="Interpolation"),
+        ],
+        compute=_compute_resize, color=(63, 81, 181), out_space="passthrough",
         in_label="Mat (any)", out_label="Mat (any)",
     ),
     # --- Contours ----------------------------------------------------------
