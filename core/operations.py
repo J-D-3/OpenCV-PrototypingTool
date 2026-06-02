@@ -754,6 +754,87 @@ def _compute_connected_components(inputs, p):
         return None
 
 
+# --- segmentation pipeline: colour mask -> largest contour -> deskew & crop ---
+_COLOR_SELECT = [("Outside (foreground)", "outside"), ("Inside (matches colour)", "inside")]
+
+
+def _compute_color_mask(inputs, p, in_space="bgr"):
+    """Binary mask from a target colour +/- delta (cv2.inRange). 'outside' keeps
+    pixels NOT near the colour (the foreground); 'inside' keeps the match."""
+    try:
+        img = _as_bgr(inputs[0], in_space)
+        b, g, r, d = int(p["blue"]), int(p["green"]), int(p["red"]), int(p["delta"])
+        lo = np.array([max(0, b - d), max(0, g - d), max(0, r - d)], np.uint8)
+        hi = np.array([min(255, b + d), min(255, g + d), min(255, r + d)], np.uint8)
+        mask = cv2.inRange(img, lo, hi)            # 255 where within delta of colour
+        if p.get("select", "outside") == "outside":
+            mask = cv2.bitwise_not(mask)
+        return mask
+    except Exception as e:
+        print(f"Error executing color_mask: {e}")
+        return None
+
+
+def _compute_largest_contour(inputs, p):
+    """Keep only the N largest contours (by area) from a CONTOURS payload."""
+    try:
+        payload = inputs[0]
+        if not isinstance(payload, dict):
+            return None
+        contours = payload.get("contours", [])
+        ids = payload.get("ids", list(range(len(contours))))
+        depths = payload.get("depths", [0] * len(contours))
+        k = max(1, int(p.get("count", 1)))
+        top = sorted(range(len(contours)), key=lambda i: cv2.contourArea(contours[i]),
+                     reverse=True)[:k]
+        keep = sorted(top)                          # stable display order + colours
+        out = dict(payload)
+        out["contours"] = [contours[i] for i in keep]
+        out["ids"] = [ids[i] for i in keep]
+        out["depths"] = [depths[i] for i in keep]
+        out["_total"] = len(contours)
+        return out
+    except Exception as e:
+        print(f"Error executing largest_contour: {e}")
+        return None
+
+
+def _compute_crop_to_contour(inputs, p, in_space="bgr"):
+    """Deskew + crop the image to the largest contour's min-area rectangle, with a
+    border and optional output scale. Inputs: (image, CONTOURS)."""
+    try:
+        img = _as_bgr(inputs[0], in_space)
+        payload = inputs[1]
+        if not isinstance(payload, dict) or not payload.get("contours"):
+            return None
+        cnt = max(payload["contours"], key=cv2.contourArea)
+        rect = cv2.minAreaRect(cnt)                 # ((cx,cy),(w,h),angle)
+        (cx, cy), _, angle = rect
+        h, w = img.shape[:2]
+        M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+        rot = cv2.warpAffine(img, M, (w, h))
+        # Rotate the rect corners by the same M and take their bbox — robust to
+        # OpenCV's angle/size convention.
+        box = cv2.boxPoints(rect)
+        rb = (M @ np.hstack([box, np.ones((4, 1), np.float32)]).T).T
+        border = int(p.get("border", 8))
+        x0 = max(0, int(np.floor(rb[:, 0].min())) - border)
+        y0 = max(0, int(np.floor(rb[:, 1].min())) - border)
+        x1 = min(w, int(np.ceil(rb[:, 0].max())) + border)
+        y1 = min(h, int(np.ceil(rb[:, 1].max())) + border)
+        crop = rot[y0:y1, x0:x1]
+        if crop.size == 0:
+            return None
+        scale = float(p.get("scale", 1.0))
+        if scale != 1.0:
+            interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=interp)
+        return crop
+    except Exception as e:
+        print(f"Error executing crop_to_contour: {e}")
+        return None
+
+
 def _compute_dft(inputs, p):
     """Forward DFT of a grayscale image. Output is a SPECTRUM payload holding the
     full complex transform so the inverse DFT can reconstruct the image."""
@@ -1137,6 +1218,22 @@ OPS: list = [
         in_label="Mat (Gray)", out_label="Mat (Binary)",
     ),
     Operation(
+        id="color_mask", label="Color Mask", category="Thresholding",
+        inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE)],
+        params=[
+            ParamSpec("blue", 255, kind="int", min=0, max=255, label="Blue"),
+            ParamSpec("green", 255, kind="int", min=0, max=255, label="Green"),
+            ParamSpec("red", 255, kind="int", min=0, max=255, label="Red"),
+            ParamSpec("delta", 30, kind="int", min=0, max=255, label="Delta"),
+            ParamSpec("select", "outside", kind="enum", choices=_COLOR_SELECT, label="Keep"),
+        ],
+        compute=_compute_color_mask, color=(120, 144, 156), out_space="binary",
+        space_aware=True, in_label="Mat (any)", out_label="Mat (Binary)",
+        description="Binary mask from a background colour +/- delta (cv2.inRange). "
+                    "'Outside' keeps the foreground (pixels not near the colour) — "
+                    "drop a background to 0 ahead of Find Contours.",
+    ),
+    Operation(
         id="gaussian_blur", label="Gaussian Blur", category="Filtering & Morphology",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[
@@ -1396,6 +1493,29 @@ OPS: list = [
         compute=_compute_filter_contours, color=(233, 30, 99),
         in_label="Contours", out_label="Contours",
         render_preview=_render_filter_contours, summary=_summary_filter_contours,
+    ),
+    Operation(
+        id="largest_contour", label="Largest Contour", category="Regions & Contours",
+        inputs=[Port("in", datatypes.CONTOURS)],
+        outputs=[Port("out", datatypes.CONTOURS)],
+        params=[ParamSpec("count", 1, kind="int", min=1, max=20, label="Keep N largest")],
+        compute=_compute_largest_contour, color=(233, 30, 99),
+        in_label="Contours", out_label="Contours",
+        render_preview=_render_filter_contours, summary=_summary_filter_contours,
+        description="Keep only the N largest contours by area (default 1).",
+    ),
+    Operation(
+        id="crop_to_contour", label="Deskew & Crop", category="Regions & Contours",
+        inputs=[Port("image", datatypes.IMAGE), Port("contours", datatypes.CONTOURS)],
+        outputs=[Port("out", datatypes.IMAGE)],
+        params=[
+            ParamSpec("border", 8, kind="int", min=0, max=200, label="Border (px)"),
+            ParamSpec("scale", 1.0, kind="float", min=0.1, max=4.0, step=0.05, label="Scale"),
+        ],
+        compute=_compute_crop_to_contour, color=(63, 81, 181), out_space="bgr",
+        space_aware=True, in_label="Mat + Contours", out_label="Mat (crop)",
+        description="Rotate the image so the largest contour's min-area box is "
+                    "upright, then crop to it with a border and optional scale.",
     ),
     # --- Fourier -----------------------------------------------------------
     Operation(

@@ -218,6 +218,29 @@ def _emit_save_to_file(o, i, p):
     return [f"cv::imwrite(path, {i[0]})"]
 
 
+def _emit_color_mask(o, i, p):
+    return [
+        f"# binary mask of pixels within +/-{p.get('delta')} of "
+        f"BGR=({p.get('blue')},{p.get('green')},{p.get('red')}):",
+        f"{o} = cv::inRange(cv::cvtColor({i[0]} -> BGR), colour-delta, colour+delta)",
+        f"# 'outside' (foreground) inverts: {o} = cv::bitwise_not({o})",
+    ]
+
+
+def _emit_largest_contour(o, i, p):
+    return [f"{o} = top {p.get('count')} of {i[0]} by cv::contourArea (descending)"]
+
+
+def _emit_crop_to_contour(o, i, p):
+    return [
+        f"cnt = max({i[1]} by cv::contourArea)",
+        f"rect = cv::minAreaRect(cnt); box = cv::boxPoints(rect)",
+        f"M = cv::getRotationMatrix2D(rect.center, rect.angle, 1.0)",
+        f"rot = cv::warpAffine(cv::cvtColor({i[0]} -> BGR), M, size)",
+        f"{o} = crop(rot, bbox(M*box) + border={p.get('border')})   # + cv::resize if scale != 1",
+    ]
+
+
 _CODE.update({
     "kmeans": _emit_kmeans,
     "auto_cluster": _emit_auto_cluster,
@@ -230,6 +253,9 @@ _CODE.update({
     "histogram": _emit_histogram,
     "create_batch": _emit_create_batch,
     "save_to_file": _emit_save_to_file,
+    "color_mask": _emit_color_mask,
+    "largest_contour": _emit_largest_contour,
+    "crop_to_contour": _emit_crop_to_contour,
     "contour_filter": _emit_contour_filter,
     "find_contours": _emit_find_contours,
 })

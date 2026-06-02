@@ -245,6 +245,30 @@ def test_connected_components():
     print("OK  connected_components: binary blobs; delta=0 label_regions agrees")
 
 
+def test_segmentation_nodes():
+    # White background, one rotated dark rectangle = the "object".
+    img = np.full((120, 160, 3), 255, np.uint8)
+    box = cv2.boxPoints(((80, 60), (90, 40), 20))
+    cv2.fillPoly(img, [box.astype(np.int32)], (30, 30, 30))
+    m = GraphModel(); s = _src(m, img)
+    mask = _op(m, "color_mask", blue=255, green=255, red=255, delta=30, select="outside")
+    fc = _op(m, "find_contours", mode=cv2.RETR_EXTERNAL)
+    lc = _op(m, "largest_contour", count=1)
+    crop = _op(m, "crop_to_contour", border=4)
+    m.add_edge(s, mask); m.add_edge(mask, fc); m.add_edge(fc, lc)
+    m.add_edge(s, crop, 0)            # image  -> crop port 0
+    m.add_edge(lc, crop, 1)          # contour -> crop port 1
+    Engine(m).evaluate_all()
+
+    assert set(np.unique(mask.output).tolist()) <= {0, 255}, "color mask must be binary"
+    assert mask.output[0, 0] == 0, "white background -> 0 with select=outside"
+    assert len(lc.output["contours"]) == 1, "largest keeps exactly one contour"
+    c = crop.output
+    assert isinstance(c, np.ndarray) and c.ndim == 3 and c.size > 0, "crop produced an image"
+    assert c.shape[0] < img.shape[0] and c.shape[1] < img.shape[1], "crop is just the object + border"
+    print("OK  segmentation: color mask -> contours -> largest -> deskew & crop")
+
+
 def test_codegen():
     from core import codegen
     m = GraphModel()
@@ -659,6 +683,7 @@ def main():
     test_contours()
     test_label_regions()
     test_connected_components()
+    test_segmentation_nodes()
     test_codegen()
     test_fourier_roundtrip()
     test_more_ops()
@@ -676,7 +701,7 @@ def main():
     test_comp_timing_and_traversal()
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
-    print("\nENGINE OK: 27 backend tests passed")
+    print("\nENGINE OK: 28 backend tests passed")
 
 
 if __name__ == "__main__":
