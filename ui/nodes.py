@@ -13,7 +13,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from core.operations import REGISTRY
 from core.batch import Batch
 from ui import node_icons
-from ui.image_utils import cv_to_qimage, to_uint8
+from ui.image_utils import cv_to_qimage, to_uint8, downscale_max
 
 if TYPE_CHECKING:
     from ui.arrow import ArrowItem
@@ -422,7 +422,9 @@ class ImageNode(Node):
         painter = QtGui.QPainter(thumb)
         try:
             if image is not None:
-                pix = QtGui.QPixmap.fromImage(cv_to_qimage(image))
+                # Shrink to the icon size first so a huge source never builds a
+                # full-resolution QImage just to draw a ~90px thumbnail.
+                pix = QtGui.QPixmap.fromImage(cv_to_qimage(downscale_max(image, size)))
                 scaled = pix.scaled(
                     size, size,
                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
@@ -548,10 +550,10 @@ class FunctionNode(Node):
         if image is None:
             return
 
-        qimage = cv_to_qimage(image)
-        pix = QtGui.QPixmap.fromImage(qimage)
-
         size = max(1, int(self._icon_size))
+        # Shrink first: a 90px thumbnail must not build a full-res QImage.
+        qimage = cv_to_qimage(downscale_max(image, size))
+        pix = QtGui.QPixmap.fromImage(qimage)
         thumb = QtGui.QPixmap(size, size)
         thumb.fill(QtGui.QColor(255, 255, 255))
         painter = QtGui.QPainter(thumb)

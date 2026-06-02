@@ -849,6 +849,25 @@ def check_live_slider(app) -> None:
     print("OK  live slider: Filter Contours area evaluates while dragging")
 
 
+def check_large_image_render(app) -> None:
+    from ui.image_utils import downscale_max
+    big = np.zeros((3000, 4000, 3), np.uint8)
+    assert downscale_max(big, 90).shape[:2] == (68, 90) or max(downscale_max(big, 90).shape[:2]) <= 90
+    assert downscale_max(big, 5000) is big, "no-op when already within the cap"
+
+    w = make_window(app)
+    src = add_image(w, big)
+    w.inspector_pane.set_node(src)
+    app.processEvents()
+    panel = w.inspector_pane._image
+    # Coordinate mapping / pixel readout still use the FULL size...
+    assert (panel._img_w, panel._img_h) == (4000, 3000)
+    # ...but the on-screen pixmap is capped so a huge image isn't built full-res.
+    assert panel._pixmap.width() <= 2048 and panel._pixmap.height() <= 2048
+    w.close()
+    print("OK  large-image render: thumbnail/display downscaled, readout stays full-res")
+
+
 def check_canvas_zoom_scroll(app) -> None:
     w = make_window(app)
     view = w.drop_widget.view
@@ -965,6 +984,7 @@ def main() -> int:
         check_export_code,
         check_function_search,
         check_live_slider,
+        check_large_image_render,
         check_canvas_zoom_scroll,
         check_flow_highlight,
         check_background_eval,

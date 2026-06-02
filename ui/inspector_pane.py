@@ -21,7 +21,7 @@ import numpy as np
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.batch import Batch
-from ui.image_utils import cv_to_qimage, to_uint8
+from ui.image_utils import cv_to_qimage, to_uint8, downscale_max
 from ui.widgets import LineSplitter
 
 
@@ -458,8 +458,11 @@ class ImagePanel(QtWidgets.QWidget):
             self._pixmap = QtGui.QPixmap()
             self._img_w = self._img_h = 0
         else:
-            self._img_h, self._img_w = image.shape[:2]
-            self._pixmap = QtGui.QPixmap.fromImage(cv_to_qimage(image))
+            self._img_h, self._img_w = image.shape[:2]   # full size drives coords
+            # The on-screen view is only a few hundred px; cap the display pixmap
+            # so switching to a huge image doesn't build a full-res QImage. The
+            # pixel-readout (NeighborhoodPanel) and histogram still use full res.
+            self._pixmap = QtGui.QPixmap.fromImage(cv_to_qimage(downscale_max(image, 2048)))
         # Refit only when the image size changes (so a histogram-filter update,
         # which keeps the same size, preserves the user's current zoom).
         if (self._img_w, self._img_h) != prev:

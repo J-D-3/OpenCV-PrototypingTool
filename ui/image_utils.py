@@ -23,6 +23,21 @@ def to_uint8(arr: np.ndarray) -> np.ndarray:
     return a.astype(np.uint8)
 
 
+def downscale_max(image: np.ndarray, max_side: int) -> np.ndarray:
+    """Shrink an image so its longest side is <= ``max_side`` (keeps aspect; no-op
+    if already small enough). Cheap C resize, so a thumbnail never has to build a
+    full-resolution QImage from a huge source."""
+    if image is None or max_side <= 0:
+        return image
+    h, w = image.shape[:2]
+    m = max(h, w)
+    if m <= max_side:
+        return image
+    s = max_side / float(m)
+    return cv2.resize(image, (max(1, int(round(w * s))), max(1, int(round(h * s)))),
+                      interpolation=cv2.INTER_AREA)
+
+
 def cv_to_qimage(image) -> QtGui.QImage:
     """Convert an OpenCV image (any dtype / 1,3,4 channels) to a QImage.
 
