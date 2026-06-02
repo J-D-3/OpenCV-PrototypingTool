@@ -321,6 +321,32 @@ def test_rotate():
     print("OK  rotate: arbitrary angle + expand-to-fit")
 
 
+def test_normalize():
+    # Low-contrast gray (values ~100..150) -> stretch should span ~0..255.
+    row = np.linspace(100, 150, 40, dtype=np.uint8)
+    img = np.tile(row, (20, 1))
+
+    m = GraphModel()
+    s = _src(m, img)
+    n = _op(m, "normalize", mode="stretch")
+    m.add_edge(s, n)
+    Engine(m).evaluate_all()
+    assert n.output is not None
+    assert int(n.output.min()) <= 2 and int(n.output.max()) >= 253, \
+        f"stretch should expand the range, got {n.output.min()}..{n.output.max()}"
+
+    # equalize / clahe run on gray and color without error.
+    for mode in ("equalize", "clahe"):
+        for src_img in (np.tile(row, (20, 1)), cv2.cvtColor(np.tile(row, (20, 1)), cv2.COLOR_GRAY2BGR)):
+            mm = GraphModel()
+            ss = _src(mm, src_img)
+            e = _op(mm, "normalize", mode=mode)
+            mm.add_edge(ss, e)
+            Engine(mm).evaluate_all()
+            assert e.output is not None, f"normalize mode={mode} produced no output"
+    print("OK  normalize: stretch expands range; equalize/clahe run (gray + color)")
+
+
 def test_cycle_prevention():
     m = GraphModel()
     a = _op(m, "blur")
@@ -347,8 +373,9 @@ def main():
     test_create_batch()
     test_resize()
     test_rotate()
+    test_normalize()
     test_cycle_prevention()
-    print("\nENGINE OK: 16 backend tests passed")
+    print("\nENGINE OK: 17 backend tests passed")
 
 
 if __name__ == "__main__":

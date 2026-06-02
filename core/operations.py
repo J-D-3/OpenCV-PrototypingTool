@@ -542,6 +542,30 @@ def _compute_laplacian(inputs, p):
         return None
 
 
+def _compute_normalize(inputs, p):
+    """Histogram normalization. 'stretch' = min-max contrast stretch to 0..255;
+    'equalize'/'clahe' redistribute intensities (on luminance for color images,
+    so hues are preserved)."""
+    try:
+        img = inputs[0]
+        mode = p.get("mode", "stretch")
+        if mode == "stretch":
+            return cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+        work = img if img.dtype == np.uint8 else \
+            cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        apply = (cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply
+                 if mode == "clahe" else cv2.equalizeHist)
+        if work.ndim == 2:
+            return apply(work)
+        ycc = cv2.cvtColor(work, cv2.COLOR_BGR2YCrCb)
+        ycc[:, :, 0] = apply(ycc[:, :, 0])
+        return cv2.cvtColor(ycc, cv2.COLOR_YCrCb2BGR)
+    except Exception as e:
+        print(f"Error executing normalize: {e}")
+        return None
+
+
 def _compute_histogram(inputs, p):
     """Per-channel intensity histogram. Output is a HISTOGRAM payload."""
     try:
@@ -646,6 +670,11 @@ _INTERP_MODES = [
     ("Cubic", cv2.INTER_CUBIC),
     ("Nearest", cv2.INTER_NEAREST),
     ("Lanczos4", cv2.INTER_LANCZOS4),
+]
+_NORMALIZE_MODES = [
+    ("Stretch (min-max)", "stretch"),
+    ("Equalize", "equalize"),
+    ("CLAHE", "clahe"),
 ]
 _MORPH_OPS = [
     ("Erode", cv2.MORPH_ERODE),
@@ -778,6 +807,14 @@ OPS: list = [
                           label="Kernel Size")],
         compute=_compute_laplacian, color=(255, 193, 7),
         in_label="Mat (Gray)", out_label="Mat (Gray gradient)",
+    ),
+    Operation(
+        id="normalize", label="Normalize", category="Local Operations",
+        inputs=[Port("in")], outputs=[Port("out")],
+        params=[ParamSpec("mode", "stretch", kind="choice",
+                          choices=_NORMALIZE_MODES, label="Mode")],
+        compute=_compute_normalize, color=(0, 121, 107), out_space="passthrough",
+        in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
         id="mser", label="MSER", category="Local Operations",

@@ -20,6 +20,7 @@ ICON_BY_OP = {
     "threshold": "threshold",
     "adaptive_threshold": "threshold",
     "morphology": "morph",
+    "normalize": "levels",
     "canny": "edges",
     "sobel": "edges",
     "laplacian": "edges",
@@ -210,6 +211,14 @@ def _histogram(p, r, c):
         p.drawRect(QtCore.QRectF(b.left() + i * w, b.bottom() - bar_h, w * 0.7, bar_h))
 
 
+def _levels(p, r, c):
+    # A black->white tone ramp (filled triangle) = contrast normalization.
+    b = _inset(r, 0.16)
+    _pen(p, c, 1.0)
+    p.setBrush(c)
+    p.drawPolygon(QtGui.QPolygonF([b.bottomLeft(), b.bottomRight(), b.topRight()]))
+
+
 def _rotate(p, r, c):
     import math
     b = _inset(r, 0.16)
@@ -239,7 +248,7 @@ def _fourier(p, r, c):
 _DRAWERS = {
     "generic": _generic, "save": _save, "image": _image, "batch": _batch,
     "convert": _convert, "resize": _resize, "rotate": _rotate, "blur": _blur, "threshold": _threshold,
-    "morph": _morph, "edges": _edges, "contours": _contours, "cluster": _cluster,
+    "morph": _morph, "levels": _levels, "edges": _edges, "contours": _contours, "cluster": _cluster,
     "palette": _palette, "histogram": _histogram, "fourier": _fourier,
     "plus": lambda p, r, c: _glyph_text(p, r, c, "+"),
     "amp": lambda p, r, c: _glyph_text(p, r, c, "&"),
