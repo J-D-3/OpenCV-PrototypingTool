@@ -393,19 +393,36 @@ def _compute_find_contours(inputs, p):
         return None
 
 
-def _draw_contours_preview(payload, contours):
+# Cycle R, G, B, C, M, Y so adjacent contours are easy to tell apart (BGR order).
+_CONTOUR_COLORS = [
+    (0, 0, 255), (0, 255, 0), (255, 0, 0),
+    (255, 255, 0), (255, 0, 255), (0, 255, 255),
+]
+
+
+def _draw_contours_preview(payload, contours, filled=False):
     bg = payload.get("background")
     if bg is None:
         return None
     out = bg.copy()
-    cv2.drawContours(out, contours, -1, (0, 255, 0), 2)
+    if filled:
+        # Outer (largest) contours first so nested ones stay visible on top.
+        order = sorted(range(len(contours)), key=lambda i: cv2.contourArea(contours[i]),
+                       reverse=True)
+        for draw_i, idx in enumerate(order):
+            cv2.drawContours(out, contours, idx,
+                             _CONTOUR_COLORS[draw_i % len(_CONTOUR_COLORS)], cv2.FILLED)
+    else:
+        for i, cnt in enumerate(contours):
+            cv2.drawContours(out, [cnt], -1, _CONTOUR_COLORS[i % len(_CONTOUR_COLORS)], 1)
     return out
 
 
 def _render_find_contours(inputs, output, p):
     if not isinstance(output, dict):
         return None
-    return _draw_contours_preview(output, output.get("contours", []))
+    return _draw_contours_preview(output, output.get("contours", []),
+                                  filled=bool(p.get("filled", False)))
 
 
 def _summary_find_contours(output, p):
@@ -434,7 +451,8 @@ def _compute_filter_contours(inputs, p):
 def _render_filter_contours(inputs, output, p):
     if not isinstance(output, dict):
         return None
-    return _draw_contours_preview(output, output.get("contours", []))
+    return _draw_contours_preview(output, output.get("contours", []),
+                                  filled=bool(p.get("filled", False)))
 
 
 def _summary_filter_contours(output, p):
@@ -910,8 +928,11 @@ OPS: list = [
         id="find_contours", label="Find Contours", category="Contours",
         inputs=[Port("in", datatypes.IMAGE)],
         outputs=[Port("out", datatypes.CONTOURS)],
-        params=[ParamSpec("mode", cv2.RETR_EXTERNAL, kind="enum",
-                          choices=_RETR_MODES, label="Retrieval Mode")],
+        params=[
+            ParamSpec("mode", cv2.RETR_EXTERNAL, kind="enum",
+                      choices=_RETR_MODES, label="Retrieval Mode"),
+            ParamSpec("filled", False, kind="bool", label="Draw filled"),
+        ],
         compute=_compute_find_contours, color=(233, 30, 99),
         in_label="Mat (Binary)", out_label="Contours",
         render_preview=_render_find_contours, summary=_summary_find_contours,
@@ -923,6 +944,7 @@ OPS: list = [
         params=[
             ParamSpec("min_area", 50, kind="int", min=0, max=20000, label="Min Area"),
             ParamSpec("max_area", 100000, kind="int", min=0, max=1000000, label="Max Area"),
+            ParamSpec("filled", False, kind="bool", label="Draw filled"),
         ],
         compute=_compute_filter_contours, color=(233, 30, 99),
         in_label="Contours", out_label="Contours",

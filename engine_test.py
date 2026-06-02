@@ -163,7 +163,12 @@ def test_contours():
     preview = REGISTRY["find_contours"].render_preview(None, fc.output, {})
     assert isinstance(preview, np.ndarray) and preview.ndim == 3, "contours preview should be a BGR image"
     assert REGISTRY["find_contours"].summary(fc.output, {})["contours"] == 2
-    print("OK  contours: find + drawContours preview + area filter")
+
+    # Filled mode draws each contour in an alternating colour (R, G, ...).
+    filled = REGISTRY["find_contours"].render_preview(None, fc.output, {"filled": True})
+    assert np.any(np.all(filled == (0, 0, 255), axis=2)), "first contour should be filled red"
+    assert np.any(np.all(filled == (0, 255, 0), axis=2)), "second contour should be filled green"
+    print("OK  contours: find + area filter + alternating-colour / filled preview")
 
 
 def test_fourier_roundtrip():
