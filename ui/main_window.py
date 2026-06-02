@@ -32,21 +32,31 @@ class MainWindow(QtWidgets.QMainWindow):
 
         title = QtWidgets.QLabel("Menu")
         title.setStyleSheet("font-weight: bold;")
-        open_btn = QtWidgets.QPushButton("Open ImageÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦")
-        size_label = QtWidgets.QLabel(f"Icon size: {DEFAULT_ICON_SIZE} px")
-        size_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        size_slider.setRange(24, 256)
-        size_slider.setSingleStep(1)
-        size_slider.setPageStep(4)
-        size_slider.setValue(DEFAULT_ICON_SIZE)
-        size_slider.setTickPosition(QtWidgets.QSlider.TickPosition.NoTicks)
+        sp = QtWidgets.QStyle.StandardPixmap
+
+        def _tool(icon, tip):
+            b = QtWidgets.QToolButton()
+            b.setIcon(self.style().standardIcon(icon))
+            b.setIconSize(QtCore.QSize(22, 22))
+            b.setToolTip(tip)
+            b.setAutoRaise(True)
+            return b
+
+        open_btn = _tool(sp.SP_FileIcon, "Open Image")
+        open_imgs_btn = _tool(sp.SP_DirIcon, "Open Images (batch)")
+        save_btn = _tool(sp.SP_DialogSaveButton, "Save Pipeline")
+        load_btn = _tool(sp.SP_DialogOpenButton, "Load Pipeline")
+        toolbar = QtWidgets.QHBoxLayout()
+        for _b in (open_btn, open_imgs_btn, save_btn, load_btn):
+            toolbar.addWidget(_b)
+        toolbar.addStretch()
 
         # OpenCV functions tree
         tree = QtWidgets.QTreeWidget()
         tree.setHeaderHidden(True)
         tree.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         tree.setAnimated(True)
-        tree.setMinimumHeight(300)
+        tree.setMinimumHeight(140)
 
         for cat in CATEGORY_ORDER:
             cat_item = QtWidgets.QTreeWidgetItem([cat])
@@ -70,7 +80,7 @@ class MainWindow(QtWidgets.QMainWindow):
         info_layout.addWidget(info_name)
         info_layout.addWidget(info_types)
         
-        # Parameter controls â€” auto-generated from the selected op's schema.
+        # Parameter controls Ã¢â‚¬â€ auto-generated from the selected op's schema.
         param_group = QtWidgets.QGroupBox("Parameters")
         param_layout = QtWidgets.QVBoxLayout()
         param_group.setLayout(param_layout)
@@ -78,25 +88,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.param_panel = ParameterPanel()
         param_layout.addWidget(self.param_panel)
 
-        open_imgs_btn = QtWidgets.QPushButton("Open Images... (batch)")
-        save_btn = QtWidgets.QPushButton("Save Pipeline...")
-        load_btn = QtWidgets.QPushButton("Load Pipeline...")
 
         sidebar.layout().addWidget(title)
-        sidebar.layout().addWidget(open_btn)
-        sidebar.layout().addWidget(open_imgs_btn)
-        sidebar.layout().addWidget(save_btn)
-        sidebar.layout().addWidget(load_btn)
-        sidebar.layout().addWidget(size_label)
-        sidebar.layout().addWidget(size_slider)
-        sidebar.layout().addSpacing(8)
-        sidebar.layout().addSpacing(8)
-        sidebar.layout().addWidget(tree)
-        sidebar.layout().addSpacing(8)
-        sidebar.layout().addWidget(param_group)
-        sidebar.layout().addSpacing(8)
-        sidebar.layout().addWidget(info_group)
-        sidebar.layout().addStretch(1)
+        sidebar.layout().addLayout(toolbar)
+        sidebar.layout().addWidget(tree, 2)
+
+        bottom = QtWidgets.QWidget()
+        bottom_layout = QtWidgets.QVBoxLayout(bottom)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(8)
+        bottom_layout.addWidget(param_group)
+        bottom_layout.addWidget(info_group)
+        bottom_layout.addStretch(1)
+        sidebar.layout().addWidget(bottom, 1)
 
         # Main drop/view pane
         self.drop_widget = ImageDropWidget()
@@ -133,13 +137,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.drop_widget.view.controller.signals.previewIndexChanged.connect(
             lambda _i: self.inspector_pane.refresh())
 
-        def on_size_changed(value: int) -> None:
-            self.drop_widget.icon_size = int(value)
-            size_label.setText(f"Icon size: {value} px")
-            self.drop_widget.view.set_thumb_size(int(value))
-            self.drop_widget.resize_all_icons(int(value))
-
-        size_slider.valueChanged.connect(on_size_changed)
 
         def on_tree_selection_changed() -> None:
             items = tree.selectedItems()
@@ -195,7 +192,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         info_name.setText("Image")
                         ch = meta.get('channels', '?')
                         info_types.setText(
-                            f"Size: {meta.get('w','?')}ÃƒÆ’Ã¢â‚¬â€{meta.get('h','?')}\n"
+                            f"Size: {meta.get('w','?')}ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â{meta.get('h','?')}\n"
                             f"Channels: {ch}\n"
                             f"Type: {meta.get('type','?')}"
                         )

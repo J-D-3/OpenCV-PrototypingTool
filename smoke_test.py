@@ -610,6 +610,20 @@ def check_node_icons_and_scroll(app) -> None:
     print("OK  node glyphs draw; immediate label; batch wheel-scroll")
 
 
+def check_icon_size_control(app) -> None:
+    w = make_window(app)
+    dw = w.drop_widget
+    assert dw.icon_size == 90, "default icon size should be 90"
+    f = add_func(w, "Blur")
+    assert f.pixmap().width() == 90
+    dw._size_slider.setValue(140)
+    app.processEvents()
+    assert dw.icon_size == 140
+    assert f.pixmap().width() == 140, "existing nodes should resize with the slider"
+    w.close()
+    print("OK  canvas icon-size control: default 90, resizes nodes")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -633,6 +647,7 @@ def main() -> int:
         check_batch,
         check_create_batch,
         check_node_icons_and_scroll,
+        check_icon_size_control,
     ]
     for chk in checks:
         chk(app)

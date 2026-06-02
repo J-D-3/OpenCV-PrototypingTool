@@ -13,7 +13,7 @@ from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode
 from ui.arrow import ArrowItem
 
 # Default node icon size (px). Owned here since the canvas manages icons.
-DEFAULT_ICON_SIZE = 180
+DEFAULT_ICON_SIZE = 90
 
 class GraphicsImageView(QtWidgets.QGraphicsView):
     fileDropped = QtCore.pyqtSignal(Path, QtCore.QPointF)
@@ -417,6 +417,20 @@ class ImageDropWidget(QtWidgets.QWidget):
         self.icon_size = DEFAULT_ICON_SIZE  # central icon size constant (px)
         self.view.set_thumb_size(self.icon_size)
 
+        # Icon-size control at the top-left of the pipeline pane.
+        controls = QtWidgets.QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        self._size_label = QtWidgets.QLabel(f"Icon size: {self.icon_size} px")
+        self._size_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._size_slider.setRange(24, 256)
+        self._size_slider.setValue(self.icon_size)
+        self._size_slider.setFixedWidth(140)
+        self._size_slider.valueChanged.connect(self._on_icon_size_changed)
+        controls.addWidget(self._size_label)
+        controls.addWidget(self._size_slider)
+        controls.addStretch()
+        self.layout().addLayout(controls)
+
         border = QtWidgets.QFrame()
         border.setFrameShape(QtWidgets.QFrame.Shape.Box)
         border.setLineWidth(1)
@@ -429,6 +443,12 @@ class ImageDropWidget(QtWidgets.QWidget):
 
         # Connect view's drop signal to add icons with snapping
         self.view.fileDropped.connect(self.on_file_dropped)
+
+    def _on_icon_size_changed(self, value: int) -> None:
+        self.icon_size = int(value)
+        self._size_label.setText(f"Icon size: {value} px")
+        self.view.set_thumb_size(self.icon_size)
+        self.resize_all_icons(self.icon_size)
 
     def add_function_node(self, label: str, scene_pos: Optional[QtCore.QPointF] = None, meta: Optional[dict] = None):
         # Look the operation up in the registry and build the right node.

@@ -558,9 +558,8 @@ class InspectorPane(QtWidgets.QWidget):
 
         # Three views, ~1/3 each, with visible drag handles between them.
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
-        splitter.setHandleWidth(7)
-        splitter.setStyleSheet(
-            "QSplitter::handle { background: #a8a8a8; margin: 2px 0; border-radius: 1px; }")
+        splitter.setHandleWidth(1)
+        splitter.setStyleSheet("QSplitter::handle { background: #888888; }")
         self._image = ImagePanel()
         self._neigh = NeighborhoodPanel()
         self._hist = HistogramPanel()
