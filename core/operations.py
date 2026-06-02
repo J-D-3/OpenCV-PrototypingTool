@@ -378,16 +378,37 @@ def _to_gray_u8(img):
     return gray if gray.dtype == np.uint8 else gray.astype(np.uint8)
 
 
+def _contour_depths(hierarchy, n):
+    """Nesting depth of each contour from the OpenCV hierarchy (col 3 = parent).
+    All zeros when there is no nesting (e.g. RETR_EXTERNAL)."""
+    if hierarchy is None or n == 0:
+        return [0] * n
+    h = hierarchy[0]
+    depths = []
+    for i in range(n):
+        d, parent, seen = 0, int(h[i][3]), set()
+        while parent != -1 and parent not in seen:
+            seen.add(parent)
+            d += 1
+            parent = int(h[parent][3])
+        depths.append(d)
+    return depths
+
+
 def _compute_find_contours(inputs, p):
     """Find contours in a (binary) image. Output is a CONTOURS payload carrying
-    the contours plus a BGR background to draw them on for inspection."""
+    the contours, a stable per-contour id, each contour's nesting depth, and a
+    BGR background to draw them on for inspection."""
     try:
         img = inputs[0]
         gray = _to_gray_u8(img)
         contours, hierarchy = cv2.findContours(gray, int(p["mode"]), cv2.CHAIN_APPROX_SIMPLE)
-        background = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        return {"contours": list(contours), "hierarchy": hierarchy,
-                "shape": img.shape, "background": background}
+        contours = list(contours)
+        return {"contours": contours, "hierarchy": hierarchy,
+                "ids": list(range(len(contours))),
+                "depths": _contour_depths(hierarchy, len(contours)),
+                "shape": img.shape,
+                "background": cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)}
     except Exception as e:
         print(f"Error executing find_contours: {e}")
         return None
@@ -400,29 +421,31 @@ _CONTOUR_COLORS = [
 ]
 
 
-def _draw_contours_preview(payload, contours, filled=False):
+def _draw_contours_preview(payload, filled=False):
     bg = payload.get("background")
     if bg is None:
         return None
+    contours = payload.get("contours", [])
+    ids = payload.get("ids", list(range(len(contours))))
+    depths = payload.get("depths", [0] * len(contours))
     out = bg.copy()
-    if filled:
-        # Outer (largest) contours first so nested ones stay visible on top.
-        order = sorted(range(len(contours)), key=lambda i: cv2.contourArea(contours[i]),
-                       reverse=True)
-        for draw_i, idx in enumerate(order):
-            cv2.drawContours(out, contours, idx,
-                             _CONTOUR_COLORS[draw_i % len(_CONTOUR_COLORS)], cv2.FILLED)
-    else:
-        for i, cnt in enumerate(contours):
-            cv2.drawContours(out, [cnt], -1, _CONTOUR_COLORS[i % len(_CONTOUR_COLORS)], 1)
+    # Draw order: outermost (smallest nesting depth) first, larger first within a
+    # depth — so filled inner contours stay visible. With no hierarchy (e.g.
+    # RETR_EXTERNAL, all depths 0) this is just largest-first.
+    order = sorted(range(len(contours)),
+                   key=lambda i: (depths[i], -cv2.contourArea(contours[i])))
+    thickness = cv2.FILLED if filled else 1
+    for i in order:
+        # Colour is bound to the *stable id*, not the draw order, so a contour
+        # keeps its colour as others are filtered in/out.
+        cv2.drawContours(out, contours, i, _CONTOUR_COLORS[ids[i] % len(_CONTOUR_COLORS)], thickness)
     return out
 
 
 def _render_find_contours(inputs, output, p):
     if not isinstance(output, dict):
         return None
-    return _draw_contours_preview(output, output.get("contours", []),
-                                  filled=bool(p.get("filled", False)))
+    return _draw_contours_preview(output, filled=bool(p.get("filled", False)))
 
 
 def _summary_find_contours(output, p):
@@ -432,16 +455,22 @@ def _summary_find_contours(output, p):
 
 
 def _compute_filter_contours(inputs, p):
-    """Keep only contours whose area is within [min_area, max_area]."""
+    """Keep only contours whose area is within [min_area, max_area], preserving
+    each survivor's stable id and depth so colours stay put across filtering."""
     try:
         payload = inputs[0]
         if not isinstance(payload, dict):
             return None
+        contours = payload.get("contours", [])
+        ids = payload.get("ids", list(range(len(contours))))
+        depths = payload.get("depths", [0] * len(contours))
         lo, hi = float(p["min_area"]), float(p["max_area"])
-        kept = [c for c in payload.get("contours", []) if lo <= cv2.contourArea(c) <= hi]
+        keep = [i for i, c in enumerate(contours) if lo <= cv2.contourArea(c) <= hi]
         out = dict(payload)
-        out["contours"] = kept
-        out["_total"] = len(payload.get("contours", []))
+        out["contours"] = [contours[i] for i in keep]
+        out["ids"] = [ids[i] for i in keep]
+        out["depths"] = [depths[i] for i in keep]
+        out["_total"] = len(contours)
         return out
     except Exception as e:
         print(f"Error executing contour_filter: {e}")
@@ -451,8 +480,7 @@ def _compute_filter_contours(inputs, p):
 def _render_filter_contours(inputs, output, p):
     if not isinstance(output, dict):
         return None
-    return _draw_contours_preview(output, output.get("contours", []),
-                                  filled=bool(p.get("filled", False)))
+    return _draw_contours_preview(output, filled=bool(p.get("filled", False)))
 
 
 def _summary_filter_contours(output, p):

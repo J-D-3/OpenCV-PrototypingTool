@@ -164,11 +164,23 @@ def test_contours():
     assert isinstance(preview, np.ndarray) and preview.ndim == 3, "contours preview should be a BGR image"
     assert REGISTRY["find_contours"].summary(fc.output, {})["contours"] == 2
 
-    # Filled mode draws each contour in an alternating colour (R, G, ...).
+    # Filled mode draws each contour in an alternating colour (ids 0,1 -> R,G).
+    colors = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
     filled = REGISTRY["find_contours"].render_preview(None, fc.output, {"filled": True})
-    assert np.any(np.all(filled == (0, 0, 255), axis=2)), "first contour should be filled red"
-    assert np.any(np.all(filled == (0, 255, 0), axis=2)), "second contour should be filled green"
-    print("OK  contours: find + area filter + alternating-colour / filled preview")
+    assert np.any(np.all(filled == (0, 0, 255), axis=2)), "id 0 should be filled red"
+    assert np.any(np.all(filled == (0, 255, 0), axis=2)), "id 1 should be filled green"
+
+    # Colour binds to the stable contour id: filtering one out must not recolour
+    # the survivor.
+    flt_filled = REGISTRY["contour_filter"].render_preview(None, flt.output, {"filled": True})
+    kept_ids = flt.output["ids"]
+    assert len(kept_ids) == 1
+    assert np.any(np.all(flt_filled == colors[kept_ids[0] % 6], axis=2)), "kept contour keeps its colour"
+    dropped_id = next(i for i in fc.output["ids"] if i not in kept_ids)
+    if dropped_id % 6 != kept_ids[0] % 6:
+        assert not np.any(np.all(flt_filled == colors[dropped_id % 6], axis=2)), \
+            "the filtered-out contour's colour is gone (no recolouring)"
+    print("OK  contours: stable id colours + depth/size draw order; filled preview")
 
 
 def test_fourier_roundtrip():
