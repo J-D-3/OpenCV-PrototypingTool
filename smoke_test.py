@@ -806,6 +806,12 @@ def check_function_search(app) -> None:
     vis = visible_ops()
     assert "Find Contours" in vis and "Filter Contours" in vis
 
+    # An op is findable by a cv:: call it makes *internally* on any code path:
+    # Flood Fill uses cv::connectedComponents in its delta==0 branch.
+    search.setText("connectedcomponents")
+    vis = visible_ops()
+    assert "Flood Fill" in vis and "Connected Components" in vis, vis
+
     search.setText("zzz_nomatch")
     assert visible_ops() == []
 

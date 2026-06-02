@@ -1333,7 +1333,7 @@ OPS: list = [
         render_preview=_render_find_contours, summary=_summary_find_contours,
     ),
     Operation(
-        id="label_regions", label="Label Regions", category="Contours",
+        id="label_regions", label="Flood Fill", category="Contours",
         inputs=[Port("in", datatypes.IMAGE)],
         outputs=[Port("out", datatypes.CONTOURS)],
         params=[

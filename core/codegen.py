@@ -150,15 +150,18 @@ def _emit_reduce_colors(o, i, p):
 
 def _emit_label_regions(o, i, p):
     chan = p.get("channel")
-    head = (f"# group connected near-uniform regions on channel={chan!r}, "
-            f"delta={p.get('delta')}, {p.get('connectivity')}-connectivity")
-    if p.get("delta", 0) == 0:
-        body = [f"#   delta==0: connectedComponents per unique value (exact)",
-                f"labels = exact_label({i[0]}, connectivity={p.get('connectivity')})"]
-    else:
-        body = [f"#   delta>0: cv::floodFill region-grow (FIXED_RANGE) per seed",
-                f"labels = floodfill_label({i[0]}, delta={p.get('delta')}, connectivity={p.get('connectivity')})"]
-    return [head] + body + [f"{o} = [outer contour of (labels == k) for each region k]"]
+    exact = p.get("delta", 0) == 0
+    # Mention both code paths' cv:: calls regardless of the current delta, so the
+    # node is searchable by either OpenCV function it can call.
+    return [
+        f"# group connected near-uniform regions (channel={chan!r}, "
+        f"delta={p.get('delta')}, {p.get('connectivity')}-connectivity):",
+        "#   delta==0 -> cv::connectedComponents per unique value (exact)",
+        "#   delta>0  -> cv::floodFill region-grow (FIXED_RANGE) per seed",
+        (f"labels = exact_label({i[0]}, connectivity={p.get('connectivity')})" if exact
+         else f"labels = floodfill_label({i[0]}, delta={p.get('delta')}, connectivity={p.get('connectivity')})"),
+        f"{o} = [outer contour of (labels == k) for each region k]",
+    ]
 
 
 def _emit_contour_filter(o, i, p):
