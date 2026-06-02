@@ -618,7 +618,11 @@ class InspectorPane(QtWidgets.QWidget):
     def set_node(self, node) -> None:
         self._node = node
         self._frozen = False
-        name = node._meta.get("name", "Node") if node is not None else "(no selection)"
+        if node is None:
+            name = "(no selection)"
+        else:
+            op = getattr(node, "op", None)
+            name = op.label if op is not None else "Image"   # display label, not op id
         self._title.setText(f"Inspector — {name}")
         self._recompute(reset=True)
 

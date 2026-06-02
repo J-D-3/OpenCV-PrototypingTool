@@ -822,9 +822,17 @@ def check_function_search(app) -> None:
     assert len(visible_ops()) == total
 
     ig = [g for g in w.findChildren(QtWidgets.QGroupBox) if g.title() == "Function info"][0]
-    assert ig.minimumHeight() == 200 and ig.maximumHeight() == 200, "info panel should be fixed 200px"
+    assert ig.minimumHeight() == 120 and ig.maximumHeight() == 120, "info panel should be fixed 120px"
+
+    # Inspector title uses the display LABEL ("Flood Fill"), not the op id.
+    ff = add_func(w, "Flood Fill")
+    w.inspector_pane.set_node(ff)
+    app.processEvents()
+    title = w.inspector_pane._title.text()
+    assert "Flood Fill" in title and "label_regions" not in title, title
+
     w.close()
-    print("OK  function search filters by name/category/cv:: call; info panel fixed 200px")
+    print("OK  function search + info panel 120px + inspector shows display label")
 
 
 def check_live_slider(app) -> None:

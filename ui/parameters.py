@@ -12,8 +12,8 @@ from PyQt6 import QtCore, QtWidgets
 
 
 class ParameterPanel(QtWidgets.QWidget):
-    LABEL_W = 96   # fixed label column so controls line up across rows
-    VALUE_W = 38   # min width for a slider's value readout (right of the slider)
+    LABEL_W = 84    # fixed label column so controls line up across rows
+    SLIDER_MIN = 72  # sliders never shrink below this (so they stay usable)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -83,8 +83,8 @@ class ParameterPanel(QtWidgets.QWidget):
     def _value_field(self, text: str) -> QtWidgets.QLineEdit:
         """An editable value field shown next to a slider (type an exact value)."""
         f = QtWidgets.QLineEdit(text)
-        f.setMinimumWidth(self.VALUE_W)
-        f.setMaximumWidth(88)
+        f.setMinimumWidth(42)    # can shrink to ~5 chars (give the slider room)
+        f.setMaximumWidth(72)    # but a log value like "1.000.000" still fits
         f.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         return f
 
@@ -98,6 +98,7 @@ class ParameterPanel(QtWidgets.QWidget):
         row = self._row(spec)
         slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         slider.setRange(pos_min, pos_max)
+        slider.setMinimumWidth(self.SLIDER_MIN)      # stays usable in a narrow panel
         slider.setValue(to_pos(value))               # set before connecting
         field = self._value_field(fmt(value))
         state = {"v": value}

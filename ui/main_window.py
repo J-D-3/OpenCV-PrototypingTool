@@ -111,7 +111,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Info box at bottom — fixed height, scrollable when the description is long.
         info_group = QtWidgets.QGroupBox("Function info")
-        info_group.setFixedHeight(200)
+        info_group.setFixedHeight(120)
         info_outer = QtWidgets.QVBoxLayout(info_group)
         info_outer.setContentsMargins(4, 4, 4, 4)
         info_scroll = QtWidgets.QScrollArea()
@@ -138,7 +138,7 @@ class MainWindow(QtWidgets.QMainWindow):
             """Fill the info panel (name, types, description) + a detailed tooltip
             (description + single-op pseudocode) for the given op id."""
             op = REGISTRY.get(op_id)
-            info_name.setText(f"{op_id}()")
+            info_name.setText(op.label if op is not None else op_id)   # display label, not id
             if op is None:
                 info_types.setText(""); info_desc.setText(""); return
             info_types.setText(f"Input: {op.in_label or '?'}\nOutput: {op.out_label or '?'}")
