@@ -882,19 +882,22 @@ def _compute_crop_to_contour(inputs, p, in_space="bgr"):
         cnt = max(payload["contours"], key=cv2.contourArea)
         rect = cv2.minAreaRect(cnt)                 # ((cx,cy),(w,h),angle)
         (cx, cy), _, angle = rect
-        h, w = img.shape[:2]
+        border = int(p.get("border", 8))
         M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
-        rot = cv2.warpAffine(img, M, (w, h))
-        # Rotate the rect corners by the same M and take their bbox — robust to
-        # OpenCV's angle/size convention.
+        # Rotated rect corners -> their bbox (robust to OpenCV's angle/size
+        # convention) sets the OUTPUT canvas size. Sizing the warp to the rect
+        # (not the source image) means a near-90deg deskew can't clip the object.
         box = cv2.boxPoints(rect)
         rb = (M @ np.hstack([box, np.ones((4, 1), np.float32)]).T).T
-        border = int(p.get("border", 8))
-        x0 = max(0, int(np.floor(rb[:, 0].min())) - border)
-        y0 = max(0, int(np.floor(rb[:, 1].min())) - border)
-        x1 = min(w, int(np.ceil(rb[:, 0].max())) + border)
-        y1 = min(h, int(np.ceil(rb[:, 1].max())) + border)
-        crop = rot[y0:y1, x0:x1]
+        xmin, ymin = float(rb[:, 0].min()), float(rb[:, 1].min())
+        ow = int(np.ceil(rb[:, 0].max() - xmin)) + 2 * border
+        oh = int(np.ceil(rb[:, 1].max() - ymin)) + 2 * border
+        if ow <= 0 or oh <= 0:
+            return None
+        # Translate so the rect's bbox lands at (border, border) in that canvas.
+        M[0, 2] += border - xmin
+        M[1, 2] += border - ymin
+        crop = cv2.warpAffine(img, M, (ow, oh))
         if crop.size == 0:
             return None
         scale = float(p.get("scale", 1.0))

@@ -314,6 +314,24 @@ def test_segmentation_nodes():
     print("OK  segmentation: color mask -> contours -> largest -> deskew & crop")
 
 
+def test_crop_no_clip_when_deskewed():
+    # A long thin rect at 45 deg: deskewing rotates it ~45 deg. The old code warped
+    # into the *source* canvas (100x100), clipping the 110-long object to ~100.
+    img = np.zeros((100, 100, 3), np.uint8)
+    box = cv2.boxPoints(((50, 50), (110, 20), 45)).astype(np.int32)
+    cv2.fillPoly(img, [box], (255, 255, 255))
+    m = GraphModel(); s = _src(m, img)
+    fc = _op(m, "find_contours", mode=cv2.RETR_EXTERNAL)
+    crop = _op(m, "crop_to_contour", border=4, scale=1.0)
+    m.add_edge(s, fc); m.add_edge(s, crop, 0); m.add_edge(fc, crop, 1)
+    Engine(m).evaluate_all()
+    c = crop.output
+    assert isinstance(c, np.ndarray)
+    assert max(c.shape[:2]) >= 110, \
+        f"deskewed crop must keep the full object (no clip), got {c.shape[:2]}"
+    print("OK  crop: deskew canvas sized to the rect (no clipping when rotated)")
+
+
 def test_codegen():
     from core import codegen
     m = GraphModel()
@@ -731,6 +749,7 @@ def main():
     test_floodfill_nesting_colors()
     test_connected_components()
     test_segmentation_nodes()
+    test_crop_no_clip_when_deskewed()
     test_codegen()
     test_fourier_roundtrip()
     test_more_ops()
@@ -748,7 +767,7 @@ def main():
     test_comp_timing_and_traversal()
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
-    print("\nENGINE OK: 30 backend tests passed")
+    print("\nENGINE OK: 31 backend tests passed")
 
 
 if __name__ == "__main__":
