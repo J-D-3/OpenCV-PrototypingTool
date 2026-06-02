@@ -9,9 +9,10 @@ This is the only place where the frontend drives the backend, so it stays thin.
 """
 from __future__ import annotations
 
+import threading
 from typing import Dict
 
-from PyQt6 import QtCore
+from PyQt6 import QtCore, QtWidgets
 
 from core.graph import GraphModel
 from core.engine import Engine
@@ -22,6 +23,7 @@ class ControllerSignals(QtCore.QObject):
     """One signal hub per canvas (cheaper than a QObject per node)."""
     nodeChanged = QtCore.pyqtSignal(object)        # the Qt node whose result changed
     previewIndexChanged = QtCore.pyqtSignal(int)   # the batch element being previewed
+    evalDone = QtCore.pyqtSignal(object, bool)     # (recomputed gnodes, commit) — bg eval
 
 
 class GraphController:
@@ -31,6 +33,13 @@ class GraphController:
         self.signals = ControllerSignals()
         self._qt_by_gid: Dict[int, object] = {}
         self.preview_index = 0   # which batch element every node currently shows
+        # Background-eval state: param changes recompute off the UI thread so the
+        # canvas stays responsive; rapid changes coalesce (latest wins).
+        self._busy = False
+        self._pending = None     # None or the commit flag of a queued re-run
+        # Queued so the slot runs on the main (GUI) thread, not the worker.
+        self.signals.evalDone.connect(
+            self._on_eval_done, QtCore.Qt.ConnectionType.QueuedConnection)
 
     # --- registration ------------------------------------------------------
     def register_source(self, qt_node, image) -> None:
@@ -65,6 +74,7 @@ class GraphController:
         if index == self.preview_index:
             return
         self.preview_index = index
+        self.engine.preview_index = index   # compute this element first next eval
         for qt in self._qt_by_gid.values():
             qt.refresh_from_model()
         self.signals.previewIndexChanged.emit(index)
@@ -152,15 +162,66 @@ class GraphController:
         gn = qt_node.gnode
         gn.params[name] = value
         self.model.mark_dirty(gn)
-        self._recompute(commit=commit)
+        self._recompute_async(commit=commit)   # off the UI thread; coalesced
 
     # --- evaluation --------------------------------------------------------
     def _recompute(self, commit: bool) -> None:
-        for gnode in self.engine.evaluate_all():
+        """Synchronous recompute for structural edits (connect/delete/load).
+        Waits for any in-flight background eval first so the two never run on the
+        engine concurrently."""
+        self.wait_idle()
+        self._apply_results(self.engine.evaluate_all(), commit)
+
+    def _apply_results(self, recomputed, commit: bool) -> None:
+        self.engine.preview_index = self.preview_index
+        for gnode in recomputed:
             qt = self._qt_by_gid.get(gnode.id)
             if qt is None:
                 continue
+            qt.set_computing(False)
             qt.refresh_from_model()
             if commit:
                 qt.on_commit()
             self.signals.nodeChanged.emit(qt)
+
+    def _recompute_async(self, commit: bool) -> None:
+        """Recompute dirty nodes on a worker thread (param changes). Marks the
+        affected nodes 'computing' (spinner) immediately; coalesces if busy."""
+        self.engine.preview_index = self.preview_index
+        for gnode in self.model.topo_order():
+            if gnode.dirty:
+                qt = self._qt_by_gid.get(gnode.id)
+                if qt is not None:
+                    qt.set_computing(True)
+        if self._busy:
+            self._pending = commit if self._pending is None else (commit or self._pending)
+            return
+        self._busy = True
+        threading.Thread(target=self._eval_worker, args=(commit,), daemon=True).start()
+
+    def _eval_worker(self, commit: bool) -> None:
+        try:
+            recomputed = self.engine.evaluate_all()
+        except Exception as e:  # noqa: BLE001 — surface, never kill the worker silently
+            print(f"background eval error: {e}")
+            recomputed = []
+        self.signals.evalDone.emit(recomputed, commit)   # -> _on_eval_done (GUI thread)
+
+    def _on_eval_done(self, recomputed, commit: bool) -> None:
+        self._apply_results(recomputed, commit)
+        self._busy = False
+        if self._pending is not None:
+            commit2, self._pending = self._pending, None
+            self._recompute_async(commit2)
+
+    def wait_idle(self) -> None:
+        """Block (pumping the event loop) until no background eval is in flight.
+        Used by synchronous callers and tests so results are observable."""
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        guard = 0
+        flag = QtCore.QEventLoop.ProcessEventsFlag.AllEvents
+        while (self._busy or self._pending is not None) and guard < 1_000_000:
+            guard += 1
+            app.processEvents(flag, 20)   # block up to 20ms for the worker's signal

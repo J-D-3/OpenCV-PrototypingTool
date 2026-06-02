@@ -579,6 +579,15 @@ class InspectorPane(QtWidgets.QWidget):
         self._meta.setStyleSheet("color: #666;")
         layout.addWidget(self._meta)
 
+        # Pseudocode view — shown only for nodes that expose get_pseudocode()
+        # (the Export Code node). Read-only and selectable so it can be copied.
+        self._code = QtWidgets.QPlainTextEdit()
+        self._code.setReadOnly(True)
+        self._code.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        self._code.setStyleSheet("font-family: Consolas, monospace; font-size: 11px;")
+        self._code.setVisible(False)
+        layout.addWidget(self._code, 1)
+
         # Three views, ~1/3 each, with a thin 1px handle (wide grab area) between.
         splitter = LineSplitter(QtCore.Qt.Orientation.Vertical)
         self._image = ImagePanel()
@@ -647,7 +656,20 @@ class InspectorPane(QtWidgets.QWidget):
             label = "Gray" if channels == 1 else "BGR"
         return label
 
+    def _update_code(self) -> None:
+        """Show the node's pseudocode (Export Code node) or hide the code view."""
+        getter = getattr(self._node, "get_pseudocode", None) if self._node is not None else None
+        if callable(getter):
+            try:
+                self._code.setPlainText(getter())
+            except Exception as e:  # noqa: BLE001
+                self._code.setPlainText(f"# {e}")
+            self._code.setVisible(True)
+        else:
+            self._code.setVisible(False)
+
     def _recompute(self, reset: bool) -> None:
+        self._update_code()
         self._update_frame_controls()
         raw = self._node.get_preview_image() if self._node is not None else None
         if not isinstance(raw, np.ndarray):

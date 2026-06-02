@@ -9,7 +9,7 @@ from core.operations import by_label
 from core import persistence
 from core.batch import Batch
 from ui.controller import GraphController
-from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode
+from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode, ExportCodeNode
 from ui.arrow import ArrowItem
 
 # Default node icon size (px). Owned here since the canvas manages icons.
@@ -473,6 +473,8 @@ class ImageDropWidget(QtWidgets.QWidget):
             return None
         if op.id == "save_to_file":
             item = SaveToFileNode(icon_size=self.icon_size, grid_size=12)
+        elif op.id == "export_code":
+            item = ExportCodeNode(icon_size=self.icon_size, grid_size=12)
         else:
             item = FunctionNode(op, icon_size=self.icon_size, grid_size=12)
 
@@ -587,9 +589,12 @@ class ImageDropWidget(QtWidgets.QWidget):
             if gn.is_source:
                 item = ImageNode(gn.source_image, icon_size=self.icon_size, grid_size=12)
             else:
-                item = (SaveToFileNode(icon_size=self.icon_size, grid_size=12)
-                        if gn.op.id == "save_to_file"
-                        else FunctionNode(gn.op, icon_size=self.icon_size, grid_size=12))
+                if gn.op.id == "save_to_file":
+                    item = SaveToFileNode(icon_size=self.icon_size, grid_size=12)
+                elif gn.op.id == "export_code":
+                    item = ExportCodeNode(icon_size=self.icon_size, grid_size=12)
+                else:
+                    item = FunctionNode(gn.op, icon_size=self.icon_size, grid_size=12)
             controller.bind(item, gn)
             self.view._scene.addItem(item)
             x, y = positions.get(gid, (0.0, 0.0))

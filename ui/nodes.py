@@ -31,6 +31,8 @@ class Node(QtWidgets.QGraphicsPixmapItem):
         self._highlighted = False
         self._result_image: Optional[np.ndarray] = None
         self._executing = False
+        self._spin_angle = 0
+        self._spin_timer: Optional[QtCore.QTimer] = None
         # Backend links (set by the GraphController when the node is registered).
         self.gnode = None
         self.controller = None
@@ -68,6 +70,26 @@ class Node(QtWidgets.QGraphicsPixmapItem):
         if self._highlighted != highlighted:
             self._highlighted = highlighted
             self.update()
+
+    def set_computing(self, computing: bool) -> None:
+        """Show/clear the 'recomputing' state (gray overlay + animated spinner).
+        Driven by the controller while a background eval is in flight."""
+        if self._executing == computing:
+            return
+        self._executing = computing
+        if computing:
+            if self._spin_timer is None:
+                self._spin_timer = QtCore.QTimer()
+                self._spin_timer.setInterval(70)
+                self._spin_timer.timeout.connect(self._advance_spinner)
+            self._spin_timer.start()
+        elif self._spin_timer is not None:
+            self._spin_timer.stop()
+        self.update()
+
+    def _advance_spinner(self) -> None:
+        self._spin_angle = (self._spin_angle + 30) % 360
+        self.update()
     
     def set_destination_highlighted(self, highlighted: bool, is_valid: bool = True) -> None:
         """Set the destination highlighted state of the node."""
@@ -93,7 +115,28 @@ class Node(QtWidgets.QGraphicsPixmapItem):
     def paint(self, painter: QtGui.QPainter, option: QtWidgets.QStyleOptionGraphicsItem, widget: Optional[QtWidgets.QWidget] = None) -> None:
         """Paint the node with optional highlighting."""
         super().paint(painter, option, widget)
-        
+
+        # "Computing" state: gray the node out and spin a small arc on top.
+        if self._executing:
+            painter.save()
+            try:
+                rect = self.boundingRect()
+                painter.setPen(QtCore.Qt.PenStyle.NoPen)
+                painter.setBrush(QtGui.QColor(220, 220, 220, 170))  # gray placeholder
+                painter.drawRect(rect)
+                pen = QtGui.QPen(QtGui.QColor(70, 70, 70))
+                pen.setWidth(3)
+                pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+                painter.setPen(pen)
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                r = min(rect.width(), rect.height()) * 0.22
+                c = rect.center()
+                arc = QtCore.QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
+                # 270° arc starting at the current spin angle (Qt uses 1/16°).
+                painter.drawArc(arc, -self._spin_angle * 16, 270 * 16)
+            finally:
+                painter.restore()
+
         # Draw source highlight (orange)
         if self._highlighted:
             painter.save()
@@ -628,3 +671,44 @@ class SaveToFileNode(FunctionNode):
                 print(f"Failed to save image to: {filepath}")
         except Exception as e:
             print(f"Error saving image: {e}")
+
+
+class ExportCodeNode(FunctionNode):
+    """Introspection node: walks the pipeline upstream from itself and produces
+    language-neutral pseudocode. The text is shown in the Inspector pane (via
+    ``get_pseudocode``) and written to ./output on a committed evaluation.
+
+    Like SaveToFileNode it is a pass-through (its backend result is the input
+    image), so it never alters the data flowing through it.
+    """
+
+    def __init__(self, icon_size: int, grid_size: int = 12):
+        super().__init__(REGISTRY["export_code"], icon_size, grid_size)
+
+    def get_pseudocode(self) -> str:
+        if self.controller is None or self.gnode is None:
+            return "# (connect an upstream pipeline to generate code)"
+        from core.codegen import generate_pseudocode
+        try:
+            return generate_pseudocode(self.controller.model, self.gnode)
+        except Exception as e:  # noqa: BLE001 — surface, don't crash the UI
+            return f"# codegen error: {e}"
+
+    def on_commit(self) -> None:
+        self._write_code(self.get_pseudocode())
+
+    def _write_code(self, code: str) -> None:
+        import os
+        import time
+        try:
+            output_dir = "./output"
+            os.makedirs(output_dir, exist_ok=True)
+            if not hasattr(self, "_node_index"):
+                self._node_index = id(self) % 10000
+            # One stable file per node per session (overwritten), like SaveToFile.
+            path = os.path.join(output_dir, f"pipeline_{self._node_index}.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(code)
+            print(f"Pipeline pseudocode written to: {path}")
+        except Exception as e:  # noqa: BLE001
+            print(f"Error writing pseudocode: {e}")

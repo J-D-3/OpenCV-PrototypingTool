@@ -113,13 +113,13 @@ def check_param_propagation(app) -> None:
     app.processEvents()
 
     thresh.set_parameter("threshold_value", 50, preview_mode=False)
-    app.processEvents()
+    thresh.controller.wait_idle()   # param eval runs on a background thread
     blur_low = blur.get_output_image()
     assert blur_low is not None, "no downstream output after first param set"
     blur_low = blur_low.copy()
 
     thresh.set_parameter("threshold_value", 200, preview_mode=False)
-    app.processEvents()
+    thresh.controller.wait_idle()
     blur_high = blur.get_output_image()
     assert blur_high is not None
 
@@ -231,6 +231,19 @@ def check_parameter_panel(app) -> None:
     app.processEvents()
     assert w.param_panel.has_controls(), "threshold should expose auto-built controls"
 
+    # Log-scaled int sliders (Filter Contours area params): build an isolated
+    # panel so stale deleteLater widgets don't pollute the child lookup.
+    from ui.parameters import ParameterPanel
+    cf = add_func(w, "Filter Contours")
+    panel = ParameterPanel()
+    panel.set_node(cf)
+    sliders = panel.findChildren(QtWidgets.QSlider)
+    assert len(sliders) == 2, f"expected 2 area sliders, got {len(sliders)}"
+    assert all(s.maximum() == 1000 for s in sliders), "log sliders use a 0..1000 position range"
+    labels = [lbl.text() for lbl in panel.findChildren(QtWidgets.QLabel)]
+    assert "100,000" in labels, f"max_area readout should show the true default, got {labels}"
+    panel.deleteLater()
+
     # An op with no parameters should produce no controls.
     scene.clearSelection()
     gray = add_func(w, "To Grayscale")
@@ -277,7 +290,7 @@ def check_preview_and_summary(app) -> None:
     changed = []
     blur.controller.signals.nodeChanged.connect(changed.append)
     thresh.set_parameter("threshold_value", 99, preview_mode=False)
-    app.processEvents()
+    thresh.controller.wait_idle()
     assert blur in changed, "downstream node change did not signal"
 
     viewer = ImageViewerWindow(blur)
@@ -696,6 +709,75 @@ def check_disconnect(app) -> None:
     print("OK  drag-to-toggle disconnects an existing connection")
 
 
+def check_export_code(app) -> None:
+    import os
+    import glob
+    from ui.nodes import ExportCodeNode
+
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    gray = add_func(w, "To Grayscale")
+    exp = add_func(w, "Export Code")
+    assert isinstance(exp, ExportCodeNode), "Export Code should build an ExportCodeNode"
+    connect(w, src, gray)
+    connect(w, gray, exp)
+    app.processEvents()
+
+    # Pseudocode reflects the upstream chain.
+    code = exp.get_pseudocode()
+    assert "imread(" in code and "cvtColor" in code, f"codegen missing expected calls:\n{code}"
+
+    # Inspector pane shows the code text for this node (and hides it otherwise).
+    w.inspector_pane.set_node(exp)
+    app.processEvents()
+    assert w.inspector_pane._code.isVisible(), "inspector should show the code panel for Export Code"
+    assert "imread(" in w.inspector_pane._code.toPlainText()
+    w.inspector_pane.set_node(gray)
+    app.processEvents()
+    assert not w.inspector_pane._code.isVisible(), "code panel should hide for ordinary nodes"
+
+    # on_commit writes the pseudocode to ./output.
+    if not hasattr(exp, "_node_index"):
+        exp._node_index = id(exp) % 10000
+    path = os.path.join("output", f"pipeline_{exp._node_index}.txt")
+    if os.path.exists(path):
+        os.remove(path)
+    exp.on_commit()
+    assert os.path.exists(path), f"export code did not write {path}"
+    os.remove(path)
+    w.close()
+    print("OK  export code: upstream pseudocode in inspector + written to ./output")
+
+
+def check_background_eval(app) -> None:
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    thresh = add_func(w, "Threshold")
+    blur = add_func(w, "Blur")
+    connect(w, src, thresh)
+    connect(w, thresh, blur)
+    ctrl = thresh.controller
+
+    # A param change recomputes off the UI thread; affected nodes show the
+    # spinner immediately and the eval has not completed yet (no event pumped).
+    thresh.set_parameter("threshold_value", 30, preview_mode=False)
+    assert ctrl._busy, "param change should start a background eval"
+    assert thresh._executing and blur._executing, "recomputing nodes should show the spinner"
+    ctrl.wait_idle()
+    assert not ctrl._busy and not thresh._executing and not blur._executing, \
+        "spinner/busy should clear once the background eval finishes"
+    out30 = blur.get_output_image().copy()
+
+    # Rapid changes coalesce (latest wins) without piling up threads or crashing.
+    for v in (60, 120, 200):
+        thresh.set_parameter("threshold_value", v, preview_mode=False)
+    ctrl.wait_idle()
+    out200 = blur.get_output_image()
+    assert not np.array_equal(out30, out200), "coalesced edits should reach the latest value"
+    w.close()
+    print("OK  background eval: off-thread recompute + spinner + coalescing")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -722,6 +804,8 @@ def main() -> int:
         check_node_icons_and_scroll,
         check_icon_size_control,
         check_save_nonimage,
+        check_export_code,
+        check_background_eval,
     ]
     for chk in checks:
         chk(app)

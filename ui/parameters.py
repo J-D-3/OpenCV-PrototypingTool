@@ -6,6 +6,8 @@ live *preview* while dragging and *commit* on release; discrete controls
 (combo / checkbox / line edit) commit immediately. This replaces the former
 hand-written per-function control code: a new operation needs no UI work.
 """
+import math
+
 from PyQt6 import QtCore, QtWidgets
 
 
@@ -72,10 +74,13 @@ class ParameterPanel(QtWidgets.QWidget):
             self._add_text(spec, value, browse=(kind == "path"))
 
     def _add_int(self, spec, value) -> None:
-        self._layout.addWidget(QtWidgets.QLabel(self._title(spec) + ":"))
-        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         lo = int(spec.min if spec.min is not None else 0)
         hi = int(spec.max if spec.max is not None else 100)
+        if getattr(spec, "log", False):
+            self._add_log_int(spec, value, lo, hi)
+            return
+        self._layout.addWidget(QtWidgets.QLabel(self._title(spec) + ":"))
+        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         slider.setRange(lo, hi)
         slider.setValue(int(value))
         readout = QtWidgets.QLabel(str(int(value)))
@@ -86,10 +91,46 @@ class ParameterPanel(QtWidgets.QWidget):
                 slider.setValue(v)   # re-fires on_change with an odd value
                 return
             readout.setText(str(v))
-            self._commit(spec.name, v, commit=False)
+            # Only recompute live for non-drag changes (keyboard / click / wheel).
+            # A mouse drag updates the label but defers the eval to release.
+            if not slider.isSliderDown():
+                self._commit(spec.name, v, commit=True)
 
         slider.valueChanged.connect(on_change)
         slider.sliderReleased.connect(lambda: self._commit(spec.name, slider.value(), commit=True))
+        self._layout.addWidget(slider)
+        self._layout.addWidget(readout)
+
+    def _add_log_int(self, spec, value, lo, hi) -> None:
+        """Integer slider with a logarithmic response: fine control near the low
+        end (small features), coarse near the top. For wide-range area filters."""
+        self._layout.addWidget(QtWidgets.QLabel(self._title(spec) + ":"))
+        lo_eff = max(1, lo)               # log needs a positive lower bound
+        hi_eff = max(lo_eff + 1, hi)
+        ln_lo, ln_hi = math.log(lo_eff), math.log(hi_eff)
+        steps = 1000
+        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        slider.setRange(0, steps)
+
+        def to_val(pos):
+            v = int(round(math.exp(ln_lo + (pos / steps) * (ln_hi - ln_lo))))
+            return max(lo, min(hi, v))
+
+        def to_pos(v):
+            v = max(lo_eff, min(hi_eff, int(v)))
+            return int(round(steps * (math.log(v) - ln_lo) / (ln_hi - ln_lo)))
+
+        slider.setValue(to_pos(value))
+        readout = QtWidgets.QLabel(f"{int(value):,}")   # show the true value at init
+
+        def on_change(pos):
+            v = to_val(pos)
+            readout.setText(f"{v:,}")
+            if not slider.isSliderDown():
+                self._commit(spec.name, v, commit=True)
+
+        slider.valueChanged.connect(on_change)
+        slider.sliderReleased.connect(lambda: self._commit(spec.name, to_val(slider.value()), commit=True))
         self._layout.addWidget(slider)
         self._layout.addWidget(readout)
 
@@ -110,7 +151,8 @@ class ParameterPanel(QtWidgets.QWidget):
         def on_change(pos):
             val = to_val(pos)
             readout.setText(f"{val:.2f}")
-            self._commit(spec.name, val, commit=False)
+            if not slider.isSliderDown():
+                self._commit(spec.name, val, commit=True)
 
         slider.valueChanged.connect(on_change)
         slider.sliderReleased.connect(lambda: self._commit(spec.name, to_val(slider.value()), commit=True))

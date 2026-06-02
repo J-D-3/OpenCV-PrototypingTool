@@ -7,7 +7,8 @@ from typing import Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from core.operations import by_label, ops_by_category, CATEGORY_ORDER
+from core.operations import by_label, ops_by_category, CATEGORY_ORDER, REGISTRY
+from core import codegen
 from ui.nodes import Node, ImageNode, FunctionNode, SaveToFileNode
 from ui.canvas import ImageDropWidget, DEFAULT_ICON_SIZE
 from ui.viewer import ImageViewerWindow
@@ -67,7 +68,9 @@ class MainWindow(QtWidgets.QMainWindow):
             for op in ops_by_category.get(cat, []):
                 op_item = QtWidgets.QTreeWidgetItem([op.label])
                 op_item.setData(0, QtCore.Qt.ItemDataRole.UserRole,
-                                {"name": op.id, "in": op.in_label, "out": op.out_label})
+                                {"name": op.id, "in": op.in_label, "out": op.out_label,
+                                 "desc": codegen.op_description(op)})
+                op_item.setToolTip(0, codegen.op_description(op))
                 cat_item.addChild(op_item)
 
         tree.expandAll()
@@ -79,8 +82,26 @@ class MainWindow(QtWidgets.QMainWindow):
         info_name = QtWidgets.QLabel("Select a function")
         info_types = QtWidgets.QLabel("")
         info_types.setStyleSheet("color: #555;")
+        info_desc = QtWidgets.QLabel("")
+        info_desc.setStyleSheet("color: #444;")
+        info_desc.setWordWrap(True)
         info_layout.addWidget(info_name)
         info_layout.addWidget(info_types)
+        info_layout.addWidget(info_desc)
+
+        def set_func_info(op_id: str) -> None:
+            """Fill the info panel (name, types, description) + a detailed tooltip
+            (description + single-op pseudocode) for the given op id."""
+            op = REGISTRY.get(op_id)
+            info_name.setText(f"{op_id}()")
+            if op is None:
+                info_types.setText(""); info_desc.setText(""); return
+            info_types.setText(f"Input: {op.in_label or '?'}\nOutput: {op.out_label or '?'}")
+            desc = codegen.op_description(op)
+            info_desc.setText(desc)
+            tip = desc + "\n\n" + codegen.op_pseudocode(op)
+            for _w in (info_name, info_types, info_desc, info_group):
+                _w.setToolTip(tip)
         
         # Parameter controls Ã¢â‚¬â€ auto-generated from the selected op's schema.
         param_group = QtWidgets.QGroupBox("Parameters")
@@ -149,11 +170,10 @@ class MainWindow(QtWidgets.QMainWindow):
             item = items[0]
             meta = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
             if isinstance(meta, dict):
-                info_name.setText(f"{meta.get('name','')}()")
-                info_types.setText(f"Input: {meta.get('in','?')}\nOutput: {meta.get('out','?')}")
+                set_func_info(meta.get('name', ''))
             else:
                 info_name.setText("Select a function")
-                info_types.setText("")
+                info_types.setText(""); info_desc.setText("")
 
         tree.itemSelectionChanged.connect(on_tree_selection_changed)
 
@@ -163,8 +183,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 # Add a function node to the scene with the display label
                 self.drop_widget.add_function_node(item.text(0), None, meta)
                 # Also update info box to reflect the selected function
-                info_name.setText(f"{meta.get('name','')}()")
-                info_types.setText(f"Input: {meta.get('in','?')}\nOutput: {meta.get('out','?')}")
+                set_func_info(meta.get('name', ''))
 
         tree.itemDoubleClicked.connect(on_tree_item_double_clicked)
 
@@ -182,8 +201,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.inspector_pane.set_node(sel)
                     meta = getattr(sel, "_meta", None)
                     if isinstance(meta, dict):
-                        info_name.setText(f"{meta.get('name','')}()")
-                        info_types.setText(f"Input: {meta.get('in','?')}\nOutput: {meta.get('out','?')}")
+                        set_func_info(meta.get('name', ''))
                         # Auto-build parameter controls from the op's schema.
                         self.param_panel.set_node(sel)
                         param_group.setVisible(self.param_panel.has_controls())
@@ -192,6 +210,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     meta = getattr(sel, "_meta", None)
                     if isinstance(meta, dict):
                         info_name.setText("Image")
+                        info_desc.setText("")
                         ch = meta.get('channels', '?')
                         info_types.setText(
                             f"Size: {meta.get('w','?')}ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â{meta.get('h','?')}\n"
