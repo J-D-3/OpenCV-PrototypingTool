@@ -12,9 +12,12 @@ Used by the Export Code node (full pipeline) and the Function-info tooltip
 """
 from __future__ import annotations
 
+import re
 from typing import List, Optional
 
 from core.graph import GraphModel, GraphNode
+
+_CV_CALL_RE = re.compile(r"cv::\w+")
 
 
 # ---------------------------------------------------------------------------
@@ -265,3 +268,14 @@ def op_pseudocode(op, params=None) -> str:
         p.update(params)
     ins = [f"in{n + 1}" for n in range(len(op.inputs))] or ["in1"]
     return "\n".join(_emit_op(op, "out", ins, p))
+
+
+def op_cv_calls(op) -> List[str]:
+    """The cv:: function names this op's pseudocode uses (e.g. ['cv::GaussianBlur']).
+    Used by the sidebar search so you can find a node by the OpenCV call it makes."""
+    if op is None:
+        return []
+    try:
+        return _CV_CALL_RE.findall(op_pseudocode(op))
+    except Exception:  # noqa: BLE001 — search must never raise
+        return []

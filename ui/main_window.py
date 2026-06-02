@@ -54,6 +54,12 @@ class MainWindow(QtWidgets.QMainWindow):
             toolbar.addWidget(_b)
         toolbar.addStretch()
 
+        # Search bar — filters the tree by display name, category, or the cv::
+        # functions a node calls.
+        search = QtWidgets.QLineEdit()
+        search.setPlaceholderText("Search name / category / cv:: call…")
+        search.setClearButtonEnabled(True)
+
         # OpenCV functions tree
         tree = QtWidgets.QTreeWidget()
         tree.setHeaderHidden(True)
@@ -67,18 +73,56 @@ class MainWindow(QtWidgets.QMainWindow):
             tree.addTopLevelItem(cat_item)
             for op in ops_by_category.get(cat, []):
                 op_item = QtWidgets.QTreeWidgetItem([op.label])
+                # Precomputed haystack: display name + id + category + port labels +
+                # the cv:: calls the op makes (so e.g. "gaussianblur" finds Blur).
+                haystack = " ".join(
+                    [op.label, op.id, cat, op.in_label, op.out_label]
+                    + codegen.op_cv_calls(op)).lower()
                 op_item.setData(0, QtCore.Qt.ItemDataRole.UserRole,
                                 {"name": op.id, "in": op.in_label, "out": op.out_label,
-                                 "desc": codegen.op_description(op)})
+                                 "desc": codegen.op_description(op), "search": haystack})
                 op_item.setToolTip(0, codegen.op_description(op))
                 cat_item.addChild(op_item)
 
         tree.expandAll()
 
-        # Info box at bottom
+        def filter_tree(text: str) -> None:
+            q = text.strip().lower()
+            for i in range(tree.topLevelItemCount()):
+                cat_item = tree.topLevelItem(i)
+                cat_match = q in cat_item.text(0).lower()
+                any_visible = False
+                for j in range(cat_item.childCount()):
+                    op_item = cat_item.child(j)
+                    meta = op_item.data(0, QtCore.Qt.ItemDataRole.UserRole) or {}
+                    visible = (not q) or cat_match or (q in meta.get("search", ""))
+                    op_item.setHidden(not visible)
+                    any_visible = any_visible or visible
+                # Hide an empty category while searching; keep it if its name matched.
+                cat_item.setHidden(bool(q) and not any_visible and not cat_match)
+                if q:
+                    cat_item.setExpanded(True)
+            if not q:
+                tree.expandAll()
+
+        search.textChanged.connect(filter_tree)
+        self.func_tree = tree
+        self.func_search = search
+
+        # Info box at bottom — fixed height, scrollable when the description is long.
         info_group = QtWidgets.QGroupBox("Function info")
-        info_layout = QtWidgets.QVBoxLayout()
-        info_group.setLayout(info_layout)
+        info_group.setFixedHeight(200)
+        info_outer = QtWidgets.QVBoxLayout(info_group)
+        info_outer.setContentsMargins(4, 4, 4, 4)
+        info_scroll = QtWidgets.QScrollArea()
+        info_scroll.setWidgetResizable(True)
+        info_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        info_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        info_content = QtWidgets.QWidget()
+        info_layout = QtWidgets.QVBoxLayout(info_content)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_scroll.setWidget(info_content)
+        info_outer.addWidget(info_scroll)
         info_name = QtWidgets.QLabel("Select a function")
         info_types = QtWidgets.QLabel("")
         info_types.setStyleSheet("color: #555;")
@@ -88,6 +132,7 @@ class MainWindow(QtWidgets.QMainWindow):
         info_layout.addWidget(info_name)
         info_layout.addWidget(info_types)
         info_layout.addWidget(info_desc)
+        info_layout.addStretch(1)
 
         def set_func_info(op_id: str) -> None:
             """Fill the info panel (name, types, description) + a detailed tooltip
@@ -114,6 +159,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         sidebar.layout().addWidget(title)
         sidebar.layout().addLayout(toolbar)
+        sidebar.layout().addWidget(search)
         sidebar.layout().addWidget(tree, 2)
 
         bottom = QtWidgets.QWidget()

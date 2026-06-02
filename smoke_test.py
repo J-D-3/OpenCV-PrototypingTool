@@ -750,6 +750,47 @@ def check_export_code(app) -> None:
     print("OK  export code: upstream pseudocode in inspector + written to ./output")
 
 
+def check_function_search(app) -> None:
+    w = make_window(app)
+    tree, search = w.func_tree, w.func_search
+
+    def visible_ops():
+        out = []
+        for i in range(tree.topLevelItemCount()):
+            c = tree.topLevelItem(i)
+            if c.isHidden():
+                continue
+            for j in range(c.childCount()):
+                it = c.child(j)
+                if not it.isHidden():
+                    out.append(it.text(0))
+        return out
+
+    total = len(visible_ops())
+    assert total > 10, "tree should list many ops"
+
+    search.setText("gaussianblur")            # by the cv:: call it makes
+    assert visible_ops() == ["Gaussian Blur"], visible_ops()
+
+    search.setText("kmeans")                  # cv::kmeans -> both clustering ops
+    assert set(visible_ops()) == {"K-Means Cluster", "Auto Cluster"}, visible_ops()
+
+    search.setText("contours")                # by category -> the whole category
+    vis = visible_ops()
+    assert "Find Contours" in vis and "Filter Contours" in vis
+
+    search.setText("zzz_nomatch")
+    assert visible_ops() == []
+
+    search.setText("")                        # cleared restores everything
+    assert len(visible_ops()) == total
+
+    ig = [g for g in w.findChildren(QtWidgets.QGroupBox) if g.title() == "Function info"][0]
+    assert ig.minimumHeight() == 200 and ig.maximumHeight() == 200, "info panel should be fixed 200px"
+    w.close()
+    print("OK  function search filters by name/category/cv:: call; info panel fixed 200px")
+
+
 def check_background_eval(app) -> None:
     w = make_window(app)
     src = add_image(w, gradient_bgr())
@@ -813,6 +854,7 @@ def main() -> int:
         check_icon_size_control,
         check_save_nonimage,
         check_export_code,
+        check_function_search,
         check_background_eval,
     ]
     for chk in checks:
