@@ -403,10 +403,15 @@ class NeighborhoodPanel(QtWidgets.QWidget):
     def _rebuild(self):
         if self._base is None or self._center is None:
             return
+        h, w = self._base.shape[:2]
+        if h == 0 or w == 0:
+            return
         n = self.grid_size()
         half = n // 2
-        x, y = self._center
-        h, w = self._base.shape[:2]
+        # Clamp the centre to the current image — a frozen/hovered point from a
+        # differently-sized batch frame can fall outside a smaller image.
+        x = max(0, min(self._center[0], w - 1))
+        y = max(0, min(self._center[1], h - 1))
         patch = np.full((n, n, 3), 200, np.uint8)  # gray for out-of-bounds
         for r in range(n):
             for c in range(n):

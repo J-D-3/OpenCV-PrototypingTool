@@ -456,6 +456,12 @@ def check_inspector_pane(app) -> None:
     pane._on_hover(2, 2)
     assert pane._neigh._center == (2, 2), "hover should resume after release"
 
+    # Regression: a centre from a larger frame must not crash on a smaller image
+    # (batches can mix image sizes). The centre is clamped to the new bounds.
+    pane._neigh._center = (999, 999)
+    pane._neigh.set_base(np.zeros((8, 12, 3), np.uint8), ["B", "G", "R"])
+    assert "x=11 y=7" in pane._neigh._readout.text(), "out-of-bounds centre should clamp, not crash"
+
     # Narrowing a histogram range masks the preview AND the neighbourhood grid.
     base_nonzero = int(np.count_nonzero(pane._disp))
     pane._hist._channels[0]["slider"]._lo = 0
