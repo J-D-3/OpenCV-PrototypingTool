@@ -796,8 +796,11 @@ def check_function_search(app) -> None:
     total = len(visible_ops())
     assert total > 10, "tree should list many ops"
 
-    search.setText("gaussianblur")            # by the cv:: call it makes
-    assert visible_ops() == ["Gaussian Blur"], visible_ops()
+    # By a cv:: call: matches Gaussian Blur *and* every op that calls it
+    # internally (Auto Cluster smooths the histogram; Local HDR's low-pass).
+    search.setText("gaussianblur")
+    vis = visible_ops()
+    assert "Gaussian Blur" in vis and "Auto Cluster" in vis, vis
 
     search.setText("kmeans")                  # cv::kmeans -> both clustering ops
     assert set(visible_ops()) == {"K-Means Cluster", "Auto Cluster"}, visible_ops()

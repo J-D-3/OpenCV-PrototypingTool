@@ -99,30 +99,31 @@ _CODE = {
     # --- blur / edges ---
     "blur": lambda o, i, p: f"{o} = cv::blur({i[0]}, ksize=({p.get('kernel_size')},{p.get('kernel_size')}))",
     "gaussian_blur": lambda o, i, p: f"{o} = cv::GaussianBlur({i[0]}, ksize=({p.get('kernel_size')},{p.get('kernel_size')}), sigma=0)",
-    "canny": lambda o, i, p: f"{o} = cv::Canny({i[0]}, {p.get('threshold1')}, {p.get('threshold2')}, apertureSize={p.get('aperture')})",
-    "sobel": lambda o, i, p: f"{o} = cv::Sobel({i[0]}, CV_64F, dx={p.get('dx')}, dy={p.get('dy')}, ksize={p.get('ksize')})",
-    "laplacian": lambda o, i, p: f"{o} = cv::Laplacian({i[0]}, CV_64F, ksize={p.get('ksize')})",
-    "morphology": lambda o, i, p: f"{o} = cv::morphologyEx({i[0]}, op={p.get('operation')}, kernel=ones({p.get('kernel_size')}), iterations={p.get('iterations')})",
+    "canny": lambda o, i, p: f"{o} = cv::Canny({i[0]}, {p.get('threshold1')}, {p.get('threshold2')}, apertureSize={p.get('aperture')})   # gray via cv::cvtColor",
+    "sobel": lambda o, i, p: f"{o} = cv::convertScaleAbs(cv::Sobel({i[0]}, CV_64F, dx={p.get('dx')}, dy={p.get('dy')}, ksize={p.get('ksize')}))   # gray via cv::cvtColor",
+    "laplacian": lambda o, i, p: f"{o} = cv::convertScaleAbs(cv::Laplacian({i[0]}, CV_64F, ksize={p.get('ksize')}))   # gray via cv::cvtColor",
+    "morphology": lambda o, i, p: f"{o} = cv::morphologyEx({i[0]}, op={p.get('operation')}, kernel=cv::getStructuringElement(MORPH_RECT, ({p.get('kernel_size')},{p.get('kernel_size')})), iterations={p.get('iterations')})",
     # --- threshold ---
-    "threshold": lambda o, i, p: f"{o} = cv::threshold({i[0]}, thresh={p.get('threshold_value')}, maxval={p.get('max_value')}, type={p.get('threshold_type')})",
-    "adaptive_threshold": lambda o, i, p: f"{o} = cv::adaptiveThreshold({i[0]}, maxValue={p.get('max_value')}, method={p.get('adaptive_method')}, type={p.get('threshold_type')}, blockSize={p.get('block_size')}, C={p.get('c')})",
+    "threshold": lambda o, i, p: f"{o} = cv::threshold({i[0]}, thresh={p.get('threshold_value')}, maxval={p.get('max_value')}, type={p.get('threshold_type')})   # gray via cv::cvtColor",
+    "adaptive_threshold": lambda o, i, p: f"{o} = cv::adaptiveThreshold({i[0]}, maxValue={p.get('max_value')}, method={p.get('adaptive_method')}, type={p.get('threshold_type')}, blockSize={p.get('block_size')}, C={p.get('c')})   # gray via cv::cvtColor",
     # --- geometry ---
     "resize": lambda o, i, p: f"{o} = cv::resize({i[0]}, None, fx={p.get('scale')}, fy={p.get('scale')}, interpolation={p.get('interpolation')})",
     "rotate": lambda o, i, p: [f"M = cv::getRotationMatrix2D(center, angle={p.get('angle')}, scale=1.0)",
                                f"{o} = cv::warpAffine({i[0]}, M, dsize)   # expand={p.get('expand')}"],
-    # --- arithmetic ---
-    "sum": lambda o, i, p: f"{o} = cv::addWeighted({i[0]}, {p.get('alpha')}, {i[1]}, {1 - float(p.get('alpha', 0.5))}, 0)",
-    "and": lambda o, i, p: f"{o} = cv::bitwise_and({i[0]}, {i[1]})",
-    "diff": lambda o, i, p: f"{o} = cv::absdiff({i[0]}, {i[1]})",
-    "invert": lambda o, i, p: f"{o} = 255 - {i[0]}",
+    # --- arithmetic (the second input is aligned to the first: cv::resize/cv::cvtColor) ---
+    "sum": lambda o, i, p: f"{o} = cv::addWeighted({i[0]}, {p.get('alpha')}, {i[1]}, {1 - float(p.get('alpha', 0.5))}, 0)   # + cv::resize to align",
+    "and": lambda o, i, p: f"{o} = cv::bitwise_and({i[0]}, {i[1]})   # + cv::resize / cv::cvtColor to align",
+    "diff": lambda o, i, p: f"{o} = cv::subtract({i[0]}, {i[1]})   # + cv::resize / cv::cvtColor to align",
+    "invert": lambda o, i, p: f"{o} = cv::bitwise_not({i[0]})",
     # --- fourier ---
-    "dft": lambda o, i, p: f"{o} = cv::dft(float({i[0]}), flags=DFT_COMPLEX_OUTPUT)",
+    "dft": lambda o, i, p: f"{o} = cv::dft(float({i[0]}), flags=DFT_COMPLEX_OUTPUT)   # gray via cv::cvtColor; preview: cv::magnitude",
     "idft": lambda o, i, p: f"{o} = cv::idft({i[0]}, flags=DFT_REAL_OUTPUT | DFT_SCALE)",
     # --- binary connected components ---
     "connected_components": lambda o, i, p: [
         f"# label connected blobs in a binary image ({p.get('connectivity')}-connectivity)",
         f"n, labels = cv::connectedComponents(({i[0]} > 0), connectivity={p.get('connectivity')})",
-        f"{o} = [outer contour of (labels == k) for k in 1..n-1]"],
+        f"# background for drawing: cv::cvtColor(gray -> BGR)",
+        f"{o} = [cv::findContours outer contour of (labels == k) for k in 1..n-1]"],
 }
 
 
@@ -130,17 +131,19 @@ def _emit_kmeans(o, i, p):
     return [
         "# cluster pixels with k-means in a chosen feature space; report each",
         "# center as the mean *input-space* color, ordered dark->light (stable).",
-        f"feat = features({i[0]}, space={p.get('cluster_space')!r}, lum_weight={p.get('lum_weight')})",
+        f"feat = features({i[0]}, space={p.get('cluster_space')!r}, lum_weight={p.get('lum_weight')})   # cv::cvtColor to Lab/HLS",
+        f"cv::setRNGSeed(0)   # deterministic partition",
         f"_, labels, _ = cv::kmeans(feat, K={p.get('k')}, criteria, attempts={p.get('attempts')}, KMEANS_PP_CENTERS)",
         f"{o} = {{centers, labels, shape}}   # CLUSTERS payload"]
 
 
 def _emit_auto_cluster(o, i, p):
     return [
-        "# pick K by counting smoothed histogram peaks on one HLS channel, then k-means.",
+        "# pick K by counting smoothed histogram peaks on one HLS channel, then k-means:",
+        "#   cv::cvtColor (channel) -> cv::calcHist -> cv::GaussianBlur (smooth) -> count maxima",
         f"K = count_peaks({i[0]}, channel={p.get('channel')!r}, smoothing={p.get('smoothing')}, min_prominence={p.get('min_prominence')}, max_k={p.get('max_k')})",
-        f"feat = features({i[0]}, space={p.get('cluster_space')!r}, lum_weight={p.get('lum_weight')})",
-        f"_, labels, _ = cv::kmeans(feat, K, criteria, attempts, KMEANS_PP_CENTERS)",
+        f"feat = features({i[0]}, space={p.get('cluster_space')!r}, lum_weight={p.get('lum_weight')})   # cv::cvtColor to Lab/HLS",
+        f"cv::setRNGSeed(0); _, labels, _ = cv::kmeans(feat, K, criteria, attempts, KMEANS_PP_CENTERS)",
         f"{o} = {{centers, labels, shape}}   # CLUSTERS payload"]
 
 
@@ -156,20 +159,63 @@ def _emit_label_regions(o, i, p):
     return [
         f"# group connected near-uniform regions (channel={chan!r}, "
         f"delta={p.get('delta')}, {p.get('connectivity')}-connectivity):",
+        "#   the channel is selected via cv::cvtColor (BGR<->HLS)",
         "#   delta==0 -> cv::connectedComponents per unique value (exact)",
         "#   delta>0  -> cv::floodFill region-grow (FIXED_RANGE) per seed",
         (f"labels = exact_label({i[0]}, connectivity={p.get('connectivity')})" if exact
          else f"labels = floodfill_label({i[0]}, delta={p.get('delta')}, connectivity={p.get('connectivity')})"),
-        f"{o} = [outer contour of (labels == k) for each region k]",
+        f"{o} = [cv::findContours outer contour of (labels == k) for each region k]",
     ]
 
 
 def _emit_contour_filter(o, i, p):
-    return [f"{o} = [c for c in {i[0]} if {p.get('min_area')} <= cv::contourArea(c) <= {p.get('max_area')}]"]
+    return [f"{o} = [c for c in {i[0]} if {p.get('min_area')} <= cv::contourArea(c) <= {p.get('max_area')}]   # preview: cv::drawContours"]
 
 
 def _emit_find_contours(o, i, p):
-    return [f"{o}, hierarchy = cv::findContours({i[0]}, mode={p.get('mode')}, CHAIN_APPROX_SIMPLE)"]
+    return [
+        f"gray = cv::cvtColor({i[0]}, COLOR_BGR2GRAY)",
+        f"{o}, hierarchy = cv::findContours(gray, mode={p.get('mode')}, CHAIN_APPROX_SIMPLE)   # preview: cv::drawContours",
+    ]
+
+
+def _emit_mser(o, i, p):
+    return [
+        f"gray = cv::cvtColor({i[0]}, COLOR_BGR2GRAY)",
+        f"mser = cv::MSER_create(delta={p.get('delta')}, min_area={p.get('min_area')}, max_area={p.get('max_area')})",
+        f"{o} = mser.detectRegions(gray)"]
+
+
+def _emit_mean_shift(o, i, p):
+    return [
+        f"bgr = cv::cvtColor({i[0]} -> BGR)",
+        f"{o} = cv::pyrMeanShiftFiltering(bgr, sp={p.get('spatial')}, sr={p.get('color')})"]
+
+
+def _emit_normalize(o, i, p):
+    return [
+        f"# mode={p.get('mode')!r} (colour handled per-channel via cv::cvtColor YCrCb):",
+        "#   stretch -> cv::normalize(NORM_MINMAX); equalize -> cv::equalizeHist; clahe -> cv::createCLAHE",
+        f"{o} = normalize({i[0]}, mode={p.get('mode')!r})"]
+
+
+def _emit_local_hdr(o, i, p):
+    return [
+        "# split luma (cv::cvtColor YCrCb), divide by a cv::GaussianBlur low-pass, recombine",
+        f"{o} = local_contrast({i[0]})"]
+
+
+def _emit_histogram(o, i, p):
+    return [f"# cv::calcHist per channel, then plot",
+            f"{o} = histogram({i[0]})"]
+
+
+def _emit_create_batch(o, i, p):
+    return [f"{o} = Batch([cv::cvtColor(x -> BGR) for x in inputs])   # homogeneous 3-channel stack"]
+
+
+def _emit_save_to_file(o, i, p):
+    return [f"cv::imwrite(path, {i[0]})"]
 
 
 _CODE.update({
@@ -177,6 +223,13 @@ _CODE.update({
     "auto_cluster": _emit_auto_cluster,
     "reduce_colors": _emit_reduce_colors,
     "label_regions": _emit_label_regions,
+    "mser": _emit_mser,
+    "mean_shift": _emit_mean_shift,
+    "normalize": _emit_normalize,
+    "local_hdr": _emit_local_hdr,
+    "histogram": _emit_histogram,
+    "create_batch": _emit_create_batch,
+    "save_to_file": _emit_save_to_file,
     "contour_filter": _emit_contour_filter,
     "find_contours": _emit_find_contours,
 })

@@ -596,6 +596,48 @@ def test_comp_timing_and_traversal():
     print("OK  per-node compute timing (single + batch mean) + ancestors/descendants")
 
 
+def test_codegen_covers_cv_calls():
+    """Every op's codegen emitter must name every cv2 function its compute (and
+    helpers) actually calls — so the sidebar search finds a node by any OpenCV
+    function it uses, on any code path."""
+    import ast
+    import inspect
+    from core import operations as ops_mod, codegen
+
+    tree = ast.parse(inspect.getsource(ops_mod))
+    direct, calls = {}, {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            cv, loc = set(), set()
+            for n in ast.walk(node):
+                if isinstance(n, ast.Call):
+                    f = n.func
+                    if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "cv2":
+                        cv.add(f.attr)             # cv2.X(...) — a real call, not a constant
+                    elif isinstance(f, ast.Name):
+                        loc.add(f.id)              # local helper call -> recurse
+            direct[node.name] = cv
+            calls[node.name] = loc
+
+    def closure(fname, seen):
+        if fname in seen or fname not in direct:
+            return set()
+        seen.add(fname)
+        out = set(direct[fname])
+        for c in calls[fname]:
+            out |= closure(c, seen)
+        return out
+
+    missing = {}
+    for op in ops_mod.OPS:
+        needed = closure(op.compute.__name__, set())
+        have = {c.split("::", 1)[1] for c in codegen.op_cv_calls(op)}
+        if needed - have:
+            missing[op.id] = sorted(needed - have)
+    assert not missing, f"codegen emitters omit cv2 calls the op makes: {missing}"
+    print("OK  codegen emitters name every cv2 function each op calls (searchable)")
+
+
 def test_cycle_prevention():
     m = GraphModel()
     a = _op(m, "blur")
@@ -632,8 +674,9 @@ def main():
     test_cluster_space()
     test_mean_shift()
     test_comp_timing_and_traversal()
+    test_codegen_covers_cv_calls()
     test_cycle_prevention()
-    print("\nENGINE OK: 26 backend tests passed")
+    print("\nENGINE OK: 27 backend tests passed")
 
 
 if __name__ == "__main__":
