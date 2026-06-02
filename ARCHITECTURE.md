@@ -110,6 +110,7 @@ does not cycle at runtime.
 | Show key stats for an op (e.g. #contours) | Set its `summary(output, params) -> dict` hook (consumed from Phase 4). |
 | Give an op a tooltip / better pseudocode | Set `Operation.description` (else its `compute` docstring is used); for a precise code line add a `core/codegen.py` `_CODE` emitter. |
 | Make an int slider non-linear | `ParamSpec(kind="int", log=True)` → logarithmic slider (`ui/parameters._add_log_int`). |
+| Make a slider evaluate while dragging | `ParamSpec(..., live=True)` (cheap params only) → commits every step, not just on release. |
 | Add a non-image payload op (clusters, contours, regions) | Declare the port `datatypes` type; ops with the same payload type compose (e.g. Label Regions → Filter Contours). |
 | Change how a parameter control looks | `ui/parameters.py`; the widget is derived from the `ParamSpec.kind`. |
 | Change batch parallelism / worker count | `core/engine.py` (`_max_workers`, `_run_batched`). Hold `operations._KMEANS_LOCK` around any new global cv2 state used inside a parallelised op. |

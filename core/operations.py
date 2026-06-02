@@ -60,6 +60,8 @@ class ParamSpec:
     show: bool = True            # render a control in the parameter panel?
     log: bool = False            # int slider: logarithmic response (fine at the
                                  # low end) — for wide-range values like areas
+    live: bool = False           # slider recomputes on every drag step (not just
+                                 # on release) — for cheap, see-it-live params
 
 
 @dataclass
@@ -1369,8 +1371,8 @@ OPS: list = [
         inputs=[Port("in", datatypes.CONTOURS)],
         outputs=[Port("out", datatypes.CONTOURS)],
         params=[
-            ParamSpec("min_area", 50, kind="int", min=0, max=20000, label="Min Area", log=True),
-            ParamSpec("max_area", 100000, kind="int", min=0, max=1000000, label="Max Area", log=True),
+            ParamSpec("min_area", 50, kind="int", min=0, max=20000, label="Min Area", log=True, live=True),
+            ParamSpec("max_area", 100000, kind="int", min=0, max=1000000, label="Max Area", log=True, live=True),
             ParamSpec("filled", False, kind="bool", label="Draw filled"),
         ],
         compute=_compute_filter_contours, color=(233, 30, 99),

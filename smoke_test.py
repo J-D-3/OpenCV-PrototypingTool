@@ -827,6 +827,28 @@ def check_function_search(app) -> None:
     print("OK  function search filters by name/category/cv:: call; info panel fixed 200px")
 
 
+def check_live_slider(app) -> None:
+    from ui.parameters import ParameterPanel
+    from core.operations import REGISTRY
+    # Filter Contours area params are 'live'; a normal Blur slider is not.
+    cf = REGISTRY["contour_filter"]
+    assert all(p.live for p in cf.params if p.name in ("min_area", "max_area"))
+    assert not REGISTRY["blur"].params[0].live
+
+    w = make_window(app)
+    node = add_func(w, "Filter Contours")
+    rec = []
+    node.set_parameter = lambda name, value, preview_mode=False: rec.append((name, value))
+    panel = ParameterPanel()
+    panel.set_node(node)
+    s = panel.findChildren(QtWidgets.QSlider)[0]
+    s.setSliderDown(True)                 # simulate dragging
+    s.setValue(s.value() + 7)
+    assert rec, "a 'live' slider should commit while being dragged"
+    w.close()
+    print("OK  live slider: Filter Contours area evaluates while dragging")
+
+
 def check_canvas_zoom_scroll(app) -> None:
     w = make_window(app)
     view = w.drop_widget.view
@@ -942,6 +964,7 @@ def main() -> int:
         check_save_nonimage,
         check_export_code,
         check_function_search,
+        check_live_slider,
         check_canvas_zoom_scroll,
         check_flow_highlight,
         check_background_eval,
