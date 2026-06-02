@@ -649,22 +649,32 @@ def _labels_to_payload(labels, n_regions, img, background):
             "shape": img.shape, "background": background}
 
 
-def _label_regions_exact(comp, connectivity):
-    """delta == 0 fast path: connected components per *unique* value — no Python
-    per-pixel scan. Returns (label image, region count)."""
+_EXACT_MAX_COLORS = 256   # above this, the per-colour exact path loses to floodFill
+
+
+def _color_key(comp):
+    """Per-pixel integer key: the single channel, or packed BGR (24-bit)."""
     if comp.ndim == 2:
-        key = comp.astype(np.int64)
-    else:
-        c = comp.astype(np.int64)
-        key = (c[:, :, 0] << 16) | (c[:, :, 1] << 8) | c[:, :, 2]
-    labels = np.zeros(comp.shape[:2], np.int32)
+        return comp.astype(np.int64)
+    c = comp.astype(np.int64)
+    return (c[:, :, 0] << 16) | (c[:, :, 1] << 8) | c[:, :, 2]
+
+
+def _label_regions_exact(key, connectivity, uniq=None):
+    """delta == 0 path for *few* distinct colours: connected components per unique
+    value. Fast only when there are few colours (its cost is O(#colours * H*W));
+    the caller falls back to floodFill otherwise. Returns (label image, count)."""
+    if uniq is None:
+        uniq = np.unique(key)
+    labels = np.zeros(key.shape, np.int32)
     next_id = 0
-    for val in np.unique(key):
-        n, lab = cv2.connectedComponents((key == val).astype(np.uint8),
-                                         connectivity=int(connectivity))
-        for c_ in range(1, n):                # 0 is background of this value's mask
-            next_id += 1
-            labels[lab == c_] = next_id
+    for val in uniq:
+        m = key == val
+        n, lab = cv2.connectedComponents(m.astype(np.uint8), connectivity=int(connectivity))
+        # Offset this colour's components (1..n-1) into the global id space in one
+        # masked write — not a full-image pass per component.
+        labels[m] = lab[m].astype(np.int32) + next_id
+        next_id += n - 1
     return labels, next_id
 
 
@@ -711,7 +721,15 @@ def _compute_label_regions(inputs, p, in_space="bgr"):
         delta = int(p.get("delta", 8))
         conn = int(p.get("connectivity", 4))
         if delta == 0:
-            labels, n = _label_regions_exact(comp, conn)
+            # Exact connected-components per colour is only fast when colours are
+            # few (e.g. after Reduce Colors); otherwise a single floodFill(0)
+            # sweep — equivalent result — is much faster.
+            key = _color_key(comp)
+            uniq = np.unique(key)
+            if len(uniq) <= _EXACT_MAX_COLORS:
+                labels, n = _label_regions_exact(key, conn, uniq)
+            else:
+                labels, n = _label_regions_floodfill(comp, 0, conn)
         else:
             labels, n = _label_regions_floodfill(comp, delta, conn)
         return _labels_to_payload(labels, n, img, _as_bgr(img, in_space))
