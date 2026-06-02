@@ -251,6 +251,24 @@ def test_label_regions():
     print("OK  label_regions: flood-fill regions (channel/delta/connectivity) -> contours")
 
 
+def test_floodfill_nesting_colors():
+    # Blue background (touches the image border) with a red square inside it.
+    img = np.zeros((100, 100, 3), np.uint8)
+    img[:] = (200, 0, 0)
+    img[40:60, 40:60] = (0, 0, 200)
+    m = GraphModel(); s = _src(m, img)
+    ff = _op(m, "label_regions", channel=-1, delta=0, connectivity=4)
+    m.add_edge(s, ff); Engine(m).evaluate_all()
+    out = ff.output
+    # No contour hierarchy in a label map -> recovered: outer depth 0, hole depth 1.
+    assert set(out["depths"]) == {0, 1}, f"expected recovered nesting, got {out['depths']}"
+    from core.operations import _CONTOUR_COLORS
+    half = len(_CONTOUR_COLORS) // 2
+    cols = {(out["ids"][i] % half) + (out["depths"][i] % 2) * half for i in range(len(out["depths"]))}
+    assert len(cols) == 2, "parent and hole must land in different palette halves"
+    print("OK  flood-fill nesting: hole recovered as depth 1 (distinct colour)")
+
+
 def test_connected_components():
     # Two separated white squares on black -> two components.
     img = np.zeros((40, 80), np.uint8)
@@ -710,6 +728,7 @@ def main():
     test_contours()
     test_contour_nesting_colors()
     test_label_regions()
+    test_floodfill_nesting_colors()
     test_connected_components()
     test_segmentation_nodes()
     test_codegen()
@@ -729,7 +748,7 @@ def main():
     test_comp_timing_and_traversal()
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
-    print("\nENGINE OK: 29 backend tests passed")
+    print("\nENGINE OK: 30 backend tests passed")
 
 
 if __name__ == "__main__":

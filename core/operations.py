@@ -658,17 +658,66 @@ def _region_compare_image(img, channel, in_space):
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2HLS)[:, :, int(channel)].copy()
 
 
+def _region_depths(labels, n_regions):
+    """Nesting depth per region id (1..n_regions): 0 if the region touches the image
+    border, else 1 + the depth of the region that *surrounds* it (its majority
+    4-neighbour). A flood-fill / connected-components label map carries no contour
+    hierarchy, so we recover one cheaply here — one boundary-adjacency pass + a
+    parent-chain walk — so holes get a different colour from their parents."""
+    if n_regions <= 0:
+        return []
+    lab = labels.astype(np.int64)
+    base = n_regions + 1
+    border = set(int(v) for v in np.unique(np.concatenate(
+        [lab[0, :], lab[-1, :], lab[:, 0], lab[:, -1]])).tolist())
+    # shared-boundary length for each ordered neighbour pair (a, b), a != b.
+    counts = defaultdict(dict)
+    def accumulate(a, b):
+        m = a != b
+        if not m.any():
+            return
+        uk, uc = np.unique(a[m].ravel() * base + b[m].ravel(), return_counts=True)
+        for k, c in zip(uk.tolist(), uc.tolist()):
+            av, bv = divmod(k, base)
+            counts[av][bv] = counts[av].get(bv, 0) + int(c)
+    accumulate(lab[:, :-1], lab[:, 1:]); accumulate(lab[:, 1:], lab[:, :-1])
+    accumulate(lab[:-1, :], lab[1:, :]); accumulate(lab[1:, :], lab[:-1, :])
+    # parent = the non-background neighbour sharing the most boundary
+    parent = {}
+    for r in range(1, n_regions + 1):
+        if r in border:
+            continue
+        nb = [(c, b) for b, c in counts.get(r, {}).items() if b not in (0, r)]
+        if nb:
+            parent[r] = max(nb)[1]
+    depth = {}
+    def depth_of(r, seen):
+        if r in border or r not in parent:
+            return 0
+        if r in depth:
+            return depth[r]
+        if r in seen:               # cycle guard -> treat as root
+            return 0
+        seen.add(r)
+        depth[r] = 1 + depth_of(parent[r], seen)
+        return depth[r]
+    return [depth_of(r, set()) for r in range(1, n_regions + 1)]
+
+
 def _labels_to_payload(labels, n_regions, img, background):
     """Turn an int label image (1..n_regions, 0 = none) into a CONTOURS payload:
-    one outer contour per connected region, drawn on `background` for inspection."""
-    contours = []
+    one outer contour per connected region, drawn on `background` for inspection.
+    Region nesting depth is recovered so the preview colours holes vs parents."""
+    region_depth = _region_depths(labels, n_regions)
+    contours, depths = [], []
     for rid in range(1, n_regions + 1):
         cs, _ = cv2.findContours((labels == rid).astype(np.uint8),
                                  cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         contours.extend(cs)
+        depths.extend([region_depth[rid - 1]] * len(cs))
     n = len(contours)
     return {"contours": contours, "hierarchy": None,
-            "ids": list(range(n)), "depths": [0] * n,
+            "ids": list(range(n)), "depths": depths,
             "shape": img.shape, "background": background}
 
 
