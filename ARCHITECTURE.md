@@ -78,8 +78,9 @@ does not cycle at runtime.
 
 ## Canvas controls
 - **Right-drag** between two nodes: create a connection. Dropping on a full
-  single-input node **re-points** (rewires) it; connections that would form a
-  cycle are rejected.
+  single-input node **re-points** (rewires) it; dropping on a node the source is
+  **already connected to disconnects** it (toggle — `controller.is_connected` +
+  `canvas._disconnect`); connections that would form a cycle are rejected.
 - **Double-click** a node: open its inspector.
 - **Mouse wheel** over a batch node: scroll through its images (the frame index
   is shared with the inspector pane's slider).

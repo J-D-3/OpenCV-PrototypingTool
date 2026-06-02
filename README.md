@@ -30,11 +30,12 @@ python main.py [optional\path\to\image.png]
 ```
 
 Canvas controls: right-drag to connect nodes (drop on a full single-input node
-to rewire it), double-click to inspect a node, **mouse-wheel over a batch node**
-to scroll its images, **Delete** to remove selected nodes/arrows, **S** to swap
-a binary op's inputs, and **Save/Load Pipeline** (sidebar) to persist a graph to
-JSON. Each node shows an operation-specific icon; batch nodes show an `i/N`
-frame badge.
+to rewire it; **right-drag onto a node a source is already connected to to
+disconnect it**), double-click to inspect a node, **mouse-wheel over a batch
+node** to scroll its images, **Delete** to remove selected nodes/arrows, **S**
+to swap a binary op's inputs, and **Save/Load Pipeline** (sidebar) to persist a
+graph to JSON. Each node shows an operation-specific icon; batch nodes show an
+`i/N` frame badge.
 
 The **right-hand Inspector pane** always follows the selected node and stacks:
 an image view (output / `render_preview`); a pixel-neighbourhood view (3/9/27/81
@@ -46,11 +47,17 @@ toggles and draggable min/max ranges that mask the image to in-range pixels.
 
 ## Project layout
 
+The code is split into a **Qt-free backend (`core/`)** and a **PyQt6 frontend
+(`ui/`)**; `core/` never imports `ui/`. See [ARCHITECTURE.md](ARCHITECTURE.md)
+for the full file map and "where to change things".
+
 | Path | Role |
 |------|------|
-| `operations.py` | **Qt-free** operation registry. Each `Operation` is declared once (id, label, category, input/output ports, parameter schema, `compute(inputs, params)`, plus optional `render_preview`/`summary` hooks for inspection). The sidebar tree and node factory are generated from this registry, so adding a function = adding one entry here. Importable and unit-testable without a GUI. |
-| `node.py` | Qt node layer — `Node` base, `ImageNode`, a single Operation-driven `FunctionNode`, and a thin `SaveToFileNode` (side-effecting save) |
-| `main.py` | GUI shell — main window, registry-generated sidebar tree, graphics canvas (grid snap, drag-drop, arrow creation), image viewer, parameter panels |
+| `core/operations.py` | **Qt-free** operation registry. Each `Operation` is declared once (id, label, category, input/output ports, parameter schema, `compute(inputs, params)`, plus optional `render_preview`/`summary`/`out_space`/`space_aware`/`variadic`/`raw` hooks). The sidebar tree, node factory, parameter panel, evaluation, and inspection are all generated from this registry, so adding a function = adding one entry here. |
+| `core/` | Backend: `graph.py` (topology), `engine.py` (DAG evaluator), `batch.py` (multi-image), `datatypes.py` (port types), `persistence.py` (JSON save/load). |
+| `ui/` | Frontend: `controller.py`, `nodes.py`, `node_icons.py`, `canvas.py`, `inspector_pane.py`, `viewer.py`, `parameters.py`, `main_window.py`, `image_utils.py`, `arrow.py`. |
+| `app.py` / `main.py` | Entrypoint (`app.py`) + thin launcher (`main.py`). |
+| `smoke_test.py` / `engine_test.py` | Headless GUI safety net + Qt-free backend tests. |
 | `output/` | Saved PNG outputs from the GUI (git-ignored) |
 | `requirements.txt` | Runtime dependencies |
 
@@ -62,7 +69,7 @@ avoids spurious file writes.
 
 ---
 
-## Project status (as of 2026-06-01)
+## Project status (as of 2026-06-02)
 
 This is a **working prototype** being revived. The environment is now set up
 (git + venv + pinned-ish deps), but the code carries prototype-era rough edges.
@@ -138,6 +145,27 @@ This is a **working prototype** being revived. The environment is now set up
       you can batch the outputs of separate sources/branches — without colliding
       with two-input ops like AND. (Enabled by `variadic`/`raw` op flags.)
 
+- [x] **More ops + UX polish.** Geometry: **Resize** (scale + interpolation
+      mode: AREA/LINEAR/CUBIC/…) and **Rotate** (angle + expand-canvas). Tone:
+      **Normalize** (stretch / equalize / CLAHE; luminance-only for color),
+      **Invert**, and **Local HDR** (Gaussian local mean/std normalization on
+      luminance — radius/amplitude/strength). Clustering: **Auto Cluster**
+      (auto-picks k from smoothed-histogram peaks, then k-means) and **Mean
+      Shift** (`cv2.pyrMeanShiftFiltering`). Contours now use **stable id-based
+      colors** (R G B C M Y) and **hierarchy/size ordering** (filled draws outer
+      first), preserved across filtering. Save-to-File **falls back to a node's
+      display preview** when it has no real image output (e.g. Filter Contours),
+      via an `ANY` input port. Inspector refinements (name-based channel colors,
+      wheel zoom-to-cursor, log histogram, range marker lines per channel,
+      freeze/release on click); the pinned inspector window's parameter view was
+      removed (params are edited only in the main window's panel). Open-Pipeline
+      defaults to `./test/pipelines`.
+- [x] **Disconnect by re-dragging.** Right-dragging a source onto a target it is
+      already connected to **toggles the connection off** (removes the edge +
+      arrow and re-evaluates downstream); the hover highlight shows an
+      already-connected target as a valid drop. (`controller.is_connected`,
+      `canvas._disconnect`.)
+
 All planned phases are complete. Adding a new operation is cheap: define one
 `Operation` in `core/operations.py` (+ optional `render_preview`/`summary`), and
 the sidebar, parameter panel, evaluation, and inspection all follow — see
@@ -156,6 +184,18 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-02** — Added Geometry **Resize** (scale + interpolation mode) and
+  **Rotate** (angle + expand); tone ops **Normalize** (stretch/equalize/CLAHE),
+  **Invert**, and **Local HDR**; clustering ops **Auto Cluster** (histogram-peak
+  k detection) and **Mean Shift**. Contours got stable id-based colors
+  (R G B C M Y) and hierarchy/size ordering preserved across filtering;
+  Save-to-File falls back to a node's display preview (`ANY` input port). Many
+  inspector refinements (name-based channel colors, wheel zoom-to-cursor, log
+  histogram, per-channel range marker lines, freeze/release); removed the pinned
+  inspector window's parameter view; Open-Pipeline defaults to `./test/pipelines`.
+  Added **disconnect-by-re-dragging** (right-drag onto an already-connected target
+  toggles the edge off — `controller.is_connected` + `canvas._disconnect`).
+  Suites: 23 smoke checks + 21 engine tests.
 - **2026-06-01** — Revival started: git init, Python 3.13 venv, requirements,
   `.gitignore`, and this README added. Added headless smoke test. Refactored
   `node.py` (removed duplicate-import concatenation) and removed dead code
