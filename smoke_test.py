@@ -671,6 +671,31 @@ def check_save_nonimage(app) -> None:
     print("OK  save-to-file falls back to the display image (e.g. contours)")
 
 
+def check_disconnect(app) -> None:
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    blur = add_func(w, "Blur")
+    view = w.drop_widget.view
+    model = view.controller.model
+
+    connect(w, src, blur)
+    app.processEvents()
+    assert view.controller.is_connected(src, blur)
+    assert blur.get_output_image() is not None
+
+    # Right-dragging the same source onto the connected target disconnects it.
+    connect(w, src, blur)
+    app.processEvents()
+    assert not view.controller.is_connected(src, blur), "second drag should disconnect"
+    assert len(model.incoming(blur.gnode)) == 0
+    assert blur.get_output_image() is None, "downstream should re-evaluate after disconnect"
+    # the arrow is gone from the scene
+    from ui.arrow import ArrowItem
+    assert not any(isinstance(it, ArrowItem) for it in view._scene.items()), "arrow not removed"
+    w.close()
+    print("OK  drag-to-toggle disconnects an existing connection")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -690,6 +715,7 @@ def main() -> int:
         check_segmentation_chain,
         check_fourier_chain,
         check_rewire,
+        check_disconnect,
         check_inspector_pane,
         check_batch,
         check_create_batch,

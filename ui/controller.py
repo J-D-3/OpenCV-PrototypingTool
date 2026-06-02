@@ -77,6 +77,10 @@ class GraphController:
         self._qt_by_gid.pop(gn.id, None)
         self._recompute(commit=True)
 
+    def is_connected(self, src_qt, dst_qt) -> bool:
+        gs, gd = src_qt.gnode, dst_qt.gnode
+        return any(e.src is gs and e.dst is gd for e in self.model.edges)
+
     def delete_edge(self, src_qt, dst_qt) -> None:
         self.model.remove_edge(src_qt.gnode, dst_qt.gnode)
         self._recompute(commit=True)

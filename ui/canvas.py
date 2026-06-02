@@ -306,19 +306,26 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         if isinstance(source, SaveToFileNode):
             return False
 
+        # Already connected -> dragging again disconnects (still a valid action).
+        if self.controller.is_connected(source, target):
+            return True
         # Accept either a normal connection or a rewire of a full single-input node.
         if target.can_accept_input(source):
             return True
         return isinstance(target, FunctionNode) and self.controller.can_rewire(source, target)
-    
+
     def _get_connection_type(self, source: Optional[Node], target: Optional[Node]) -> str:
         """Get the type of connection: 'valid', 'invalid', or 'implicit_conversion'."""
         if source is None or target is None:
             return 'invalid'
-        
+
         # Check if source is SaveToFile (not allowed as source)
         if isinstance(source, SaveToFileNode):
             return 'invalid'
+
+        # Already connected -> dragging again disconnects.
+        if self.controller.is_connected(source, target):
+            return 'valid'
 
         # Check if target can accept input from source
         if not target.can_accept_input(source):
@@ -369,13 +376,22 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         else:
             return  # Invalid arrow combination
         
-        if target_node.can_accept_input(source_node):
+        if self.controller.is_connected(source_node, target_node):
+            # Dragging onto an already-connected target toggles the link off.
+            self._disconnect(source_node, target_node)
+        elif target_node.can_accept_input(source_node):
             # Create the arrow and register the connection.
             self._scene.addItem(ArrowItem(source_node, target_node))
             target_node.add_input_connection(source_node)
         elif self.controller.can_rewire(source_node, target_node):
             # Target's single input is full -> re-point it at the new source.
             self._rewire(source_node, target_node)
+
+    def _disconnect(self, source_node: Node, target_node: Node) -> None:
+        for arrow in list(target_node._arrows):
+            if source_node in (arrow.a, arrow.b) and target_node in (arrow.a, arrow.b):
+                self._detach_arrow(arrow)
+        self.controller.delete_edge(source_node, target_node)
 
     def _rewire(self, source_node: Node, target_node: Node) -> None:
         """Replace a full single-input node's connection with one from source_node."""
