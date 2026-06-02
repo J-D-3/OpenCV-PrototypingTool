@@ -21,7 +21,8 @@ class ParameterPanel(QtWidgets.QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(5)   # tight inter-row spacing
         self._node = None
-        self._loading = False   # suppress callbacks while populating
+        self._loading = False        # suppress callbacks while populating
+        self._suppress_slider = False  # set while a typed value snaps the slider
 
     # --- public API --------------------------------------------------------
     def clear(self) -> None:
@@ -79,11 +80,62 @@ class ParameterPanel(QtWidgets.QWidget):
             h.addWidget(lbl)
         return h
 
-    def _value_label(self, text: str) -> QtWidgets.QLabel:
-        rd = QtWidgets.QLabel(text)
-        rd.setMinimumWidth(self.VALUE_W)
-        rd.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        return rd
+    def _value_field(self, text: str) -> QtWidgets.QLineEdit:
+        """An editable value field shown next to a slider (type an exact value)."""
+        f = QtWidgets.QLineEdit(text)
+        f.setMinimumWidth(self.VALUE_W)
+        f.setMaximumWidth(88)
+        f.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        return f
+
+    def _add_slider_row(self, spec, value, *, pos_min, pos_max, to_val, to_pos,
+                        fmt, parse, live, odd=False) -> None:
+        """A label + slider + editable value field. ``to_val``/``to_pos`` map
+        between the slider position and the parameter value; ``fmt``/``parse``
+        between the value and the field text. Dragging the slider commits on
+        release (or live for every step if ``live``); typing in the field commits
+        the exact value immediately and snaps the slider to the nearest position."""
+        row = self._row(spec)
+        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        slider.setRange(pos_min, pos_max)
+        slider.setValue(to_pos(value))               # set before connecting
+        field = self._value_field(fmt(value))
+        state = {"v": value}
+
+        def commit(v):
+            state["v"] = v
+            self._commit(spec.name, v, commit=True)
+
+        def on_slider(pos):
+            if self._suppress_slider:
+                return
+            if odd and pos % 2 == 0:
+                slider.setValue(pos + 1 if pos < pos_max else pos - 1)
+                return
+            v = to_val(pos)
+            field.setText(fmt(v))
+            if live or not slider.isSliderDown():
+                commit(v)
+
+        def on_field():
+            v = parse(field.text())
+            if v is None:                            # invalid -> revert
+                field.setText(fmt(state["v"]))
+                return
+            if v == state["v"]:                      # unchanged -> no recompute
+                field.setText(fmt(v))
+                return
+            self._suppress_slider = True             # move slider without re-committing
+            slider.setValue(to_pos(v))
+            self._suppress_slider = False
+            field.setText(fmt(v))
+            commit(v)                                # commit the *exact* typed value
+
+        slider.valueChanged.connect(on_slider)
+        slider.sliderReleased.connect(lambda: commit(to_val(slider.value())))
+        field.editingFinished.connect(on_field)
+        row.addWidget(slider, 1)
+        row.addWidget(field)
 
     def _add_control(self, spec, value) -> None:
         kind = spec.kind
@@ -98,91 +150,76 @@ class ParameterPanel(QtWidgets.QWidget):
         else:  # "str" / "path"
             self._add_text(spec, value, browse=(kind == "path"))
 
+    @staticmethod
+    def _fmt_thousands(v) -> str:
+        # Thousands separator is a dot (e.g. 1.000.000), no decimals.
+        return f"{int(v):,}".replace(",", ".")
+
     def _add_int(self, spec, value) -> None:
         lo = int(spec.min if spec.min is not None else 0)
         hi = int(spec.max if spec.max is not None else 100)
         if getattr(spec, "log", False):
             self._add_log_int(spec, value, lo, hi)
             return
-        row = self._row(spec)
-        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        slider.setRange(lo, hi)
-        slider.setValue(int(value))
-        readout = self._value_label(str(int(value)))
 
-        def on_change(v):
-            if spec.odd and v % 2 == 0:
-                v = v + 1 if v < hi else v - 1
-                slider.setValue(v)   # re-fires on_change with an odd value
-                return
-            readout.setText(str(v))
-            # Only recompute live for non-drag changes (keyboard / click / wheel).
-            # A mouse drag updates the label but defers the eval to release.
-            if not slider.isSliderDown():
-                self._commit(spec.name, v, commit=True)
+        def parse(t):
+            try:
+                return max(lo, min(hi, int(t.strip())))
+            except (ValueError, AttributeError):
+                return None
 
-        slider.valueChanged.connect(on_change)
-        slider.sliderReleased.connect(lambda: self._commit(spec.name, slider.value(), commit=True))
-        row.addWidget(slider, 1)
-        row.addWidget(readout)
+        self._add_slider_row(
+            spec, int(value), pos_min=lo, pos_max=hi,
+            to_val=lambda p: int(p),
+            to_pos=lambda v: max(lo, min(hi, int(round(v)))),
+            fmt=lambda v: str(int(v)), parse=parse,
+            live=getattr(spec, "live", False), odd=bool(spec.odd))
 
     def _add_log_int(self, spec, value, lo, hi) -> None:
         """Integer slider with a logarithmic response: fine control near the low
         end (small features), coarse near the top. For wide-range area filters."""
-        row = self._row(spec)
         lo_eff = max(1, lo)               # log needs a positive lower bound
         hi_eff = max(lo_eff + 1, hi)
         ln_lo, ln_hi = math.log(lo_eff), math.log(hi_eff)
         steps = 1000
-        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        slider.setRange(0, steps)
 
         def to_val(pos):
-            v = int(round(math.exp(ln_lo + (pos / steps) * (ln_hi - ln_lo))))
-            return max(lo, min(hi, v))
+            return max(lo, min(hi, int(round(math.exp(ln_lo + (pos / steps) * (ln_hi - ln_lo))))))
 
         def to_pos(v):
             v = max(lo_eff, min(hi_eff, int(v)))
             return int(round(steps * (math.log(v) - ln_lo) / (ln_hi - ln_lo)))
 
-        slider.setValue(to_pos(value))
-        readout = self._value_label(f"{int(value):,}")   # show the true value at init
+        def parse(t):
+            try:                          # accept dotted thousands ("1.000.000")
+                return max(lo, min(hi, int(t.replace(".", "").replace(" ", "").strip())))
+            except (ValueError, AttributeError):
+                return None
 
-        def on_change(pos):
-            v = to_val(pos)
-            readout.setText(f"{v:,}")
-            if not slider.isSliderDown():
-                self._commit(spec.name, v, commit=True)
-
-        slider.valueChanged.connect(on_change)
-        slider.sliderReleased.connect(lambda: self._commit(spec.name, to_val(slider.value()), commit=True))
-        row.addWidget(slider, 1)
-        row.addWidget(readout)
+        self._add_slider_row(
+            spec, int(value), pos_min=0, pos_max=steps,
+            to_val=to_val, to_pos=to_pos,
+            fmt=self._fmt_thousands, parse=parse,
+            live=getattr(spec, "live", False))
 
     def _add_float(self, spec, value) -> None:
-        row = self._row(spec)
         lo = float(spec.min if spec.min is not None else 0.0)
         hi = float(spec.max if spec.max is not None else 1.0)
         step = float(spec.step or 0.01)
         steps = max(1, int(round((hi - lo) / step)))
-        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        slider.setRange(0, steps)
-        slider.setValue(max(0, min(steps, int(round((float(value) - lo) / step)))))
-        readout = self._value_label(f"{float(value):.2f}")
 
-        def to_val(pos):
-            return lo + pos * step
+        def parse(t):
+            try:
+                return max(lo, min(hi, float(t.strip())))
+            except (ValueError, AttributeError):
+                return None
 
-        def on_change(pos):
-            val = to_val(pos)
-            readout.setText(f"{val:.2f}")
-            if not slider.isSliderDown():
-                self._commit(spec.name, val, commit=True)
-
-        slider.valueChanged.connect(on_change)
-        slider.sliderReleased.connect(lambda: self._commit(spec.name, to_val(slider.value()), commit=True))
-        row.addWidget(slider, 1)
-        row.addWidget(readout)
+        self._add_slider_row(
+            spec, float(value), pos_min=0, pos_max=steps,
+            to_val=lambda pos: lo + pos * step,
+            to_pos=lambda v: max(0, min(steps, int(round((float(v) - lo) / step)))),
+            fmt=lambda v: f"{float(v):.2f}", parse=parse,
+            live=getattr(spec, "live", False))
 
     def _add_bool(self, spec, value) -> None:
         # The checkbox carries its own label, so it sits on one line already.

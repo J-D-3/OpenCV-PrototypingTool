@@ -241,8 +241,8 @@ def check_parameter_panel(app) -> None:
     sliders = panel.findChildren(QtWidgets.QSlider)
     assert len(sliders) == 2, f"expected 2 area sliders, got {len(sliders)}"
     assert all(s.maximum() == 1000 for s in sliders), "log sliders use a 0..1000 position range"
-    labels = [lbl.text() for lbl in panel.findChildren(QtWidgets.QLabel)]
-    assert "100,000" in labels, f"max_area readout should show the true default, got {labels}"
+    fields = [f.text() for f in panel.findChildren(QtWidgets.QLineEdit)]
+    assert "100.000" in fields, f"max_area value field should show dotted default, got {fields}"
     panel.deleteLater()
 
     # An op with no parameters should produce no controls.
