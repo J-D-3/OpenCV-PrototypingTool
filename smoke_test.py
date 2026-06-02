@@ -72,6 +72,7 @@ def add_func(window, label) -> FunctionNode:
 def connect(window, src: Node, dst: Node) -> None:
     """Connect via the real GUI path (creates an ArrowItem + registers input)."""
     window.drop_widget.view._create_arrow_between(src, dst)
+    window.drop_widget.view.controller.wait_idle()   # structural edits recompute async
 
 
 def gradient_bgr(h=120, w=160) -> np.ndarray:
@@ -333,7 +334,7 @@ def check_delete_node(app) -> None:
 
     view = w.drop_widget.view
     view._delete_node(src)
-    app.processEvents()
+    view.controller.wait_idle()
     assert src not in view._scene.items(), "deleted node still in scene"
     assert blur.get_output_image() is None, "downstream not re-evaluated after delete"
     w.close()
@@ -350,7 +351,7 @@ def check_input_swap(app) -> None:
     app.processEvents()
     before = diff.get_output_image().copy()      # 200-50 = 150
     assert w.drop_widget.view.controller.swap_inputs(diff)
-    app.processEvents()
+    w.drop_widget.view.controller.wait_idle()
     after = diff.get_output_image()               # 50-200 -> 0
     assert not np.array_equal(before, after), "input swap did not change result"
     w.close()
@@ -774,8 +775,15 @@ def check_background_eval(app) -> None:
     ctrl.wait_idle()
     out200 = blur.get_output_image()
     assert not np.array_equal(out30, out200), "coalesced edits should reach the latest value"
+
+    # Structural edits (connect/delete) recompute on the background thread too.
+    inv = add_func(w, "Invert")
+    w.drop_widget.view._create_arrow_between(blur, inv)   # raw connect (no wait)
+    assert ctrl._busy or inv._executing, "connect should trigger a background recompute"
+    ctrl.wait_idle()
+    assert inv.get_output_image() is not None, "downstream of an async connect should compute"
     w.close()
-    print("OK  background eval: off-thread recompute + spinner + coalescing")
+    print("OK  background eval: off-thread recompute (param + connect) + spinner + coalescing")
 
 
 def main() -> int:

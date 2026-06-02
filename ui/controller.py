@@ -83,26 +83,29 @@ class GraphController:
         gn = getattr(qt_node, "gnode", None)
         if gn is None:
             return
+        self.wait_idle()             # never mutate topology under a running eval
         self.model.remove_node(gn)
         self._qt_by_gid.pop(gn.id, None)
-        self._recompute(commit=True)
+        self._recompute_async(commit=True)
 
     def is_connected(self, src_qt, dst_qt) -> bool:
         gs, gd = src_qt.gnode, dst_qt.gnode
         return any(e.src is gs and e.dst is gd for e in self.model.edges)
 
     def delete_edge(self, src_qt, dst_qt) -> None:
+        self.wait_idle()
         self.model.remove_edge(src_qt.gnode, dst_qt.gnode)
-        self._recompute(commit=True)
+        self._recompute_async(commit=True)
 
     def swap_inputs(self, qt_node) -> bool:
         """Swap the two incoming edges of a 2-input node (e.g. Diff A<->B)."""
         edges = self.model.incoming(qt_node.gnode)
         if len(edges) != 2:
             return False
+        self.wait_idle()
         edges[0].dst_port, edges[1].dst_port = edges[1].dst_port, edges[0].dst_port
         self.model.mark_dirty(qt_node.gnode)
-        self._recompute(commit=True)
+        self._recompute_async(commit=True)
         return True
 
     # --- topology / parameters --------------------------------------------
@@ -140,10 +143,11 @@ class GraphController:
     def replace_input(self, src_qt, dst_qt) -> None:
         """Replace a single-input node's connection with one from src_qt."""
         gn = dst_qt.gnode
+        self.wait_idle()
         for edge in list(self.model.incoming(gn)):
             self.model.remove_edge(edge.src, gn)
         self.model.add_edge(src_qt.gnode, gn, 0)
-        self._recompute(commit=True)
+        self._recompute_async(commit=True)
 
     def _output_type(self, qt) -> str:
         gn = qt.gnode
@@ -154,8 +158,9 @@ class GraphController:
     def connect(self, src_qt, dst_qt) -> bool:
         if not self.can_connect(src_qt, dst_qt):
             return False
+        self.wait_idle()
         self.model.add_edge(src_qt.gnode, dst_qt.gnode)
-        self._recompute(commit=True)
+        self._recompute_async(commit=True)
         return True
 
     def set_param(self, qt_node, name, value, commit: bool) -> None:
