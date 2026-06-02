@@ -1067,21 +1067,21 @@ OPS: list = [
         out_space="bgr", variadic=True, raw=True,
     ),
     Operation(
-        id="to_grayscale", label="To Grayscale", category="Conversions",
+        id="to_grayscale", label="To Grayscale", category="Color Spaces",
         inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE_GRAY)],
         params=[], compute=_compute_to_grayscale, color=(96, 96, 96),
         in_label="Mat (any)", out_label="Mat (Gray)",
         out_space="gray", space_aware=True,
     ),
     Operation(
-        id="to_bgr", label="To BGR", category="Conversions",
+        id="to_bgr", label="To BGR", category="Color Spaces",
         inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE_BGR)],
         params=[], compute=_compute_to_bgr, color=(33, 150, 243),
         in_label="Mat (any)", out_label="Mat (BGR)",
         out_space="bgr", space_aware=True,
     ),
     Operation(
-        id="blur", label="Blur", category="Local Operations",
+        id="blur", label="Blur", category="Filtering & Morphology",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[ParamSpec("kernel_size", 15, kind="int", min=1, max=101, step=2, odd=True,
                           label="Kernel Size")],
@@ -1089,7 +1089,7 @@ OPS: list = [
         in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
-        id="threshold", label="Threshold", category="Local Operations",
+        id="threshold", label="Threshold", category="Thresholding",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[
             ParamSpec("threshold_value", 127, kind="int", min=0, max=255, label="Threshold Value"),
@@ -1101,7 +1101,7 @@ OPS: list = [
         in_label="Mat (Gray)", out_label="Mat (Binary/Gray)",
     ),
     Operation(
-        id="adaptive_threshold", label="Adaptive Threshold", category="Local Operations",
+        id="adaptive_threshold", label="Adaptive Threshold", category="Thresholding",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[
             ParamSpec("max_value", 255, kind="int", min=1, max=255, label="Max Value"),
@@ -1117,7 +1117,7 @@ OPS: list = [
         in_label="Mat (Gray)", out_label="Mat (Binary)",
     ),
     Operation(
-        id="gaussian_blur", label="Gaussian Blur", category="Local Operations",
+        id="gaussian_blur", label="Gaussian Blur", category="Filtering & Morphology",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[
             ParamSpec("kernel_size", 5, kind="int", min=1, max=51, step=2, odd=True,
@@ -1128,7 +1128,7 @@ OPS: list = [
         in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
-        id="morphology", label="Morphology", category="Local Operations",
+        id="morphology", label="Morphology", category="Filtering & Morphology",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[
             ParamSpec("operation", cv2.MORPH_ERODE, kind="enum",
@@ -1140,7 +1140,7 @@ OPS: list = [
         in_label="Mat (Binary/Gray)", out_label="Mat (Binary/Gray)",
     ),
     Operation(
-        id="canny", label="Canny Edges", category="Local Operations",
+        id="canny", label="Canny Edges", category="Edges & Gradients",
         inputs=[Port("in")], outputs=[Port("out", datatypes.IMAGE_BINARY)],
         params=[
             ParamSpec("threshold1", 100, kind="int", min=0, max=500, label="Threshold 1"),
@@ -1151,7 +1151,7 @@ OPS: list = [
         in_label="Mat (Gray)", out_label="Mat (Binary edges)",
     ),
     Operation(
-        id="sobel", label="Sobel", category="Local Operations",
+        id="sobel", label="Sobel", category="Edges & Gradients",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[
             ParamSpec("dx", 1, kind="int", min=0, max=2, label="dx (x order)"),
@@ -1162,7 +1162,7 @@ OPS: list = [
         in_label="Mat (Gray)", out_label="Mat (Gray gradient)",
     ),
     Operation(
-        id="laplacian", label="Laplacian", category="Local Operations",
+        id="laplacian", label="Laplacian", category="Edges & Gradients",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[ParamSpec("ksize", 3, kind="int", min=1, max=31, step=2, odd=True,
                           label="Kernel Size")],
@@ -1170,7 +1170,7 @@ OPS: list = [
         in_label="Mat (Gray)", out_label="Mat (Gray gradient)",
     ),
     Operation(
-        id="normalize", label="Normalize", category="Local Operations",
+        id="normalize", label="Normalize", category="Intensity & Enhancement",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[ParamSpec("mode", "stretch", kind="choice",
                           choices=_NORMALIZE_MODES, label="Mode")],
@@ -1178,13 +1178,13 @@ OPS: list = [
         in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
-        id="invert", label="Invert", category="Local Operations",
+        id="invert", label="Invert", category="Intensity & Enhancement",
         inputs=[Port("in")], outputs=[Port("out")], params=[],
         compute=_compute_invert, color=(69, 90, 100), out_space="passthrough",
         in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
-        id="local_hdr", label="Local HDR", category="Local Operations",
+        id="local_hdr", label="Local HDR", category="Intensity & Enhancement",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[
             ParamSpec("radius", 25, kind="int", min=2, max=120, label="Radius"),
@@ -1195,7 +1195,7 @@ OPS: list = [
         in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
-        id="mser", label="MSER", category="Local Operations",
+        id="mser", label="MSER", category="Regions & Contours",
         inputs=[Port("in")], outputs=[Port("out")],
         params=[
             ParamSpec("delta", 5, kind="int", min=1, max=20, label="Delta"),
@@ -1214,7 +1214,7 @@ OPS: list = [
         in_label="Mat (Gray)", out_label="Mat (BGR)",
     ),
     Operation(
-        id="sum", label="Sum", category="Arithmetic Operations",
+        id="sum", label="Sum", category="Arithmetic",
         inputs=[Port("a"), Port("b")], outputs=[Port("out")],
         params=[ParamSpec("alpha", 0.5, kind="float", min=0.0, max=1.0, step=0.01,
                           label="Alpha (Weight)")],
@@ -1222,20 +1222,20 @@ OPS: list = [
         in_label="Mat (BGR/Gray) + Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
-        id="and", label="AND", category="Arithmetic Operations",
+        id="and", label="AND", category="Arithmetic",
         inputs=[Port("a"), Port("b")], outputs=[Port("out")], params=[],
         compute=_compute_and, color=(0, 0, 139), out_space="passthrough",
         in_label="Mat (BGR/Gray) & Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
-        id="diff", label="Diff", category="Arithmetic Operations",
+        id="diff", label="Diff", category="Arithmetic",
         inputs=[Port("a"), Port("b")], outputs=[Port("out")], params=[],
         compute=_compute_diff, color=(220, 20, 60), out_space="passthrough",
         in_label="Mat (BGR/Gray) - Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     # --- Color & Clustering ------------------------------------------------
     Operation(
-        id="to_hls", label="To HSL", category="Conversions",
+        id="to_hls", label="To HSL", category="Color Spaces",
         inputs=[Port("in", datatypes.IMAGE)],
         outputs=[Port("out", datatypes.IMAGE)], params=[],
         compute=_compute_to_hls, color=(255, 87, 34),
@@ -1243,7 +1243,7 @@ OPS: list = [
         out_space="hls", space_aware=True,
     ),
     Operation(
-        id="kmeans", label="K-Means Cluster", category="Color & Clustering",
+        id="kmeans", label="K-Means Cluster", category="Color Quantization",
         inputs=[Port("in", datatypes.IMAGE)],
         outputs=[Port("out", datatypes.CLUSTERS)],
         params=[
@@ -1259,7 +1259,7 @@ OPS: list = [
         render_preview=_render_kmeans, summary=_summary_kmeans,
     ),
     Operation(
-        id="auto_cluster", label="Auto Cluster", category="Color & Clustering",
+        id="auto_cluster", label="Auto Cluster", category="Color Quantization",
         inputs=[Port("in", datatypes.IMAGE)],
         outputs=[Port("out", datatypes.CLUSTERS)],
         params=[
@@ -1280,14 +1280,14 @@ OPS: list = [
         render_preview=_render_kmeans, summary=_summary_kmeans,
     ),
     Operation(
-        id="reduce_colors", label="Reduce Colors", category="Color & Clustering",
+        id="reduce_colors", label="Reduce Colors", category="Color Quantization",
         inputs=[Port("in", datatypes.CLUSTERS)],
         outputs=[Port("out", datatypes.IMAGE)], params=[],
         compute=_compute_reduce_colors, color=(0, 150, 136), out_space="passthrough",
         in_label="Clusters", out_label="Mat (quantized)",
     ),
     Operation(
-        id="mean_shift", label="Mean Shift", category="Color & Clustering",
+        id="mean_shift", label="Mean Shift", category="Color Quantization",
         inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE_BGR)],
         params=[
             ParamSpec("spatial", 20, kind="int", min=2, max=50, label="Spatial radius"),
@@ -1320,7 +1320,7 @@ OPS: list = [
     ),
     # --- Contours ----------------------------------------------------------
     Operation(
-        id="find_contours", label="Find Contours", category="Contours",
+        id="find_contours", label="Find Contours", category="Regions & Contours",
         inputs=[Port("in", datatypes.IMAGE)],
         outputs=[Port("out", datatypes.CONTOURS)],
         params=[
@@ -1333,7 +1333,7 @@ OPS: list = [
         render_preview=_render_find_contours, summary=_summary_find_contours,
     ),
     Operation(
-        id="label_regions", label="Flood Fill", category="Contours",
+        id="label_regions", label="Flood Fill", category="Regions & Contours",
         inputs=[Port("in", datatypes.IMAGE)],
         outputs=[Port("out", datatypes.CONTOURS)],
         params=[
@@ -1349,7 +1349,7 @@ OPS: list = [
         render_preview=_render_find_contours, summary=_summary_find_contours,
     ),
     Operation(
-        id="connected_components", label="Connected Components", category="Contours",
+        id="connected_components", label="Connected Components", category="Regions & Contours",
         inputs=[Port("in", datatypes.IMAGE)],
         outputs=[Port("out", datatypes.CONTOURS)],
         params=[
@@ -1365,7 +1365,7 @@ OPS: list = [
                     "any non-zero pixel; each blob becomes one region/contour.",
     ),
     Operation(
-        id="contour_filter", label="Filter Contours", category="Contours",
+        id="contour_filter", label="Filter Contours", category="Regions & Contours",
         inputs=[Port("in", datatypes.CONTOURS)],
         outputs=[Port("out", datatypes.CONTOURS)],
         params=[
@@ -1379,7 +1379,7 @@ OPS: list = [
     ),
     # --- Fourier -----------------------------------------------------------
     Operation(
-        id="dft", label="DFT", category="Fourier",
+        id="dft", label="DFT", category="Frequency (Fourier)",
         inputs=[Port("in", datatypes.IMAGE)],
         outputs=[Port("out", datatypes.SPECTRUM)], params=[],
         compute=_compute_dft, color=(121, 85, 72),
@@ -1387,7 +1387,7 @@ OPS: list = [
         render_preview=_render_dft, summary=_summary_dft,
     ),
     Operation(
-        id="idft", label="Inverse DFT", category="Fourier",
+        id="idft", label="Inverse DFT", category="Frequency (Fourier)",
         inputs=[Port("in", datatypes.SPECTRUM)],
         outputs=[Port("out", datatypes.IMAGE_FLOAT)], params=[],
         compute=_compute_idft, color=(121, 85, 72),
@@ -1404,18 +1404,22 @@ OPS: list = [
     ),
 ]
 
-# Categories shown in the sidebar, in order. Geometry/Fourier are intentionally
-# present-but-empty placeholders (populated in Phase 6).
+# Categories shown in the sidebar, grouped by intent (roughly the order a
+# pipeline flows: load -> colour/filter/threshold -> arithmetic/geometry ->
+# segmentation/regions -> analysis/output).
 CATEGORY_ORDER = [
     "Input/Output",
-    "Conversions",
+    "Color Spaces",
+    "Filtering & Morphology",
+    "Edges & Gradients",
+    "Thresholding",
+    "Intensity & Enhancement",
+    "Arithmetic",
     "Geometry",
-    "Arithmetic Operations",
-    "Local Operations",
+    "Color Quantization",
+    "Regions & Contours",
+    "Frequency (Fourier)",
     "Analysis",
-    "Color & Clustering",
-    "Contours",
-    "Fourier",
 ]
 
 REGISTRY = {op.id: op for op in OPS}
