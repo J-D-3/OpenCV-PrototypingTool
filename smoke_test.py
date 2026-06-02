@@ -203,16 +203,20 @@ def check_save_to_file(app) -> None:
 def check_inspector(app) -> None:
     w = make_window(app)
     src = add_image(w, gradient_bgr())
-    gray = add_func(w, "To Grayscale")
-    connect(w, src, gray)
+    thresh = add_func(w, "Threshold")     # an op with parameters
+    connect(w, src, thresh)
     app.processEvents()
-    viewer = ImageViewerWindow(gray)
+    viewer = ImageViewerWindow(thresh)
     viewer.show()
     app.processEvents()
-    assert not viewer.image_label.pixmap().isNull(), "inspector showed no pixmap"
+    assert not viewer._image._pixmap.isNull(), "inspector showed no image"
+    assert "×" in viewer._meta.text(), "inspector should show size metadata"
+    assert viewer._params is not None, "inspector should show the node's parameters"
+    viewer._on_hover(3, 4)
+    assert "x=3 y=4" in viewer._readout.text(), "inspector should show the pixel readout"
     viewer.close()
     w.close()
-    print("OK  inspector window renders a node's output")
+    print("OK  dedicated inspector: image, metadata, params, pixel readout")
 
 
 def check_parameter_panel(app) -> None:
@@ -279,7 +283,7 @@ def check_preview_and_summary(app) -> None:
     viewer = ImageViewerWindow(blur)
     viewer.show()
     app.processEvents()
-    assert viewer.summary_label.isVisible() and "pixels" in viewer.summary_label.text()
+    assert viewer._summary.isVisible() and "pixels" in viewer._summary.text()
     viewer.close()
     w.close()
     print("OK  inspector is signal-driven and uses render_preview + summary")

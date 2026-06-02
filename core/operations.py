@@ -612,6 +612,14 @@ def _compute_normalize(inputs, p):
         return None
 
 
+def _compute_invert(inputs, p):
+    try:
+        return cv2.bitwise_not(inputs[0])
+    except Exception as e:
+        print(f"Error executing invert: {e}")
+        return None
+
+
 def _compute_histogram(inputs, p):
     """Per-channel intensity histogram. Output is a HISTOGRAM payload."""
     try:
@@ -860,6 +868,12 @@ OPS: list = [
         params=[ParamSpec("mode", "stretch", kind="choice",
                           choices=_NORMALIZE_MODES, label="Mode")],
         compute=_compute_normalize, color=(0, 121, 107), out_space="passthrough",
+        in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
+    ),
+    Operation(
+        id="invert", label="Invert", category="Local Operations",
+        inputs=[Port("in")], outputs=[Port("out")], params=[],
+        compute=_compute_invert, color=(69, 90, 100), out_space="passthrough",
         in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(

@@ -224,9 +224,19 @@ class MainWindow(QtWidgets.QMainWindow):
         if qt_node is self.inspector_pane._node:
             self.inspector_pane.refresh()
 
+    @staticmethod
+    def _pipeline_dir() -> str:
+        """Default directory for the pipeline dialogs (created if missing)."""
+        d = Path("test") / "pipelines"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return str(d)
+
     def save_pipeline(self) -> None:
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save Pipeline", "", "Pipeline (*.json);;All Files (*)")
+            self, "Save Pipeline", self._pipeline_dir(), "Pipeline (*.json);;All Files (*)")
         if not path:
             return
         if not path.lower().endswith(".json"):
@@ -239,7 +249,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def load_pipeline(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Load Pipeline", "", "Pipeline (*.json);;All Files (*)")
+            self, "Load Pipeline", self._pipeline_dir(), "Pipeline (*.json);;All Files (*)")
         if not path:
             return
         try:

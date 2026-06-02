@@ -364,6 +364,18 @@ def test_normalize():
     print("OK  normalize: stretch expands range; equalize/clahe run (gray + color)")
 
 
+def test_invert():
+    img = np.full((5, 5, 3), (10, 20, 30), np.uint8)
+    m = GraphModel()
+    s = _src(m, img)
+    n = _op(m, "invert")
+    m.add_edge(s, n)
+    Engine(m).evaluate_all()
+    assert n.output is not None and tuple(int(v) for v in n.output[0, 0]) == (245, 235, 225), \
+        "invert should be 255 - value"
+    print("OK  invert: 255 - value")
+
+
 def test_cycle_prevention():
     m = GraphModel()
     a = _op(m, "blur")
@@ -391,8 +403,9 @@ def main():
     test_resize()
     test_rotate()
     test_normalize()
+    test_invert()
     test_cycle_prevention()
-    print("\nENGINE OK: 17 backend tests passed")
+    print("\nENGINE OK: 18 backend tests passed")
 
 
 if __name__ == "__main__":
