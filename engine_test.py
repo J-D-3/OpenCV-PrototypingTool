@@ -183,6 +183,88 @@ def test_contours():
     print("OK  contours: stable id colours + depth/size draw order; filled preview")
 
 
+def test_label_regions():
+    # Three solid color blocks -> exactly three regions (exact-equality, delta=0).
+    img = np.zeros((60, 90, 3), np.uint8)
+    img[:, :30] = (200, 0, 0); img[:, 30:60] = (0, 200, 0); img[:, 60:] = (0, 0, 200)
+    m = GraphModel(); s = _src(m, img)
+    lr = _op(m, "label_regions", channel=-1, delta=0, connectivity=4)
+    m.add_edge(s, lr)
+    Engine(m).evaluate_all()
+    assert len(lr.output["contours"]) == 3, f"expected 3 regions, got {len(lr.output['contours'])}"
+    assert lr.output["shape"] == img.shape and lr.output["background"].ndim == 3
+
+    def regions(image, **params):
+        mm = GraphModel(); ss = _src(mm, image)
+        nn = _op(mm, "label_regions", **params); mm.add_edge(ss, nn)
+        Engine(mm).evaluate_all()
+        return len(nn.output["contours"])
+
+    # Connectivity: a color checkerboard splits on 4-conn, merges on 8-conn.
+    chk = np.zeros((40, 40, 3), np.uint8)
+    yy, xx = np.mgrid[0:40, 0:40]
+    chk[(yy // 10 + xx // 10) % 2 == 0] = (255, 255, 255)
+    n4, n8 = regions(chk, delta=0, connectivity=4), regions(chk, delta=0, connectivity=8)
+    assert n4 > n8, f"4-conn should split diagonal touches more than 8-conn ({n4} vs {n8})"
+
+    # Channel: same hue at two brightnesses is one region on H, two on full color.
+    red = np.zeros((30, 60, 3), np.uint8); red[:, :30] = (40, 40, 220); red[:, 30:] = (20, 20, 110)
+    assert regions(red, channel=0, delta=10) < regions(red, channel=-1, delta=10), \
+        "Hue channel should merge same-hue/different-brightness areas"
+
+    # Delta tolerance: near-equal grays merge as delta grows.
+    g = np.zeros((30, 60, 3), np.uint8); g[:, :30] = 100; g[:, 30:] = 112
+    assert regions(g, channel=-1, delta=4) == 2 and regions(g, channel=-1, delta=20) == 1
+
+    # Emits a CONTOURS payload that the Filter Contours node consumes.
+    flt = _op(m, "contour_filter", min_area=100, max_area=1_000_000)
+    m.add_edge(lr, flt)
+    Engine(m).evaluate_all()
+    assert len(flt.output["contours"]) == 3, "regions should flow into Filter Contours"
+    print("OK  label_regions: flood-fill regions (channel/delta/connectivity) -> contours")
+
+
+def test_connected_components():
+    # Two separated white squares on black -> two components.
+    img = np.zeros((40, 80), np.uint8)
+    img[8:24, 8:24] = 255
+    img[8:24, 48:64] = 255
+    m = GraphModel(); s = _src(m, img)
+    cc = _op(m, "connected_components", connectivity=8)
+    m.add_edge(s, cc)
+    Engine(m).evaluate_all()
+    assert len(cc.output["contours"]) == 2, f"expected 2 blobs, got {len(cc.output['contours'])}"
+
+    # delta==0 Label Regions should agree with connectedComponents on a binary
+    # image (both count the same connected blobs).
+    lr = _op(m, "label_regions", channel=1, delta=0, connectivity=8)
+    m.add_edge(s, lr)
+    Engine(m).evaluate_all()
+    bg = [c for c in lr.output["contours"] if cv2.contourArea(c) > 4]
+    assert len(bg) >= 2, "delta=0 label_regions should also find the two blobs"
+    print("OK  connected_components: binary blobs; delta=0 label_regions agrees")
+
+
+def test_codegen():
+    from core import codegen
+    m = GraphModel()
+    s = _src(m, np.zeros((20, 20, 3), np.uint8))
+    km = _op(m, "kmeans", k=4, cluster_space="lab", lum_weight=0.3)
+    rc = _op(m, "reduce_colors")
+    ex = _op(m, "export_code")
+    m.add_edge(s, km); m.add_edge(km, rc); m.add_edge(rc, ex)
+    code = codegen.generate_pseudocode(m, ex)
+    assert 'imread(' in code, "source should render as imread"
+    assert 'cv::kmeans' in code and 'KMEANS_PP_CENTERS' in code, "kmeans block missing"
+    assert "space='lab'" in code, "params should be reflected"
+    assert 'reduce_colors' not in code or 'reshape(shape)' in code, "reduce_colors custom block"
+    assert 'pipeline result ->' in code, "should name the result variable"
+    # Single-op tooltip pseudocode + description fallback to docstring.
+    assert 'cv::blur' in codegen.op_pseudocode(REGISTRY['blur'], {'kernel_size': 7})
+    assert codegen.op_description(REGISTRY['mean_shift']).lower().startswith('mean-shift')
+    print("OK  codegen: upstream walk -> pseudocode (cv:: + custom blocks + params)")
+
+
 def test_fourier_roundtrip():
     rng = np.arange(32 * 48, dtype=np.uint8).reshape(32, 48)  # deterministic gray image
     m = GraphModel()
@@ -433,6 +515,47 @@ def test_auto_cluster():
     print("OK  auto_cluster: detects cluster count from histogram peaks (per channel)")
 
 
+def _color_scene(light=False):
+    """4 distinct colored blobs on gray; optionally re-lit (gain + L->R ramp)."""
+    img = np.full((80, 80, 3), 110, np.uint8)
+    img[8:32, 8:32] = (40, 40, 200)
+    img[8:32, 48:72] = (40, 200, 40)
+    img[48:72, 8:32] = (200, 120, 40)
+    img[48:72, 48:72] = (40, 200, 200)
+    if not light:
+        return img
+    ramp = np.linspace(0.6, 1.5, img.shape[1])[None, :, None]
+    return np.clip(img.astype(np.float32) * 1.3 * ramp, 0, 255).astype(np.uint8)
+
+
+def test_cluster_space():
+    base = _color_scene()
+    m = GraphModel()
+    s = _src(m, base)
+    a = _op(m, "kmeans", k=5, cluster_space="lab", lum_weight=0.3)
+    b = _op(m, "kmeans", k=5, cluster_space="lab", lum_weight=0.3)
+    m.add_edge(s, a); m.add_edge(s, b)
+    Engine(m).evaluate_all()
+    # #2: same image -> identical labels (pinned RNG) and canonical dark->light order.
+    assert np.array_equal(a.output["labels"], b.output["labels"]), "labels must be reproducible"
+    lum = cv2.cvtColor(np.clip(a.output["centers"], 0, 255).astype(np.uint8)
+                       .reshape(1, -1, 3), cv2.COLOR_BGR2GRAY).ravel()
+    assert np.all(np.diff(lum) >= -1.0), f"centers should be ordered dark->light, got {lum}"
+
+    # #1: under realistic (non-uniform, multiplicative) lighting, chroma-weighted
+    # Lab clustering keeps blob labels far more stable than raw BGR.
+    from core.operations import _kmeans_clusters
+    def agree(space, w):
+        l1 = _kmeans_clusters(_color_scene(False), 5, space=space, lum_weight=w)["labels"]
+        l2 = _kmeans_clusters(_color_scene(True), 5, space=space, lum_weight=w)["labels"]
+        return (l1 == l2).mean()
+    bgr_agree, lab_agree = agree("bgr", 1.0), agree("lab", 0.2)
+    assert lab_agree > bgr_agree + 0.3, (
+        f"Lab+low-lum should beat BGR under lighting change "
+        f"(lab={lab_agree:.2f}, bgr={bgr_agree:.2f})")
+    print("OK  cluster space: Lab+lum-weight is lighting-stable; labels reproducible")
+
+
 def test_mean_shift():
     rng = np.random.RandomState(1)
     img = (rng.rand(40, 40, 3) * 255).astype(np.uint8)
@@ -468,6 +591,9 @@ def main():
     test_persistence_roundtrip()
     test_color_pipeline()
     test_contours()
+    test_label_regions()
+    test_connected_components()
+    test_codegen()
     test_fourier_roundtrip()
     test_more_ops()
     test_conversions()
@@ -479,9 +605,10 @@ def main():
     test_invert()
     test_local_hdr()
     test_auto_cluster()
+    test_cluster_space()
     test_mean_shift()
     test_cycle_prevention()
-    print("\nENGINE OK: 21 backend tests passed")
+    print("\nENGINE OK: 25 backend tests passed")
 
 
 if __name__ == "__main__":

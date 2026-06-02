@@ -18,6 +18,8 @@ Optional inspection hooks (used from Phase 4 onward):
 """
 from __future__ import annotations
 
+import threading
+
 import cv2
 import numpy as np
 from dataclasses import dataclass, field
@@ -25,6 +27,11 @@ from typing import Any, Callable, Optional
 
 from core import datatypes
 from core.batch import Batch
+
+# cv2.setRNGSeed sets *global* state, so k-means must be atomic with respect to
+# it. The engine maps batch elements across threads; this lock keeps parallel
+# k-means calls from corrupting each other's seeded run (determinism).
+_KMEANS_LOCK = threading.Lock()
 
 
 # --- Ports ------------------------------------------------------------------
@@ -51,6 +58,8 @@ class ParamSpec:
     choices: Optional[list] = None  # list of (label, value) for choice/enum
     label: Optional[str] = None  # display label; defaults to name.title()
     show: bool = True            # render a control in the parameter panel?
+    log: bool = False            # int slider: logarithmic response (fine at the
+                                 # low end) — for wide-range values like areas
 
 
 @dataclass
@@ -67,6 +76,9 @@ class Operation:
     out_label: str = ""
     render_preview: Optional[Callable[[list, Any, dict], np.ndarray]] = None
     summary: Optional[Callable[[Any, dict], dict]] = None
+    # Human description for the Function-info tooltip / code export. If empty,
+    # callers fall back to the first paragraph of ``compute.__doc__``.
+    description: str = ""
     # Color-space tracking (see core.engine): out_space is "bgr"|"gray"|"hls"|
     # "binary" (fixed), "passthrough" (= first input's space), or "auto" (infer
     # from the output array). space_aware ops receive the input space as a 3rd
@@ -280,23 +292,85 @@ def _compute_to_hls(inputs, p, in_space):
         return None
 
 
-def _kmeans_clusters(img, k, attempts=3):
-    """Run k-means on an image's pixels -> CLUSTERS payload."""
-    channels = img.shape[2] if img.ndim == 3 else 1
-    data = img.reshape(-1, channels).astype(np.float32)
+def _cluster_features(img, space, lum_weight, in_space="bgr"):
+    """Build the per-pixel features k-means clusters on. Clustering in Lab/HLS
+    and down-weighting luminance (``lum_weight`` < 1) makes the same physical
+    color land in the same cluster across lighting changes. Features affect only
+    the distance metric — cluster *colors* are still measured in the input space.
+    ``space`` == "bgr" has no separable luminance channel, so the weight is a
+    no-op there (the features are the raw input pixels)."""
+    bgr = _as_bgr(img, in_space)
+    if space == "lab":
+        conv, lum_idx = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB), 0
+    elif space == "hls":
+        conv, lum_idx = cv2.cvtColor(bgr, cv2.COLOR_BGR2HLS), 1
+    else:  # bgr
+        conv, lum_idx = bgr, None
+    feat = conv.reshape(-1, conv.shape[2]).astype(np.float32)
+    if lum_idx is not None:
+        feat = feat.copy()
+        feat[:, lum_idx] *= float(lum_weight)
+    return feat
+
+
+def _center_luminance(centers, in_space):
+    """Perceptual luminance of each (input-space) center — the canonical sort key,
+    so 'index 0 = darkest' holds regardless of clustering or input color space."""
+    c = np.clip(centers, 0, 255).astype(np.uint8).reshape(1, -1, centers.shape[1])
+    gray = cv2.cvtColor(_as_bgr(c, in_space), cv2.COLOR_BGR2GRAY)
+    return gray.reshape(-1).astype(np.float32)
+
+
+def _kmeans_clusters(img, k, attempts=5, space="bgr", lum_weight=1.0, in_space="bgr"):
+    """Run k-means on an image's pixels -> CLUSTERS payload. Clusters in the
+    chosen feature space (with optional luminance down-weighting), but reports
+    each center as the mean *input-space* color of its pixels — so reduce_colors
+    and the passthrough color space stay correct regardless of clustering space.
+    k-means++ init + a pinned RNG + ordering clusters by luminance (dark -> light)
+    make the labels, swatches, and summary reproducible run to run."""
     k = max(1, int(k))
+    feat = _cluster_features(img, space, lum_weight, in_space)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-    _, labels, centers = cv2.kmeans(data, k, None, criteria, int(attempts),
-                                    cv2.KMEANS_RANDOM_CENTERS)
-    return {"centers": centers, "labels": labels.flatten(), "shape": img.shape, "k": k}
+    # Pin OpenCV's global RNG so the same image yields the same partition every
+    # run (cv2.kmeans exposes no per-call seed). Ordering alone only fixes the
+    # label permutation; this fixes the partition too — no swatch/summary jitter.
+    # The seed+kmeans pair is global state, so hold the lock across both when
+    # called concurrently (batch fan-out).
+    with _KMEANS_LOCK:
+        cv2.setRNGSeed(0)
+        _, labels, _ = cv2.kmeans(feat, k, None, criteria, int(attempts),
+                                  cv2.KMEANS_PP_CENTERS)
+    labels = labels.flatten()
+    # Centers = mean color in the ORIGINAL space (not the clustering space).
+    channels = img.shape[2] if img.ndim == 3 else 1
+    orig = img.reshape(-1, channels).astype(np.float32)
+    centers = np.zeros((k, channels), np.float32)
+    nonempty = np.zeros(k, bool)
+    for c in range(k):
+        m = labels == c
+        if m.any():
+            centers[c] = orig[m].mean(axis=0)
+            nonempty[c] = True
+    # Canonical order: dark -> light (empty clusters sort last), then remap
+    # labels so the index is stable across runs.
+    key = _center_luminance(centers, in_space)
+    key[~nonempty] = np.inf
+    order = np.argsort(key)
+    remap = np.empty(k, np.int32)
+    remap[order] = np.arange(k)
+    labels = remap[labels]
+    centers = centers[order]
+    return {"centers": centers, "labels": labels, "shape": img.shape, "k": k}
 
 
-def _compute_kmeans(inputs, p):
+def _compute_kmeans(inputs, p, in_space="bgr"):
     """Cluster an image's pixels with k-means. Output is a clusters payload
     (centers + per-pixel labels + shape) — not an image — consumed downstream
     by Reduce Colors."""
     try:
-        return _kmeans_clusters(inputs[0], p["k"], p.get("attempts", 3))
+        return _kmeans_clusters(inputs[0], p["k"], p.get("attempts", 5),
+                                p.get("cluster_space", "bgr"),
+                                p.get("lum_weight", 1.0), in_space)
     except Exception as e:
         print(f"Error executing kmeans: {e}")
         return None
@@ -331,7 +405,8 @@ def _compute_auto_cluster(inputs, p, in_space="bgr"):
         img = inputs[0]
         k = _detect_cluster_count(img, p["smoothing"], p["min_prominence"],
                                   p["max_k"], p.get("channel", 1), in_space)
-        return _kmeans_clusters(img, k, 3)
+        return _kmeans_clusters(img, k, 5, p.get("cluster_space", "bgr"),
+                                p.get("lum_weight", 1.0), in_space)
     except Exception as e:
         print(f"Error executing auto_cluster: {e}")
         return None
@@ -538,6 +613,125 @@ def _summary_filter_contours(output, p):
     if not isinstance(output, dict):
         return {}
     return {"kept": len(output.get("contours", [])), "of": int(output.get("_total", 0))}
+
+
+_REGION_CHANNELS = [
+    ("Full color", -1),       # compare similarity on all BGR channels
+    ("Luminance (L)", 1),     # otherwise an HLS channel index
+    ("Hue (H)", 0),
+    ("Saturation (S)", 2),
+]
+_CONNECTIVITY = [("4-connected", 4), ("8-connected", 8)]
+
+
+def _region_compare_image(img, channel, in_space):
+    """The 1- or 3-channel uint8 image floodFill measures similarity on.
+    ``channel`` == -1 -> full BGR; else an HLS channel (1=L, 0=H, 2=S)."""
+    bgr = _as_bgr(img, in_space)
+    if int(channel) < 0:
+        return bgr
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2HLS)[:, :, int(channel)].copy()
+
+
+def _labels_to_payload(labels, n_regions, img, background):
+    """Turn an int label image (1..n_regions, 0 = none) into a CONTOURS payload:
+    one outer contour per connected region, drawn on `background` for inspection."""
+    contours = []
+    for rid in range(1, n_regions + 1):
+        cs, _ = cv2.findContours((labels == rid).astype(np.uint8),
+                                 cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours.extend(cs)
+    n = len(contours)
+    return {"contours": contours, "hierarchy": None,
+            "ids": list(range(n)), "depths": [0] * n,
+            "shape": img.shape, "background": background}
+
+
+def _label_regions_exact(comp, connectivity):
+    """delta == 0 fast path: connected components per *unique* value — no Python
+    per-pixel scan. Returns (label image, region count)."""
+    if comp.ndim == 2:
+        key = comp.astype(np.int64)
+    else:
+        c = comp.astype(np.int64)
+        key = (c[:, :, 0] << 16) | (c[:, :, 1] << 8) | c[:, :, 2]
+    labels = np.zeros(comp.shape[:2], np.int32)
+    next_id = 0
+    for val in np.unique(key):
+        n, lab = cv2.connectedComponents((key == val).astype(np.uint8),
+                                         connectivity=int(connectivity))
+        for c_ in range(1, n):                # 0 is background of this value's mask
+            next_id += 1
+            labels[lab == c_] = next_id
+    return labels, next_id
+
+
+def _label_regions_floodfill(comp, delta, connectivity):
+    """delta > 0 path: tolerance region-growing with cv2.floodFill (FIXED_RANGE,
+    compared to each seed). Returns (label image, region count)."""
+    h, w = comp.shape[:2]
+    ch = 1 if comp.ndim == 2 else comp.shape[2]
+    lo = up = (delta,) * ch
+    flags = int(connectivity) | (2 << 8) | cv2.FLOODFILL_MASK_ONLY | cv2.FLOODFILL_FIXED_RANGE
+    labels = np.zeros((h, w), np.int32)
+    ffmask = np.zeros((h + 2, w + 2), np.uint8)
+    lab_flat = labels.reshape(-1)             # a view: stays in sync with `labels`
+    seeds = 0
+    for start in range(h * w):
+        if lab_flat[start]:                   # already assigned to a region
+            continue
+        y, x = divmod(start, w)
+        _, _, _, (rx, ry, rw, rh) = cv2.floodFill(comp, ffmask, (x, y), 0, lo, up, flags)
+        seeds += 1
+        # Confine per-region work to the fill's bounding box. The mask is offset
+        # by +1 on both axes relative to the image.
+        sub = ffmask[ry + 1:ry + rh + 1, rx + 1:rx + rw + 1]
+        new = sub == 2
+        labels[ry:ry + rh, rx:rx + rw][new] = seeds
+        sub[new] = 1                          # mark blocked so it can't refill
+    return labels, seeds
+
+
+def _compute_label_regions(inputs, p, in_space="bgr"):
+    """Group connected pixels of (near-)uniform color into regions and emit them
+    as a CONTOURS payload — so the existing Filter Contours node and contour
+    previews work directly. Similarity is measured on the chosen channel within
+    +/- delta of the *seed* pixel (cv2.floodFill, FIXED_RANGE) at 4- or
+    8-connectivity. delta == 0 takes a fast exact-equality path (connected
+    components per unique value) — ideal straight after Reduce Colors; delta > 0
+    tolerates anti-aliasing / noise at region edges. Note: Hue is treated
+    linearly, so reds near the 0/179 wrap won't merge."""
+    try:
+        img = inputs[0]
+        comp = _region_compare_image(img, p.get("channel", -1), in_space)
+        if comp.dtype != np.uint8:
+            comp = np.clip(comp, 0, 255).astype(np.uint8)
+        delta = int(p.get("delta", 8))
+        conn = int(p.get("connectivity", 4))
+        if delta == 0:
+            labels, n = _label_regions_exact(comp, conn)
+        else:
+            labels, n = _label_regions_floodfill(comp, delta, conn)
+        return _labels_to_payload(labels, n, img, _as_bgr(img, in_space))
+    except Exception as e:
+        print(f"Error executing label_regions: {e}")
+        return None
+
+
+def _compute_connected_components(inputs, p):
+    """Label connected foreground blobs in a BINARY image with
+    cv2.connectedComponents (4/8-connectivity), then emit them as a CONTOURS
+    payload. Foreground = non-zero pixels; the zero background is one region."""
+    try:
+        img = inputs[0]
+        gray = _to_gray_u8(img)
+        binary = (gray > 0).astype(np.uint8)
+        n, labels = cv2.connectedComponents(binary, connectivity=int(p.get("connectivity", 8)))
+        bg = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        return _labels_to_payload(labels, n - 1, img, bg)   # label 0 = background
+    except Exception as e:
+        print(f"Error executing connected_components: {e}")
+        return None
 
 
 def _compute_dft(inputs, p):
@@ -822,6 +1016,14 @@ _CLUSTER_CHANNELS = [
     ("Hue (H)", 0),
     ("Saturation (S)", 2),
 ]
+# Feature space the clustering distance is measured in. Lab/HLS separate a
+# luminance channel that the "Luminance weight" param can down-weight for
+# lighting-stable, chroma-driven clusters. "bgr" = cluster on raw input pixels.
+_CLUSTER_SPACES = [
+    ("BGR (as-is)", "bgr"),
+    ("Lab", "lab"),
+    ("HLS", "hls"),
+]
 _MORPH_OPS = [
     ("Erode", cv2.MORPH_ERODE),
     ("Dilate", cv2.MORPH_DILATE),
@@ -843,6 +1045,19 @@ OPS: list = [
         ],
         compute=_compute_noop, color=(76, 175, 80), out_space="passthrough",
         in_label="Mat (Any)", out_label="File",
+        description="Write the incoming image (or each batch element) to ./output "
+                    "on a committed evaluation. A view-layer side effect.",
+    ),
+    Operation(
+        id="export_code", label="Export Code", category="Input/Output",
+        inputs=[Port("in", datatypes.ANY)], outputs=[Port("out")],
+        params=[],
+        compute=_compute_noop, color=(96, 125, 139), out_space="passthrough",
+        in_label="Mat (Any)", out_label="Pseudocode",
+        description="Introspection node: walks the pipeline upstream from here and "
+                    "generates language-neutral pseudocode (source -> ops -> params) "
+                    "you can port to Python/C++. Shown in the Inspector and written "
+                    "to ./output on commit.",
     ),
     Operation(
         id="create_batch", label="Create Batch", category="Input/Output",
@@ -1033,10 +1248,14 @@ OPS: list = [
         outputs=[Port("out", datatypes.CLUSTERS)],
         params=[
             ParamSpec("k", 6, kind="int", min=2, max=16, label="Clusters (k)"),
-            ParamSpec("attempts", 3, kind="int", min=1, max=10, show=False),
+            ParamSpec("cluster_space", "bgr", kind="enum", choices=_CLUSTER_SPACES,
+                      label="Cluster space"),
+            ParamSpec("lum_weight", 1.0, kind="float", min=0.0, max=2.0, step=0.1,
+                      label="Luminance weight"),
+            ParamSpec("attempts", 5, kind="int", min=1, max=10, show=False),
         ],
         compute=_compute_kmeans, color=(0, 150, 136), out_space="passthrough",
-        in_label="Mat (any)", out_label="Clusters",
+        space_aware=True, in_label="Mat (any)", out_label="Clusters",
         render_preview=_render_kmeans, summary=_summary_kmeans,
     ),
     Operation(
@@ -1051,6 +1270,10 @@ OPS: list = [
                       label="Histogram smoothing"),
             ParamSpec("min_prominence", 0.05, kind="float", min=0.0, max=0.5, step=0.01,
                       label="Min peak prominence"),
+            ParamSpec("cluster_space", "bgr", kind="enum", choices=_CLUSTER_SPACES,
+                      label="Cluster space"),
+            ParamSpec("lum_weight", 1.0, kind="float", min=0.0, max=2.0, step=0.1,
+                      label="Luminance weight"),
         ],
         compute=_compute_auto_cluster, color=(0, 150, 136), out_space="passthrough",
         space_aware=True, in_label="Mat (any)", out_label="Clusters (auto k)",
@@ -1110,12 +1333,44 @@ OPS: list = [
         render_preview=_render_find_contours, summary=_summary_find_contours,
     ),
     Operation(
+        id="label_regions", label="Label Regions", category="Contours",
+        inputs=[Port("in", datatypes.IMAGE)],
+        outputs=[Port("out", datatypes.CONTOURS)],
+        params=[
+            ParamSpec("channel", -1, kind="enum", choices=_REGION_CHANNELS,
+                      label="Similarity channel"),
+            ParamSpec("delta", 8, kind="int", min=0, max=64, label="Color delta"),
+            ParamSpec("connectivity", 4, kind="enum", choices=_CONNECTIVITY,
+                      label="Connectivity"),
+            ParamSpec("filled", False, kind="bool", label="Draw filled"),
+        ],
+        compute=_compute_label_regions, color=(233, 30, 99), space_aware=True,
+        in_label="Mat (any)", out_label="Contours (regions)",
+        render_preview=_render_find_contours, summary=_summary_find_contours,
+    ),
+    Operation(
+        id="connected_components", label="Connected Components", category="Contours",
+        inputs=[Port("in", datatypes.IMAGE)],
+        outputs=[Port("out", datatypes.CONTOURS)],
+        params=[
+            ParamSpec("connectivity", 8, kind="enum", choices=_CONNECTIVITY,
+                      label="Connectivity"),
+            ParamSpec("filled", False, kind="bool", label="Draw filled"),
+        ],
+        compute=_compute_connected_components, color=(233, 30, 99),
+        in_label="Mat (Binary)", out_label="Contours (regions)",
+        render_preview=_render_find_contours, summary=_summary_find_contours,
+        description="Label connected foreground blobs in a binary image "
+                    "(cv2.connectedComponents, 4/8-neighbourhood). Foreground is "
+                    "any non-zero pixel; each blob becomes one region/contour.",
+    ),
+    Operation(
         id="contour_filter", label="Filter Contours", category="Contours",
         inputs=[Port("in", datatypes.CONTOURS)],
         outputs=[Port("out", datatypes.CONTOURS)],
         params=[
-            ParamSpec("min_area", 50, kind="int", min=0, max=20000, label="Min Area"),
-            ParamSpec("max_area", 100000, kind="int", min=0, max=1000000, label="Max Area"),
+            ParamSpec("min_area", 50, kind="int", min=0, max=20000, label="Min Area", log=True),
+            ParamSpec("max_area", 100000, kind="int", min=0, max=1000000, label="Max Area", log=True),
             ParamSpec("filled", False, kind="bool", label="Draw filled"),
         ],
         compute=_compute_filter_contours, color=(233, 30, 99),

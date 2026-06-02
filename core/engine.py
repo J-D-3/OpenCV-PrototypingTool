@@ -13,6 +13,8 @@ produced a result; otherwise its output is ``None`` (no error).
 """
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 
 import numpy as np
@@ -38,6 +40,12 @@ def _infer_space(arr) -> str:
 class Engine:
     def __init__(self, graph: GraphModel):
         self.graph = graph
+        # Batch elements are mapped across a small thread pool (OpenCV/numpy
+        # release the GIL during heavy work, so this gives real parallelism).
+        self._max_workers = max(1, min(8, (os.cpu_count() or 2)))
+        # Which batch element to compute first (the one the UI previews), so it
+        # is ready as early as possible. Set by the controller.
+        self.preview_index = 0
 
     @staticmethod
     def _derive_space(op, input_nodes, output) -> str:
@@ -108,24 +116,43 @@ class Engine:
 
     def _run_batched(self, op, inputs, batches, params, input_nodes):
         """Map the op over a batch: zip equal-length batches; broadcast singles
-        (and length-1 batches) against the batch length."""
+        (and length-1 batches) against the batch length. Elements are computed
+        in parallel across a thread pool, with the previewed element first."""
         n = max(len(b) for b in batches)
         for b in batches:
             if len(b) not in (1, n):
                 raise ValueError(f"batch size mismatch: {len(b)} vs {n}")
-        results = []
-        first_error = None
-        for k in range(n):
+
+        def compute_elem(k):
             elem = [(inp.items[k if len(inp) > 1 else 0] if isinstance(inp, Batch) else inp)
                     for inp in inputs]
             if any(e is None for e in elem):
-                results.append(None)
-                continue
+                return None, None
             try:
-                results.append(self._call(op, elem, params, input_nodes))
+                return self._call(op, elem, params, input_nodes), None
             except Exception as e:  # noqa: BLE001
-                results.append(None)
-                first_error = first_error or f"{type(e).__name__}: {e}"
+                return None, f"{type(e).__name__}: {e}"
+
+        # Preview element first, then the rest — useful once results stream.
+        order = list(range(n))
+        pv = self.preview_index
+        if 0 <= pv < n:
+            order = [pv] + [k for k in range(n) if k != pv]
+
+        results: List = [None] * n
+        first_error = None
+        workers = min(self._max_workers, n)
+        if workers <= 1:
+            for k in order:
+                results[k], err = compute_elem(k)
+                first_error = first_error or err
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {ex.submit(compute_elem, k): k for k in order}
+                for fut in as_completed(futures):
+                    k = futures[fut]
+                    results[k], err = fut.result()
+                    first_error = first_error or err
         return Batch(results), first_error
 
     def evaluate_all(self) -> List[GraphNode]:
