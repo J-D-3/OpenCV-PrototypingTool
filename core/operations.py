@@ -280,23 +280,67 @@ def _compute_to_hls(inputs, p, in_space):
         return None
 
 
+def _kmeans_clusters(img, k, attempts=3):
+    """Run k-means on an image's pixels -> CLUSTERS payload."""
+    channels = img.shape[2] if img.ndim == 3 else 1
+    data = img.reshape(-1, channels).astype(np.float32)
+    k = max(1, int(k))
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+    _, labels, centers = cv2.kmeans(data, k, None, criteria, int(attempts),
+                                    cv2.KMEANS_RANDOM_CENTERS)
+    return {"centers": centers, "labels": labels.flatten(), "shape": img.shape, "k": k}
+
+
 def _compute_kmeans(inputs, p):
     """Cluster an image's pixels with k-means. Output is a clusters payload
     (centers + per-pixel labels + shape) — not an image — consumed downstream
     by Reduce Colors."""
     try:
-        img = inputs[0]
-        channels = img.shape[2] if img.ndim == 3 else 1
-        data = img.reshape(-1, channels).astype(np.float32)
-        k = max(1, int(p["k"]))
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-        attempts = int(p.get("attempts", 3))
-        _, labels, centers = cv2.kmeans(data, k, None, criteria, attempts,
-                                        cv2.KMEANS_RANDOM_CENTERS)
-        return {"centers": centers, "labels": labels.flatten(),
-                "shape": img.shape, "k": k}
+        return _kmeans_clusters(inputs[0], p["k"], p.get("attempts", 3))
     except Exception as e:
         print(f"Error executing kmeans: {e}")
+        return None
+
+
+def _detect_cluster_count(img, sigma, min_prominence, max_k):
+    """Pick k by smoothing the luminance histogram (Gaussian) and counting local
+    maxima above a prominence threshold — the histogram mode-seeking idea."""
+    gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    hist = cv2.calcHist([gray.astype(np.uint8)], [0], None, [256], [0, 256]).flatten()
+    hist = cv2.GaussianBlur(hist.reshape(-1, 1).astype(np.float32), (0, 0),
+                            max(0.5, float(sigma))).flatten()
+    thr = float(hist.max()) * float(min_prominence)
+    peaks = 0
+    for i in range(256):
+        left = hist[i - 1] if i > 0 else -1.0
+        right = hist[i + 1] if i < 255 else -1.0
+        if hist[i] >= thr and hist[i] > left and hist[i] >= right:
+            peaks += 1
+    return max(1, min(peaks, int(max_k)))
+
+
+def _compute_auto_cluster(inputs, p):
+    """K-means with an auto-detected cluster count (histogram peak count)."""
+    try:
+        img = inputs[0]
+        k = _detect_cluster_count(img, p["smoothing"], p["min_prominence"], p["max_k"])
+        return _kmeans_clusters(img, k, 3)
+    except Exception as e:
+        print(f"Error executing auto_cluster: {e}")
+        return None
+
+
+def _compute_mean_shift(inputs, p):
+    """Mean-shift segmentation (mode-seeking, no k). Returns a segmented image."""
+    try:
+        img = inputs[0]
+        if img.ndim == 2 or (img.ndim == 3 and img.shape[2] == 1):
+            img = cv2.cvtColor(_to_gray_u8(img), cv2.COLOR_GRAY2BGR)
+        if img.dtype != np.uint8:
+            img = img.astype(np.uint8)
+        return cv2.pyrMeanShiftFiltering(img, float(p["spatial"]), float(p["color"]))
+    except Exception as e:
+        print(f"Error executing mean_shift: {e}")
         return None
 
 
@@ -983,11 +1027,36 @@ OPS: list = [
         render_preview=_render_kmeans, summary=_summary_kmeans,
     ),
     Operation(
+        id="auto_cluster", label="Auto Cluster", category="Color & Clustering",
+        inputs=[Port("in", datatypes.IMAGE)],
+        outputs=[Port("out", datatypes.CLUSTERS)],
+        params=[
+            ParamSpec("max_k", 12, kind="int", min=2, max=24, label="Max clusters"),
+            ParamSpec("smoothing", 4.0, kind="float", min=0.5, max=15.0, step=0.5,
+                      label="Histogram smoothing"),
+            ParamSpec("min_prominence", 0.05, kind="float", min=0.0, max=0.5, step=0.01,
+                      label="Min peak prominence"),
+        ],
+        compute=_compute_auto_cluster, color=(0, 150, 136), out_space="passthrough",
+        in_label="Mat (any)", out_label="Clusters (auto k)",
+        render_preview=_render_kmeans, summary=_summary_kmeans,
+    ),
+    Operation(
         id="reduce_colors", label="Reduce Colors", category="Color & Clustering",
         inputs=[Port("in", datatypes.CLUSTERS)],
         outputs=[Port("out", datatypes.IMAGE)], params=[],
         compute=_compute_reduce_colors, color=(0, 150, 136), out_space="passthrough",
         in_label="Clusters", out_label="Mat (quantized)",
+    ),
+    Operation(
+        id="mean_shift", label="Mean Shift", category="Color & Clustering",
+        inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE_BGR)],
+        params=[
+            ParamSpec("spatial", 20, kind="int", min=2, max=50, label="Spatial radius"),
+            ParamSpec("color", 40, kind="int", min=2, max=100, label="Color radius"),
+        ],
+        compute=_compute_mean_shift, color=(0, 150, 136), out_space="bgr",
+        in_label="Mat (BGR)", out_label="Mat (segmented)",
     ),
     # --- Geometry ----------------------------------------------------------
     Operation(

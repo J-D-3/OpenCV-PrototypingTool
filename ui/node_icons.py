@@ -32,6 +32,8 @@ ICON_BY_OP = {
     "diff": "minus",
     "histogram": "histogram",
     "kmeans": "cluster",
+    "auto_cluster": "cluster",
+    "mean_shift": "cluster",
     "reduce_colors": "palette",
     "find_contours": "contours",
     "contour_filter": "contours",

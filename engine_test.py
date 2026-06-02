@@ -399,6 +399,38 @@ def test_local_hdr():
     print("OK  local_hdr: smooth local contrast normalization (gray + color)")
 
 
+def test_auto_cluster():
+    # Three flat intensity bands -> ~3 histogram peaks -> auto k ~= 3.
+    img = np.zeros((30, 30, 3), np.uint8)
+    img[:10] = 20
+    img[10:20] = 128
+    img[20:] = 240
+    m = GraphModel()
+    s = _src(m, img)
+    a = _op(m, "auto_cluster", max_k=12, smoothing=2.0, min_prominence=0.05)
+    m.add_edge(s, a)
+    Engine(m).evaluate_all()
+    assert isinstance(a.output, dict), "auto_cluster should output a clusters payload"
+    assert 2 <= a.output["k"] <= 4, f"expected ~3 auto-detected clusters, got {a.output['k']}"
+    print("OK  auto_cluster: detects cluster count from histogram peaks")
+
+
+def test_mean_shift():
+    rng = np.random.RandomState(1)
+    img = (rng.rand(40, 40, 3) * 255).astype(np.uint8)
+    m = GraphModel()
+    s = _src(m, img)
+    ms = _op(m, "mean_shift", spatial=10, color=40)
+    m.add_edge(s, ms)
+    Engine(m).evaluate_all()
+    out = ms.output
+    assert out is not None and out.shape == img.shape and out.dtype == np.uint8
+    before = len(np.unique(img.reshape(-1, 3), axis=0))
+    after = len(np.unique(out.reshape(-1, 3), axis=0))
+    assert after < before, "mean shift should merge colors (fewer uniques)"
+    print("OK  mean_shift: mode-seeking segmentation reduces unique colors")
+
+
 def test_cycle_prevention():
     m = GraphModel()
     a = _op(m, "blur")
@@ -428,8 +460,10 @@ def main():
     test_normalize()
     test_invert()
     test_local_hdr()
+    test_auto_cluster()
+    test_mean_shift()
     test_cycle_prevention()
-    print("\nENGINE OK: 19 backend tests passed")
+    print("\nENGINE OK: 21 backend tests passed")
 
 
 if __name__ == "__main__":
