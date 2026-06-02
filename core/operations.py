@@ -19,6 +19,7 @@ Optional inspection hooks (used from Phase 4 onward):
 from __future__ import annotations
 
 import threading
+from collections import defaultdict
 
 import cv2
 import numpy as np
@@ -557,16 +558,17 @@ def _draw_contours_preview(payload, filled=False):
     ids = payload.get("ids", list(range(len(contours))))
     depths = payload.get("depths", [0] * len(contours))
     out = bg.copy()
-    # Draw order: outermost (smallest nesting depth) first, larger first within a
-    # depth — so filled inner contours stay visible. With no hierarchy (e.g.
-    # RETR_EXTERNAL, all depths 0) this is just largest-first.
-    order = sorted(range(len(contours)),
-                   key=lambda i: (depths[i], -cv2.contourArea(contours[i])))
     thickness = cv2.FILLED if filled else 1
-    for i in order:
-        # Colour is bound to the *stable id*, not the draw order, so a contour
-        # keeps its colour as others are filtered in/out.
-        cv2.drawContours(out, contours, i, _CONTOUR_COLORS[ids[i] % len(_CONTOUR_COLORS)], thickness)
+    nc = len(_CONTOUR_COLORS)
+    # Batch by (nesting depth, colour): ONE cv2.drawContours call per group instead
+    # of one per contour (so thousands of contours become a handful of calls — the
+    # per-contour loop was the batch-switch lag). Depth ascending keeps filled
+    # children on top of parents; colour stays bound to the stable id.
+    groups = defaultdict(list)
+    for i, c in enumerate(contours):
+        groups[(depths[i], ids[i] % nc)].append(c)
+    for d, ci in sorted(groups):
+        cv2.drawContours(out, groups[(d, ci)], -1, _CONTOUR_COLORS[ci], thickness)
     return out
 
 
