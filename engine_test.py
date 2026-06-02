@@ -572,6 +572,30 @@ def test_mean_shift():
     print("OK  mean_shift: mode-seeking segmentation reduces unique colors")
 
 
+def test_comp_timing_and_traversal():
+    img = np.zeros((40, 40, 3), np.uint8)
+    m = GraphModel(); s = _src(m, img)
+    b = _op(m, "gaussian_blur")
+    m.add_edge(s, b)
+    Engine(m).evaluate_all()
+    assert s.comp_time_ms is None, "source nodes are not timed"
+    assert isinstance(b.comp_time_ms, float) and b.comp_time_ms >= 0, "op records compute time"
+
+    # Batch: a mean per-element time is recorded.
+    mb = GraphModel(); sb = _src(mb, Batch([img.copy() for _ in range(4)]))
+    bb = _op(mb, "gaussian_blur"); mb.add_edge(sb, bb)
+    Engine(mb).evaluate_all()
+    assert isinstance(bb.comp_time_ms, float), "batch op records a mean compute time"
+
+    # ancestors / descendants drive the flow highlight.
+    g = GraphModel()
+    a = _op(g, "blur"); b2 = _op(g, "blur"); c = _op(g, "blur")
+    g.add_edge(a, b2); g.add_edge(b2, c)
+    assert g.ancestors(c) == {a.id, b2.id}, "ancestors are transitive predecessors"
+    assert g.descendants(a) == {b2.id, c.id}, "descendants are transitive successors"
+    print("OK  per-node compute timing (single + batch mean) + ancestors/descendants")
+
+
 def test_cycle_prevention():
     m = GraphModel()
     a = _op(m, "blur")
@@ -607,8 +631,9 @@ def main():
     test_auto_cluster()
     test_cluster_space()
     test_mean_shift()
+    test_comp_timing_and_traversal()
     test_cycle_prevention()
-    print("\nENGINE OK: 25 backend tests passed")
+    print("\nENGINE OK: 26 backend tests passed")
 
 
 if __name__ == "__main__":

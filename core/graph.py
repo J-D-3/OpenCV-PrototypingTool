@@ -26,6 +26,7 @@ class GraphNode:
         self.error: Optional[str] = None
         self.color_space: str = "unknown"  # "bgr"|"gray"|"hls"|"binary"|"unknown"
         self.dirty: bool = True
+        self.comp_time_ms: Optional[float] = None  # last compute time (mean/elem for batches)
 
     @property
     def is_source(self) -> bool:
@@ -87,6 +88,28 @@ class GraphModel:
     def dependents_of(self, node: GraphNode) -> List[GraphNode]:
         """Nodes that consume this node's output."""
         return [e.dst for e in self.edges if e.src is node]
+
+    def ancestors(self, node: GraphNode) -> set:
+        """Ids of all nodes upstream of ``node`` (transitive predecessors)."""
+        out, stack = set(), list(self.inputs_of(node))
+        while stack:
+            n = stack.pop()
+            if n.id in out:
+                continue
+            out.add(n.id)
+            stack.extend(self.inputs_of(n))
+        return out
+
+    def descendants(self, node: GraphNode) -> set:
+        """Ids of all nodes downstream of ``node`` (transitive successors)."""
+        out, stack = set(), list(self.dependents_of(node))
+        while stack:
+            n = stack.pop()
+            if n.id in out:
+                continue
+            out.add(n.id)
+            stack.extend(self.dependents_of(n))
+        return out
 
     # --- dirtying & ordering ----------------------------------------------
     def mark_dirty(self, node: GraphNode) -> None:

@@ -818,6 +818,38 @@ def check_function_search(app) -> None:
     print("OK  function search filters by name/category/cv:: call; info panel fixed 200px")
 
 
+def check_flow_highlight(app) -> None:
+    from ui.arrow import ArrowItem
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    g = add_func(w, "To Grayscale")
+    b = add_func(w, "Blur")
+    side = add_func(w, "Invert")
+    connect(w, src, g)
+    connect(w, g, b)
+    connect(w, src, side)            # a sibling branch off the same source
+
+    w.drop_widget.view._scene.clearSelection()
+    g.setSelected(True)
+    app.processEvents()
+    assert g._flow_role == "selected", "selected node should be yellow"
+    assert src._flow_role == "flow" and b._flow_role == "flow", "up/downstream go green"
+    assert side._flow_role is None, "a sibling branch is not on the selected flow"
+
+    arrows = {(it.a, it.b): it for it in w.drop_widget.view._scene.items()
+              if isinstance(it, ArrowItem)}
+    assert arrows[(src, g)]._flow and arrows[(g, b)]._flow, "flow edges go green"
+    assert not arrows[(src, side)]._flow, "off-flow edge stays black"
+
+    assert isinstance(b.gnode.comp_time_ms, float), "function node records a compute time"
+
+    g.setSelected(False)
+    app.processEvents()
+    assert g._flow_role is None and src._flow_role is None, "highlight clears on deselect"
+    w.close()
+    print("OK  flow highlight: selected=yellow, predecessors/successors=green; comp time tracked")
+
+
 def check_background_eval(app) -> None:
     w = make_window(app)
     src = add_image(w, gradient_bgr())
@@ -883,6 +915,7 @@ def main() -> int:
         check_save_nonimage,
         check_export_code,
         check_function_search,
+        check_flow_highlight,
         check_background_eval,
     ]
     for chk in checks:

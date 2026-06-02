@@ -29,6 +29,8 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         self.setScene(self._scene)
         # The backend graph + evaluator for everything on this canvas.
         self.controller = GraphController()
+        # Highlight the selected node (yellow) + its whole data flow (green).
+        self._scene.selectionChanged.connect(self._update_flow_highlight)
         # Scene will follow the viewport size to fill the right side
         self._scene.setSceneRect(QtCore.QRectF(self.viewport().rect()))
         # Not scrollable; fill the space provided by the splitter
@@ -48,6 +50,30 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         self._start_item: Optional[Node] = None
         self._hover_item: Optional[Node] = None
         self._destination_item: Optional[Node] = None
+
+    def _update_flow_highlight(self) -> None:
+        """On a single-node selection, tint that node yellow, every predecessor
+        and successor green, and the edges between flow nodes green. Cleared when
+        nothing (or more than one node) is selected."""
+        nodes = [it for it in self._scene.selectedItems() if isinstance(it, Node)]
+        selected_gn = nodes[0].gnode if len(nodes) == 1 and getattr(nodes[0], "gnode", None) else None
+        flow_ids = set()
+        if selected_gn is not None:
+            model = self.controller.model
+            flow_ids = {selected_gn.id} | model.ancestors(selected_gn) | model.descendants(selected_gn)
+        for it in self._scene.items():
+            if isinstance(it, Node):
+                gn = getattr(it, "gnode", None)
+                if gn is not None and selected_gn is not None and gn.id == selected_gn.id:
+                    it.set_flow_role("selected")
+                elif gn is not None and gn.id in flow_ids:
+                    it.set_flow_role("flow")
+                else:
+                    it.set_flow_role(None)
+            elif isinstance(it, ArrowItem):
+                a, b = getattr(it.a, "gnode", None), getattr(it.b, "gnode", None)
+                it.set_flow_highlight(a is not None and b is not None
+                                      and a.id in flow_ids and b.id in flow_ids)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         # Keep scene rect matched to available view size

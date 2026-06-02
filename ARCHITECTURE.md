@@ -131,7 +131,18 @@ does not cycle at runtime.
   is shared with the inspector pane's slider).
 - **Delete / Backspace**: remove the selected node(s) or arrow(s).
 - **S**: swap the two inputs of a selected binary op (e.g. Diff A↔B).
+- **Select** a node: it turns **yellow**; its whole data flow — every
+  predecessor and successor — turns **green** (nodes + edges), to show what feeds
+  and follows it (`canvas._update_flow_highlight` using `GraphModel.ancestors/
+  descendants`; `Node.set_flow_role`, `ArrowItem.set_flow_highlight`).
 - **Save / Load Pipeline** (sidebar): persist the whole graph to JSON.
+
+## Node decorations (corners)
+A computational node carries two badges baked into its thumbnail pixmap: the
+**bottom-right** `i/N` batch frame counter and the **bottom-left** last compute
+time (`GraphNode.comp_time_ms`, timed in `core/engine.evaluate` — the mean
+*per-element* time for a batch). Dynamic state is drawn in `Node.paint`: the
+recompute spinner, the error border, and the yellow/green flow-selection border.
 
 ## Run / test
 ```powershell

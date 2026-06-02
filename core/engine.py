@@ -14,6 +14,7 @@ produced a result; otherwise its output is ``None`` (no error).
 from __future__ import annotations
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 
@@ -88,23 +89,29 @@ class Engine:
             node.dirty = False
             return
 
+        node.comp_time_ms = None
         try:
             if raw:
+                t0 = time.perf_counter()
                 result = self._call(op, inputs, node.params, input_nodes)
+                node.comp_time_ms = (time.perf_counter() - t0) * 1000.0
                 node.output = result
                 node.error = None if result is not None else "operation returned no result (see console)"
             else:
                 batches = [i for i in inputs if isinstance(i, Batch)]
                 if batches:
-                    node.output, node.error = self._run_batched(op, inputs, batches,
-                                                                node.params, input_nodes)
+                    node.output, node.error, node.comp_time_ms = self._run_batched(
+                        op, inputs, batches, node.params, input_nodes)
                 else:
+                    t0 = time.perf_counter()
                     result = self._call(op, inputs, node.params, input_nodes)
+                    node.comp_time_ms = (time.perf_counter() - t0) * 1000.0
                     node.output = result
                     node.error = None if result is not None else "operation returned no result (see console)"
         except Exception as e:  # noqa: BLE001 — surface, don't crash the UI
             node.output = None
             node.error = f"{type(e).__name__}: {e}"
+            node.comp_time_ms = None
         node.color_space = self._derive_space(op, input_nodes, node.output)
         node.dirty = False
 
@@ -127,11 +134,13 @@ class Engine:
             elem = [(inp.items[k if len(inp) > 1 else 0] if isinstance(inp, Batch) else inp)
                     for inp in inputs]
             if any(e is None for e in elem):
-                return None, None
+                return None, None, None
+            t0 = time.perf_counter()
             try:
-                return self._call(op, elem, params, input_nodes), None
+                r = self._call(op, elem, params, input_nodes)
+                return r, None, (time.perf_counter() - t0) * 1000.0
             except Exception as e:  # noqa: BLE001
-                return None, f"{type(e).__name__}: {e}"
+                return None, f"{type(e).__name__}: {e}", (time.perf_counter() - t0) * 1000.0
 
         # Preview element first, then the rest — useful once results stream.
         order = list(range(n))
@@ -141,19 +150,25 @@ class Engine:
 
         results: List = [None] * n
         first_error = None
+        times: List[float] = []
         workers = min(self._max_workers, n)
         if workers <= 1:
             for k in order:
-                results[k], err = compute_elem(k)
+                results[k], err, dt = compute_elem(k)
                 first_error = first_error or err
+                if dt is not None:
+                    times.append(dt)
         else:
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 futures = {ex.submit(compute_elem, k): k for k in order}
                 for fut in as_completed(futures):
                     k = futures[fut]
-                    results[k], err = fut.result()
+                    results[k], err, dt = fut.result()
                     first_error = first_error or err
-        return Batch(results), first_error
+                    if dt is not None:
+                        times.append(dt)
+        mean_ms = (sum(times) / len(times)) if times else None
+        return Batch(results), first_error, mean_ms
 
     def evaluate_all(self) -> List[GraphNode]:
         """Evaluate every dirty node in dependency order.

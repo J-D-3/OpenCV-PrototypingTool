@@ -11,12 +11,25 @@ class ArrowItem(QtWidgets.QGraphicsPathItem):
         # Register with endpoints so they can notify us when moving/resizing
         self.a._register_arrow(self)
         self.b._register_arrow(self)
+        self._flow = False
         pen = QtGui.QPen(QtGui.QColor(0, 0, 0))
         pen.setWidth(2)
         self.setPen(pen)
         # Ensure arrows render below icons
         self.setZValue(0)
         self.update_path()
+
+    def set_flow_highlight(self, on: bool) -> None:
+        """Green + thicker when this edge is on the selected node's data flow."""
+        if self._flow == on:
+            return
+        self._flow = on
+        pen = self.pen()
+        pen.setColor(QtGui.QColor(40, 200, 70) if on else QtGui.QColor(0, 0, 0))
+        pen.setWidth(3 if on else 2)
+        self.setPen(pen)
+        self.setZValue(0.5 if on else 0)  # above other edges, below nodes (z=1)
+        self.update()
 
     def update_path(self) -> None:
         try:

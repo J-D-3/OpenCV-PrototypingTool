@@ -33,6 +33,7 @@ class Node(QtWidgets.QGraphicsPixmapItem):
         self._executing = False
         self._spin_angle = 0
         self._spin_timer: Optional[QtCore.QTimer] = None
+        self._flow_role: Optional[str] = None   # None | "selected" | "flow"
         # Backend links (set by the GraphController when the node is registered).
         self.gnode = None
         self.controller = None
@@ -90,6 +91,40 @@ class Node(QtWidgets.QGraphicsPixmapItem):
     def _advance_spinner(self) -> None:
         self._spin_angle = (self._spin_angle + 30) % 360
         self.update()
+
+    def set_flow_role(self, role: Optional[str]) -> None:
+        """Data-flow selection highlight: 'selected' (this node, yellow), 'flow'
+        (a predecessor/successor, green), or None (no highlight)."""
+        if self._flow_role != role:
+            self._flow_role = role
+            self.update()
+
+    def _draw_comp_time_badge(self, painter: QtGui.QPainter, size: int) -> None:
+        """Bottom-left badge with the node's last compute time (mean/elem for a
+        batch) — the mirror of the bottom-right batch counter."""
+        gn = getattr(self, "gnode", None)
+        t = getattr(gn, "comp_time_ms", None) if gn is not None else None
+        if t is None:
+            return
+        text = (f"{t / 1000:.1f}s" if t >= 1000 else
+                f"{t:.0f}ms" if t >= 10 else f"{t:.1f}ms")
+        painter.save()
+        try:
+            font = painter.font()
+            font.setPixelSize(max(9, int(size * 0.12)))
+            font.setBold(True)
+            painter.setFont(font)
+            fm = painter.fontMetrics()
+            w = fm.horizontalAdvance(text) + 8
+            h = fm.height() + 2
+            rect = QtCore.QRectF(2, size - h - 2, w, h)   # bottom-left
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(QtGui.QColor(0, 0, 0, 170))
+            painter.drawRoundedRect(rect, 3, 3)
+            painter.setPen(QtGui.QColor(255, 255, 255))
+            painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, text)
+        finally:
+            painter.restore()
     
     def set_destination_highlighted(self, highlighted: bool, is_valid: bool = True) -> None:
         """Set the destination highlighted state of the node."""
@@ -134,6 +169,21 @@ class Node(QtWidgets.QGraphicsPixmapItem):
                 arc = QtCore.QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
                 # 270° arc starting at the current spin angle (Qt uses 1/16°).
                 painter.drawArc(arc, -self._spin_angle * 16, 270 * 16)
+            finally:
+                painter.restore()
+
+        # Data-flow selection highlight: yellow = selected node, green = a
+        # predecessor/successor on the same flow.
+        if self._flow_role is not None:
+            painter.save()
+            try:
+                selected = self._flow_role == "selected"
+                color = QtGui.QColor(255, 205, 0) if selected else QtGui.QColor(40, 200, 70)
+                pen = QtGui.QPen(color)
+                pen.setWidth(4 if selected else 3)
+                painter.setPen(pen)
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawRect(self.boundingRect().adjusted(1, 1, -1, -1))
             finally:
                 painter.restore()
 
@@ -477,6 +527,7 @@ class FunctionNode(Node):
                 | QtCore.Qt.TextFlag.TextWordWrap
             )
             painter.drawText(rect, flags, self._label)
+            self._draw_comp_time_badge(painter, size)
         finally:
             painter.end()
         self.setPixmap(pix)
@@ -520,6 +571,7 @@ class FunctionNode(Node):
             painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
             painter.drawRect(1, 1, size - 2, size - 2)
             self._draw_batch_badge(painter, size)
+            self._draw_comp_time_badge(painter, size)
         finally:
             painter.end()
         self.setPixmap(thumb)
