@@ -412,7 +412,25 @@ def test_auto_cluster():
     Engine(m).evaluate_all()
     assert isinstance(a.output, dict), "auto_cluster should output a clusters payload"
     assert 2 <= a.output["k"] <= 4, f"expected ~3 auto-detected clusters, got {a.output['k']}"
-    print("OK  auto_cluster: detects cluster count from histogram peaks")
+
+    # Channel choice: three bands of distinct hue but matched lightness. The
+    # Luminance (L) channel is ~flat (few peaks) while Hue (H) sees three modes.
+    hls = np.zeros((30, 30, 3), np.uint8)
+    hls[..., 1] = 128                    # L flat across all bands
+    hls[..., 2] = 200                    # S high so hue is meaningful
+    hls[:10, :, 0], hls[10:20, :, 0], hls[20:, :, 0] = 10, 70, 130  # H bands
+    bands = cv2.cvtColor(hls, cv2.COLOR_HLS2BGR)
+    m2 = GraphModel()
+    s2 = _src(m2, bands)
+    by_l = _op(m2, "auto_cluster", max_k=12, smoothing=2.0, min_prominence=0.05, channel=1)
+    by_h = _op(m2, "auto_cluster", max_k=12, smoothing=2.0, min_prominence=0.05, channel=0)
+    m2.add_edge(s2, by_l)
+    m2.add_edge(s2, by_h)
+    Engine(m2).evaluate_all()
+    assert by_h.output["k"] > by_l.output["k"], (
+        f"Hue channel should see more modes than flat Luminance "
+        f"(H={by_h.output['k']}, L={by_l.output['k']})")
+    print("OK  auto_cluster: detects cluster count from histogram peaks (per channel)")
 
 
 def test_mean_shift():

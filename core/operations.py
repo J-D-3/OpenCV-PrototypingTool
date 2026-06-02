@@ -302,11 +302,15 @@ def _compute_kmeans(inputs, p):
         return None
 
 
-def _detect_cluster_count(img, sigma, min_prominence, max_k):
-    """Pick k by smoothing the luminance histogram (Gaussian) and counting local
-    maxima above a prominence threshold — the histogram mode-seeking idea."""
-    gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    hist = cv2.calcHist([gray.astype(np.uint8)], [0], None, [256], [0, 256]).flatten()
+def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1, in_space="bgr"):
+    """Pick k by smoothing one channel's histogram (Gaussian) and counting local
+    maxima above a prominence threshold — the histogram mode-seeking idea. The
+    channel is an HLS index (1=Luminance/L, 0=Hue, 2=Saturation); the input is
+    first mapped to BGR via its tracked color space, so the chosen channel is
+    correct regardless of the upstream space (H is 0–179, L/S are 0–255)."""
+    hls = cv2.cvtColor(_as_bgr(img, in_space), cv2.COLOR_BGR2HLS)
+    chan = hls[:, :, int(channel)]
+    hist = cv2.calcHist([chan.astype(np.uint8)], [0], None, [256], [0, 256]).flatten()
     hist = cv2.GaussianBlur(hist.reshape(-1, 1).astype(np.float32), (0, 0),
                             max(0.5, float(sigma))).flatten()
     thr = float(hist.max()) * float(min_prominence)
@@ -319,11 +323,14 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k):
     return max(1, min(peaks, int(max_k)))
 
 
-def _compute_auto_cluster(inputs, p):
-    """K-means with an auto-detected cluster count (histogram peak count)."""
+def _compute_auto_cluster(inputs, p, in_space="bgr"):
+    """K-means with an auto-detected cluster count (histogram peak count). The
+    peak detection runs on a chosen HLS channel; clustering itself still uses the
+    full image as received."""
     try:
         img = inputs[0]
-        k = _detect_cluster_count(img, p["smoothing"], p["min_prominence"], p["max_k"])
+        k = _detect_cluster_count(img, p["smoothing"], p["min_prominence"],
+                                  p["max_k"], p.get("channel", 1), in_space)
         return _kmeans_clusters(img, k, 3)
     except Exception as e:
         print(f"Error executing auto_cluster: {e}")
@@ -809,6 +816,12 @@ _NORMALIZE_MODES = [
     ("Equalize", "equalize"),
     ("CLAHE", "clahe"),
 ]
+# Channel for Auto Cluster's peak detection. Values are HLS channel indices.
+_CLUSTER_CHANNELS = [
+    ("Luminance (L)", 1),
+    ("Hue (H)", 0),
+    ("Saturation (S)", 2),
+]
 _MORPH_OPS = [
     ("Erode", cv2.MORPH_ERODE),
     ("Dilate", cv2.MORPH_DILATE),
@@ -1032,13 +1045,15 @@ OPS: list = [
         outputs=[Port("out", datatypes.CLUSTERS)],
         params=[
             ParamSpec("max_k", 12, kind="int", min=2, max=24, label="Max clusters"),
+            ParamSpec("channel", 1, kind="enum", choices=_CLUSTER_CHANNELS,
+                      label="Peak channel"),
             ParamSpec("smoothing", 4.0, kind="float", min=0.5, max=15.0, step=0.5,
                       label="Histogram smoothing"),
             ParamSpec("min_prominence", 0.05, kind="float", min=0.0, max=0.5, step=0.01,
                       label="Min peak prominence"),
         ],
         compute=_compute_auto_cluster, color=(0, 150, 136), out_space="passthrough",
-        in_label="Mat (any)", out_label="Clusters (auto k)",
+        space_aware=True, in_label="Mat (any)", out_label="Clusters (auto k)",
         render_preview=_render_kmeans, summary=_summary_kmeans,
     ),
     Operation(
