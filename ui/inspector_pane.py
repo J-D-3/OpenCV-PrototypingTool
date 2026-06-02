@@ -306,9 +306,14 @@ class NeighborhoodView(QtWidgets.QWidget):
         super().__init__(parent)
         self.setMinimumHeight(120)
         self._patch = None  # (N, N, 3) uint8 BGR, or None
+        self._frozen = False
 
     def set_patch(self, patch):
         self._patch = patch
+        self.update()
+
+    def set_frozen(self, frozen: bool):
+        self._frozen = frozen
         self.update()
 
     def paintEvent(self, _e):
@@ -329,9 +334,10 @@ class NeighborhoodView(QtWidgets.QWidget):
                 p.fillRect(QtCore.QRectF(ox + c * cell + gap / 2, oy + r * cell + gap / 2,
                                          cell - gap, cell - gap),
                            QtGui.QColor(rd, g, b))
-        # outline the centre cell
+        # outline the centre cell — gold while live, crimson when frozen
         mid = n // 2
-        p.setPen(QtGui.QPen(QtGui.QColor(255, 215, 0), 2))
+        outline = QtGui.QColor(220, 20, 60) if self._frozen else QtGui.QColor(255, 215, 0)
+        p.setPen(QtGui.QPen(outline, 2))
         p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
         p.drawRect(QtCore.QRectF(ox + mid * cell + gap / 2, oy + mid * cell + gap / 2,
                                  cell - gap, cell - gap))
@@ -367,6 +373,12 @@ class NeighborhoodPanel(QtWidgets.QWidget):
         self._base = None       # uint8 display image
         self._names = ["B", "G", "R"]
         self._center = None     # (x, y)
+        self._frozen = False
+
+    def set_frozen(self, frozen: bool) -> None:
+        self._frozen = frozen
+        self._view.set_frozen(frozen)
+        self._rebuild()
 
     def set_base(self, disp, names) -> None:
         # Update the sampled image (e.g. the histogram-filtered preview) but keep
@@ -408,7 +420,8 @@ class NeighborhoodPanel(QtWidgets.QWidget):
             vals = "  ".join(f"{nm}={int(v)}" for nm, v in zip(self._names, px))
         else:
             vals = f"{self._names[0]}={int(px)}"
-        self._readout.setText(f"x={x} y={y}   {vals}")
+        suffix = "   [frozen]" if self._frozen else ""
+        self._readout.setText(f"x={x} y={y}   {vals}{suffix}")
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +429,8 @@ class NeighborhoodPanel(QtWidgets.QWidget):
 # ---------------------------------------------------------------------------
 class ImagePanel(QtWidgets.QWidget):
     pixelHovered = QtCore.pyqtSignal(int, int)
-    pixelClicked = QtCore.pyqtSignal(int, int)
+    pixelClicked = QtCore.pyqtSignal(int, int)        # left-click: freeze
+    pixelReleased = QtCore.pyqtSignal(int, int)       # right-click: unfreeze
 
     _MIN_SCALE = 0.02
     _MAX_SCALE = 64.0
@@ -506,10 +520,13 @@ class ImagePanel(QtWidgets.QWidget):
             self.pixelHovered.emit(*xy)
 
     def mousePressEvent(self, e):
+        xy = self._to_image_xy(e.position())
+        if xy is None:
+            return
         if e.button() == QtCore.Qt.MouseButton.LeftButton:
-            xy = self._to_image_xy(e.position())
-            if xy is not None:
-                self.pixelClicked.emit(*xy)
+            self.pixelClicked.emit(*xy)
+        elif e.button() == QtCore.Qt.MouseButton.RightButton:
+            self.pixelReleased.emit(*xy)
 
 
 # ---------------------------------------------------------------------------
@@ -575,9 +592,10 @@ class InspectorPane(QtWidgets.QWidget):
         self._names = []
         self._frozen = False
 
+        self._image.setToolTip("Left-click: freeze the pixel readout · Right-click: release")
         self._image.pixelHovered.connect(self._on_hover)
         self._image.pixelClicked.connect(self._on_click)
-        self._neigh._grid_combo.currentIndexChanged.connect(lambda _i: None)
+        self._image.pixelReleased.connect(self._on_release)
         self._hist.rangesChanged.connect(self._apply_filter)
 
     # --- public API --------------------------------------------------------
@@ -692,9 +710,13 @@ class InspectorPane(QtWidgets.QWidget):
             self._neigh.set_center(x, y)
 
     def _on_click(self, x, y) -> None:
-        # Left-click freezes the neighbourhood on this pixel; click again to unfreeze.
-        if self._frozen and self._neigh._center == (x, y):
-            self._frozen = False
-        else:
-            self._frozen = True
-            self._neigh.set_center(x, y)
+        # Left-click freezes the neighbourhood on this pixel (re-clicking moves it).
+        self._frozen = True
+        self._neigh.set_frozen(True)
+        self._neigh.set_center(x, y)
+
+    def _on_release(self, x, y) -> None:
+        # Right-click releases the freeze and resumes live cursor tracking.
+        self._frozen = False
+        self._neigh.set_frozen(False)
+        self._neigh.set_center(x, y)

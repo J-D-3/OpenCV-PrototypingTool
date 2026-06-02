@@ -444,13 +444,17 @@ def check_inspector_pane(app) -> None:
     assert "×" in pane._meta.text() and "Gray" in pane._meta.text(), "metadata should show size + type"
     assert pane._neigh.grid_size() == 27, "default grid should be 27x27"
 
-    # Hover updates the neighbourhood readout; click freezes it.
+    # Hover updates the neighbourhood; left-click freezes; right-click releases.
     pane._on_hover(5, 4)
     assert pane._neigh._center == (5, 4)
     pane._on_click(7, 8)
     assert pane._frozen and pane._neigh._center == (7, 8)
     pane._on_hover(1, 1)
     assert pane._neigh._center == (7, 8), "frozen neighbourhood should ignore hover"
+    pane._on_release(3, 3)
+    assert not pane._frozen and pane._neigh._center == (3, 3), "right-click should release"
+    pane._on_hover(2, 2)
+    assert pane._neigh._center == (2, 2), "hover should resume after release"
 
     # Narrowing a histogram range masks the preview AND the neighbourhood grid.
     base_nonzero = int(np.count_nonzero(pane._disp))
