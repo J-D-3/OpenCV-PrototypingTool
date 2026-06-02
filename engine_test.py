@@ -301,6 +301,26 @@ def test_resize():
     print("OK  resize: scale (up/down) + interpolation mode")
 
 
+def test_rotate():
+    img = np.zeros((20, 40, 3), np.uint8)   # 20 tall x 40 wide
+
+    m = GraphModel()
+    s = _src(m, img)
+    r = _op(m, "rotate", angle=90, expand=True)
+    m.add_edge(s, r)
+    Engine(m).evaluate_all()
+    assert r.output is not None and r.output.shape[:2] == (40, 20), \
+        f"expand-rotate 90 should swap dims, got {None if r.output is None else r.output.shape[:2]}"
+
+    m2 = GraphModel()
+    s2 = _src(m2, img)
+    r2 = _op(m2, "rotate", angle=90, expand=False)
+    m2.add_edge(s2, r2)
+    Engine(m2).evaluate_all()
+    assert r2.output.shape[:2] == (20, 40), "no-expand rotate keeps the original size"
+    print("OK  rotate: arbitrary angle + expand-to-fit")
+
+
 def test_cycle_prevention():
     m = GraphModel()
     a = _op(m, "blur")
@@ -326,8 +346,9 @@ def main():
     test_batched()
     test_create_batch()
     test_resize()
+    test_rotate()
     test_cycle_prevention()
-    print("\nENGINE OK: 15 backend tests passed")
+    print("\nENGINE OK: 16 backend tests passed")
 
 
 if __name__ == "__main__":

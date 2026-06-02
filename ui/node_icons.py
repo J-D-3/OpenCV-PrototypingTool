@@ -14,6 +14,7 @@ ICON_BY_OP = {
     "to_bgr": "convert",
     "to_hls": "convert",
     "resize": "resize",
+    "rotate": "rotate",
     "blur": "blur",
     "gaussian_blur": "blur",
     "threshold": "threshold",
@@ -209,6 +210,19 @@ def _histogram(p, r, c):
         p.drawRect(QtCore.QRectF(b.left() + i * w, b.bottom() - bar_h, w * 0.7, bar_h))
 
 
+def _rotate(p, r, c):
+    import math
+    b = _inset(r, 0.16)
+    _pen(p, c)
+    p.drawArc(b, 40 * 16, 280 * 16)   # most of a circle (gap where the arrowhead goes)
+    cx, cy = b.center().x(), b.center().y()
+    rx, ry = b.width() / 2.0, b.height() / 2.0
+    a = math.radians(40)              # arc end point (0deg = 3 o'clock, CCW)
+    ex, ey = cx + rx * math.cos(a), cy - ry * math.sin(a)
+    p.drawLine(QtCore.QPointF(ex, ey), QtCore.QPointF(ex - rx * 0.45, ey - ry * 0.1))
+    p.drawLine(QtCore.QPointF(ex, ey), QtCore.QPointF(ex + rx * 0.1, ey - ry * 0.5))
+
+
 def _fourier(p, r, c):
     import math
     b = _inset(r, 0.12)
@@ -224,7 +238,7 @@ def _fourier(p, r, c):
 
 _DRAWERS = {
     "generic": _generic, "save": _save, "image": _image, "batch": _batch,
-    "convert": _convert, "resize": _resize, "blur": _blur, "threshold": _threshold,
+    "convert": _convert, "resize": _resize, "rotate": _rotate, "blur": _blur, "threshold": _threshold,
     "morph": _morph, "edges": _edges, "contours": _contours, "cluster": _cluster,
     "palette": _palette, "histogram": _histogram, "fourier": _fourier,
     "plus": lambda p, r, c: _glyph_text(p, r, c, "+"),

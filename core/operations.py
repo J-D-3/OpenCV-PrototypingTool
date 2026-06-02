@@ -354,6 +354,25 @@ def _compute_resize(inputs, p):
         return None
 
 
+def _compute_rotate(inputs, p):
+    try:
+        img = inputs[0]
+        angle = float(p["angle"])
+        h, w = img.shape[:2]
+        cx, cy = w / 2.0, h / 2.0
+        m = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+        if p.get("expand", False):
+            cos, sin = abs(m[0, 0]), abs(m[0, 1])
+            nw, nh = int(h * sin + w * cos), int(h * cos + w * sin)
+            m[0, 2] += nw / 2.0 - cx
+            m[1, 2] += nh / 2.0 - cy
+            return cv2.warpAffine(img, m, (nw, nh))
+        return cv2.warpAffine(img, m, (w, h))
+    except Exception as e:
+        print(f"Error executing rotate: {e}")
+        return None
+
+
 def _to_gray_u8(img):
     gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     return gray if gray.dtype == np.uint8 else gray.astype(np.uint8)
@@ -837,6 +856,16 @@ OPS: list = [
                       choices=_INTERP_MODES, label="Interpolation"),
         ],
         compute=_compute_resize, color=(63, 81, 181), out_space="passthrough",
+        in_label="Mat (any)", out_label="Mat (any)",
+    ),
+    Operation(
+        id="rotate", label="Rotate", category="Geometry",
+        inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE)],
+        params=[
+            ParamSpec("angle", 0, kind="int", min=-180, max=180, label="Angle (deg)"),
+            ParamSpec("expand", False, kind="bool", label="Expand to fit"),
+        ],
+        compute=_compute_rotate, color=(63, 81, 181), out_space="passthrough",
         in_label="Mat (any)", out_label="Mat (any)",
     ),
     # --- Contours ----------------------------------------------------------
