@@ -77,7 +77,7 @@ class RangeSlider(QtWidgets.QWidget):
         self._lo, self._hi = 0, 255
         self._color = color
         self._drag = None  # 'lo' | 'hi' | None
-        self._margin = 6
+        self._margin = 5
 
     def values(self):
         return self._lo, self._hi
@@ -145,14 +145,24 @@ class RangeSlider(QtWidgets.QWidget):
 class HistogramPlot(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(90)
         self._curves = []    # list of (color, normalized np.ndarray[256])
         self._markers = []   # list of (color, lo, hi) — range handles to draw as lines
+        self._pad_left = 0   # so the 0..255 span aligns with the sliders below
+        self._pad_right = 0
+
+    def set_padding(self, left: int, right: int) -> None:
+        self._pad_left, self._pad_right = left, right
+        self.update()
 
     def set_data(self, curves, markers):
         self._curves = curves
         self._markers = markers
         self.update()
+
+    def _x(self, value, w):
+        span = max(1, w - self._pad_left - self._pad_right)
+        return self._pad_left + span * value / 255.0
 
     def paintEvent(self, _e):
         p = QtGui.QPainter(self)
@@ -163,20 +173,19 @@ class HistogramPlot(QtWidgets.QWidget):
 
         # Range markers: a vertical line at each non-default handle (skip 0 / 255).
         for color, lo, hi in self._markers:
-            pen = QtGui.QPen(color, 1, QtCore.Qt.PenStyle.DashLine)
-            p.setPen(pen)
+            p.setPen(QtGui.QPen(color, 1, QtCore.Qt.PenStyle.DashLine))
             if lo > 0:
-                x = w * lo / 255
+                x = self._x(lo, w)
                 p.drawLine(QtCore.QPointF(x, 0), QtCore.QPointF(x, h))
             if hi < 255:
-                x = w * hi / 255
+                x = self._x(hi, w)
                 p.drawLine(QtCore.QPointF(x, 0), QtCore.QPointF(x, h))
 
         for color, norm in self._curves:
             p.setPen(QtGui.QPen(color, 1))
             path = QtGui.QPainterPath()
             for i in range(256):
-                x = w * i / 255
+                x = self._x(i, w)
                 y = h - 1 - norm[i] * (h - 2)
                 if i == 0:
                     path.moveTo(x, y)
@@ -187,6 +196,10 @@ class HistogramPlot(QtWidgets.QWidget):
 
 class HistogramPanel(QtWidgets.QWidget):
     rangesChanged = QtCore.pyqtSignal()
+
+    _CB_W = 28          # checkbox+label column width
+    _ROW_SPACING = 2    # gap between checkbox and slider
+    _SLIDER_MARGIN = 5  # RangeSlider track inset (must match RangeSlider._margin)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -203,6 +216,10 @@ class HistogramPanel(QtWidgets.QWidget):
         self._plot = HistogramPlot()
         self._plot.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
                                  QtWidgets.QSizePolicy.Policy.Expanding)
+        # Align the plot's 0..255 span with the channel sliders below it:
+        # left pad = checkbox column + row spacing + slider track margin.
+        self._plot.set_padding(self._CB_W + self._ROW_SPACING + self._SLIDER_MARGIN,
+                               self._SLIDER_MARGIN)
         self._layout.addWidget(self._plot, 1)   # plot takes the slack; rows stay compact
         self._rows_box = QtWidgets.QWidget()
         self._rows = QtWidgets.QVBoxLayout(self._rows_box)
@@ -230,9 +247,10 @@ class HistogramPanel(QtWidgets.QWidget):
             row_w = QtWidgets.QWidget()
             row = QtWidgets.QHBoxLayout(row_w)
             row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(self._ROW_SPACING)
             cb = QtWidgets.QCheckBox(names[i])
             cb.setChecked(True)
-            cb.setFixedWidth(48)
+            cb.setFixedWidth(self._CB_W)
             cb.setStyleSheet(f"color: rgb({color.red()},{color.green()},{color.blue()});")
             slider = RangeSlider(color)
             cb.toggled.connect(self._on_changed)
@@ -337,7 +355,7 @@ class NeighborhoodPanel(QtWidgets.QWidget):
         self._grid_combo = QtWidgets.QComboBox()
         for s in self.GRID_SIZES:
             self._grid_combo.addItem(f"{s}×{s}", s)
-        self._grid_combo.setCurrentIndex(1)  # 9x9
+        self._grid_combo.setCurrentIndex(self.GRID_SIZES.index(27))  # default 27x27
         self._grid_combo.currentIndexChanged.connect(lambda _i: self._rebuild())
         row.addWidget(self._grid_combo)
         layout.addLayout(row)
@@ -351,8 +369,13 @@ class NeighborhoodPanel(QtWidgets.QWidget):
         self._center = None     # (x, y)
 
     def set_base(self, disp, names) -> None:
+        # Update the sampled image (e.g. the histogram-filtered preview) but keep
+        # the current cursor/frozen position so re-rendering reflects the filter.
         self._base = disp
         self._names = names
+        self._rebuild()
+
+    def reset_center(self) -> None:
         self._center = None
         self._readout.setText("—")
         self._view.set_patch(None)
@@ -495,8 +518,8 @@ class ImagePanel(QtWidgets.QWidget):
 class InspectorPane(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumWidth(300)
-        self.setMaximumWidth(520)
+        self.setMinimumWidth(340)
+        self.setMaximumWidth(580)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -544,11 +567,13 @@ class InspectorPane(QtWidgets.QWidget):
         for i, panel in enumerate((self._image, self._neigh, self._hist)):
             splitter.addWidget(panel)
             splitter.setStretchFactor(i, 1)
+        splitter.setSizes([1000, 1000, 1000])  # start as equal thirds
         layout.addWidget(splitter, 1)
 
         self._node = None
         self._disp = None       # uint8 display image (unfiltered)
         self._channels = 0
+        self._names = []
         self._frozen = False
 
         self._image.pixelHovered.connect(self._on_hover)
@@ -607,8 +632,10 @@ class InspectorPane(QtWidgets.QWidget):
         if not isinstance(raw, np.ndarray):
             self._disp = None
             self._channels = 0
+            self._names = []
             self._meta.setText("")
             self._image.set_image(None)
+            self._neigh.reset_center()
             self._neigh.set_base(None, [])
             self._hist.clear()
             return
@@ -616,16 +643,17 @@ class InspectorPane(QtWidgets.QWidget):
         disp = to_uint8(raw)
         self._disp = disp
         channels = 1 if disp.ndim == 2 else disp.shape[2]
-        names = channel_names(self._node, channels)
+        self._names = channel_names(self._node, channels)
         h, w = disp.shape[:2]
         self._meta.setText(f"{w}×{h}   {self._type_text(self._node, channels)}   {channels} ch")
 
         if reset or channels != self._channels:
-            self._hist.configure(channels, names)
+            self._hist.configure(channels, self._names)
             self._channels = channels
+        if reset:
+            self._neigh.reset_center()
         self._hist.set_hists(self._compute_hists(disp, channels))
-        self._neigh.set_base(disp, names)
-        self._apply_filter()
+        self._apply_filter()   # updates both the image and the neighbourhood
 
     @staticmethod
     def _compute_hists(disp, channels):
@@ -634,9 +662,11 @@ class InspectorPane(QtWidgets.QWidget):
         return [cv2.calcHist([disp], [c], None, [256], [0, 256]).flatten()
                 for c in range(channels)]
 
-    def _apply_filter(self) -> None:
+    def _filtered_image(self):
+        """The display image with the histogram ranges masked out (pixels outside
+        any active range set to black). Returns None if no node/image."""
         if self._disp is None:
-            return
+            return None
         disp = self._disp
         mask = np.ones(disp.shape[:2], dtype=bool)
         for i, (enabled, lo, hi) in enumerate(self._hist.ranges()):
@@ -645,11 +675,18 @@ class InspectorPane(QtWidgets.QWidget):
             ch = disp if disp.ndim == 2 else disp[:, :, i]
             mask &= (ch >= lo) & (ch <= hi)
         if mask.all():
-            self._image.set_image(disp)
-        else:
-            filtered = disp.copy()
-            filtered[~mask] = 0
-            self._image.set_image(filtered)
+            return disp
+        out = disp.copy()
+        out[~mask] = 0
+        return out
+
+    def _apply_filter(self) -> None:
+        shown = self._filtered_image()
+        if shown is None:
+            return
+        # The image and the pixel-neighbourhood both reflect the filtered view.
+        self._image.set_image(shown)
+        self._neigh.set_base(shown, self._names)
 
     def _on_hover(self, x, y) -> None:
         if not self._frozen:

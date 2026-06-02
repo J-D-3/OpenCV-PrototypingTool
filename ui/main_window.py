@@ -110,6 +110,7 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
+        splitter.setSizes([240, 900, 380])   # give the inspector pane a bit more width
 
         container = QtWidgets.QWidget()
         container.setLayout(QtWidgets.QHBoxLayout())

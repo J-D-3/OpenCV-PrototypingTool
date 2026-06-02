@@ -442,6 +442,7 @@ def check_inspector_pane(app) -> None:
     assert pane._disp is not None and pane._disp.ndim == 2, "threshold output should be single-channel"
     assert len(pane._hist._channels) == 1, "single-channel image -> one histogram channel"
     assert "×" in pane._meta.text() and "Gray" in pane._meta.text(), "metadata should show size + type"
+    assert pane._neigh.grid_size() == 27, "default grid should be 27x27"
 
     # Hover updates the neighbourhood readout; click freezes it.
     pane._on_hover(5, 4)
@@ -451,13 +452,18 @@ def check_inspector_pane(app) -> None:
     pane._on_hover(1, 1)
     assert pane._neigh._center == (7, 8), "frozen neighbourhood should ignore hover"
 
-    # Narrowing a histogram range masks the preview (fewer non-zero pixels).
+    # Narrowing a histogram range masks the preview AND the neighbourhood grid.
     base_nonzero = int(np.count_nonzero(pane._disp))
-    pane._hist._channels[0]["slider"]._lo = 200
+    pane._hist._channels[0]["slider"]._lo = 0
+    pane._hist._channels[0]["slider"]._hi = 100   # excludes the white (255) pixels
+    pane._apply_filter()
+    assert not pane._image._pixmap.isNull(), "filtered image should still render"
+    assert int(np.count_nonzero(pane._neigh._base)) < base_nonzero, \
+        "neighbourhood grid should reflect the histogram filter"
+    # Restore full range for the rest of the test.
+    pane._hist._channels[0]["slider"]._lo = 0
     pane._hist._channels[0]["slider"]._hi = 255
     pane._apply_filter()
-    shown = pane._image._pixmap
-    assert not shown.isNull(), "filtered image should still render"
 
     # Name-based curve colors: Gray draws dark gray.
     from ui.inspector_pane import _channel_color
