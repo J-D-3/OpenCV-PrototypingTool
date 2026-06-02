@@ -22,6 +22,7 @@ ICON_BY_OP = {
     "morphology": "morph",
     "normalize": "levels",
     "invert": "invert",
+    "local_hdr": "sun",
     "canny": "edges",
     "sobel": "edges",
     "laplacian": "edges",
@@ -212,6 +213,23 @@ def _histogram(p, r, c):
         p.drawRect(QtCore.QRectF(b.left() + i * w, b.bottom() - bar_h, w * 0.7, bar_h))
 
 
+def _sun(p, r, c):
+    import math
+    b = _inset(r, 0.24)
+    ctr = b.center()
+    rad = b.width() * 0.30
+    _pen(p, c, 1.2)
+    p.setBrush(c)
+    p.drawEllipse(ctr, rad, rad)
+    p.setBrush(_NoBrush)
+    for k in range(8):
+        a = math.radians(k * 45)
+        p.drawLine(QtCore.QPointF(ctr.x() + math.cos(a) * rad * 1.45,
+                                  ctr.y() + math.sin(a) * rad * 1.45),
+                   QtCore.QPointF(ctr.x() + math.cos(a) * rad * 2.1,
+                                  ctr.y() + math.sin(a) * rad * 2.1))
+
+
 def _invert(p, r, c):
     # square with one diagonal half filled = photographic negative
     b = _inset(r, 0.16)
@@ -258,7 +276,7 @@ def _fourier(p, r, c):
 _DRAWERS = {
     "generic": _generic, "save": _save, "image": _image, "batch": _batch,
     "convert": _convert, "resize": _resize, "rotate": _rotate, "blur": _blur, "threshold": _threshold,
-    "morph": _morph, "levels": _levels, "invert": _invert, "edges": _edges,
+    "morph": _morph, "levels": _levels, "invert": _invert, "sun": _sun, "edges": _edges,
     "contours": _contours, "cluster": _cluster,
     "palette": _palette, "histogram": _histogram, "fourier": _fourier,
     "plus": lambda p, r, c: _glyph_text(p, r, c, "+"),

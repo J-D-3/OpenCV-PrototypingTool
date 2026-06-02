@@ -376,6 +376,29 @@ def test_invert():
     print("OK  invert: 255 - value")
 
 
+def test_local_hdr():
+    rng = np.random.RandomState(0)
+    low = (100 + rng.rand(64, 64) * 8).astype(np.uint8)   # low local contrast
+
+    m = GraphModel()
+    s = _src(m, low)
+    n = _op(m, "local_hdr", radius=12, amplitude=40, strength=1.0)
+    m.add_edge(s, n)
+    Engine(m).evaluate_all()
+    out = n.output
+    assert out is not None and out.shape == low.shape and out.dtype == np.uint8
+    assert float(out.std()) > float(low.std()) * 2, "local HDR should boost local contrast"
+
+    # color images run (processed on luminance) without error.
+    mm = GraphModel()
+    ss = _src(mm, cv2.cvtColor(low, cv2.COLOR_GRAY2BGR))
+    nn = _op(mm, "local_hdr")
+    mm.add_edge(ss, nn)
+    Engine(mm).evaluate_all()
+    assert nn.output is not None and nn.output.shape[2] == 3
+    print("OK  local_hdr: smooth local contrast normalization (gray + color)")
+
+
 def test_cycle_prevention():
     m = GraphModel()
     a = _op(m, "blur")
@@ -404,8 +427,9 @@ def main():
     test_rotate()
     test_normalize()
     test_invert()
+    test_local_hdr()
     test_cycle_prevention()
-    print("\nENGINE OK: 18 backend tests passed")
+    print("\nENGINE OK: 19 backend tests passed")
 
 
 if __name__ == "__main__":

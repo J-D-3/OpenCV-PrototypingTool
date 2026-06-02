@@ -620,6 +620,41 @@ def _compute_invert(inputs, p):
         return None
 
 
+def _compute_local_hdr(inputs, p):
+    """Local (adaptive) histogram normalization with a smooth Gaussian window.
+
+    Subtract the Gaussian local mean and divide by the Gaussian local std, then
+    re-amplify — this equalizes local contrast (flat regions are boosted, busy
+    ones damped) for an HDR-like look, without CLAHE's tile artifacts. Color
+    images are processed on luminance so hues are preserved.
+    """
+    try:
+        img = inputs[0]
+        sigma = max(1.0, float(p["radius"]))
+        amplitude = float(p["amplitude"])
+        strength = float(p["strength"])
+        color = img.ndim == 3 and img.shape[2] == 3
+        if color:
+            ycc = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+            y = ycc[:, :, 0].astype(np.float32)
+        else:
+            y = (img if img.ndim == 2 else img[:, :, 0]).astype(np.float32)
+
+        mean = cv2.GaussianBlur(y, (0, 0), sigma)
+        detail = y - mean
+        local_std = np.sqrt(cv2.GaussianBlur(detail * detail, (0, 0), sigma))
+        enhanced = mean + (detail / (local_std + 1.0)) * amplitude
+        out = np.clip((1.0 - strength) * y + strength * enhanced, 0, 255).astype(np.uint8)
+
+        if color:
+            ycc[:, :, 0] = out
+            return cv2.cvtColor(ycc, cv2.COLOR_YCrCb2BGR)
+        return out
+    except Exception as e:
+        print(f"Error executing local_hdr: {e}")
+        return None
+
+
 def _compute_histogram(inputs, p):
     """Per-channel intensity histogram. Output is a HISTOGRAM payload."""
     try:
@@ -874,6 +909,17 @@ OPS: list = [
         id="invert", label="Invert", category="Local Operations",
         inputs=[Port("in")], outputs=[Port("out")], params=[],
         compute=_compute_invert, color=(69, 90, 100), out_space="passthrough",
+        in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
+    ),
+    Operation(
+        id="local_hdr", label="Local HDR", category="Local Operations",
+        inputs=[Port("in")], outputs=[Port("out")],
+        params=[
+            ParamSpec("radius", 25, kind="int", min=2, max=120, label="Radius"),
+            ParamSpec("amplitude", 35, kind="int", min=5, max=100, label="Detail strength"),
+            ParamSpec("strength", 1.0, kind="float", min=0.0, max=1.0, step=0.05, label="Strength"),
+        ],
+        compute=_compute_local_hdr, color=(255, 138, 0), out_space="passthrough",
         in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
     ),
     Operation(
