@@ -76,8 +76,12 @@ Evaluation no longer blocks the UI thread. Two independent layers:
   current one finishes. `wait_idle()` pumps the event loop until idle; structural
   ops call it **before mutating topology** (so the worker never sees a concurrent
   structural change), and tests call it to observe results. `recompute_all`
-  (load) stays synchronous. Nodes show a gray overlay + animated spinner
-  (`Node.set_computing`, driven by a per-node `QTimer`) while recomputing.
+  (pipeline load) stays synchronous but is **progressive**: it paints the freshly
+  built graph, puts a spinner on every pending node, then evaluates node-by-node
+  in topo order, revealing each node's preview as it finishes (`_pump()` flushes
+  paints with `ExcludeUserInputEvents` so the load can't be re-entered by clicks).
+  Nodes show a gray overlay + animated spinner (`Node.set_computing`, driven by a
+  per-node `QTimer`) while recomputing.
 - **Parallel batch fan-out** (`core/engine._run_batched`). A node's batch maps
   across a `ThreadPoolExecutor` (`Engine._max_workers = min(8, cpu)`), the
   previewed element first. This parallelises because OpenCV/NumPy release the GIL

@@ -65,8 +65,37 @@ class GraphController:
         """Bind a view item to an existing backend node (used when loading)."""
         self._bind(qt_node, gnode)
 
+    def _pump(self) -> None:
+        """Repaint without accepting user input (so a long synchronous load shows
+        progress but can't be re-entered by clicks)."""
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.processEvents(QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
     def recompute_all(self) -> None:
-        self._recompute(commit=True)
+        """Synchronous but *progressive* (used by pipeline load): paint the
+        freshly-built graph, put a spinner on every pending node, then evaluate
+        node-by-node in topological order, filling each node's preview as it
+        finishes — so the user sees the load advance instead of a frozen window."""
+        self.wait_idle()
+        self.engine.preview_index = self.preview_index
+        self._pump()                              # 1. draw the (empty) graph
+        order = self.model.topo_order()
+        pending = [n for n in order if n.dirty]
+        for gn in pending:                        # 2. show spinners on what's coming
+            qt = self._qt_by_gid.get(gn.id)
+            if qt is not None:
+                qt.set_computing(True)
+        self._pump()
+        for node in pending:                      # 3. evaluate + reveal one at a time
+            self.engine.evaluate(node)
+            qt = self._qt_by_gid.get(node.id)
+            if qt is not None:
+                qt.set_computing(False)
+                qt.refresh_from_model()
+                qt.on_commit()
+                self.signals.nodeChanged.emit(qt)
+            self._pump()
 
     def set_preview_index(self, index: int) -> None:
         """Change which batch element every node previews and re-render views."""

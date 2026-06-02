@@ -324,6 +324,33 @@ def check_save_load(app) -> None:
     print("OK  pipeline save/load round-trips structure and result")
 
 
+def check_progressive_load(app) -> None:
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    g = add_func(w, "To Grayscale")
+    b = add_func(w, "Blur")
+    connect(w, src, g)
+    connect(w, g, b)
+    app.processEvents()
+    data = json.loads(json.dumps(w.drop_widget.to_dict()))
+
+    ctrl = w.drop_widget.view.controller
+    reveals = []
+    ctrl.signals.nodeChanged.connect(reveals.append)   # one emit per node as it finishes
+
+    w.drop_widget.load_dict(data)                       # synchronous but progressive
+    app.processEvents()
+
+    nodes = list(ctrl.model.nodes.values())
+    assert len(reveals) == len(nodes), \
+        f"load should reveal each node once ({len(reveals)} vs {len(nodes)})"
+    assert all(n.output is not None for n in nodes), "all nodes computed after load"
+    assert not any(getattr(qt, "_executing", False) for qt in ctrl._qt_by_gid.values()), \
+        "no spinner should remain after load"
+    w.close()
+    print("OK  progressive load: graph drawn, spinners, per-node reveal")
+
+
 def check_delete_node(app) -> None:
     w = make_window(app)
     src = add_image(w, gradient_bgr())
@@ -840,6 +867,7 @@ def main() -> int:
         check_display_conversion,
         check_preview_and_summary,
         check_save_load,
+        check_progressive_load,
         check_delete_node,
         check_input_swap,
         check_color_chain,
