@@ -183,6 +183,30 @@ def test_contours():
     print("OK  contours: stable id colours + depth/size draw order; filled preview")
 
 
+def test_contour_nesting_colors():
+    # Filled white square with a black hole -> outer (depth 0) + hole (depth 1).
+    img = np.zeros((100, 100, 3), np.uint8)
+    cv2.rectangle(img, (20, 20), (80, 80), (255, 255, 255), -1)
+    cv2.rectangle(img, (40, 40), (60, 60), (0, 0, 0), -1)
+    m = GraphModel(); s = _src(m, img)
+    fc = _op(m, "find_contours", mode=cv2.RETR_CCOMP)
+    m.add_edge(s, fc); Engine(m).evaluate_all()
+    out = fc.output
+    depths = out["depths"]
+    assert sorted(depths) == [0, 1], f"expected an outer + one hole, got depths {depths}"
+
+    from core.operations import _CONTOUR_COLORS
+    half = len(_CONTOUR_COLORS) // 2
+    col = lambda i: _CONTOUR_COLORS[(out["ids"][i] % half) + (depths[i] % 2) * half]
+    parent, child = depths.index(0), depths.index(1)
+    assert col(parent) != col(child), "immediate parent and child must get distinct colours"
+
+    prev = REGISTRY["find_contours"].render_preview(None, out, {"filled": True})
+    assert tuple(int(v) for v in prev[50, 50]) == col(child), \
+        "filled hole must stay visible (child colour on top, not the parent's)"
+    print("OK  contour nesting: immediate parent/child get distinct colours")
+
+
 def test_label_regions():
     # Three solid color blocks -> exactly three regions (exact-equality, delta=0).
     img = np.zeros((60, 90, 3), np.uint8)
@@ -681,6 +705,7 @@ def main():
     test_persistence_roundtrip()
     test_color_pipeline()
     test_contours()
+    test_contour_nesting_colors()
     test_label_regions()
     test_connected_components()
     test_segmentation_nodes()
@@ -701,7 +726,7 @@ def main():
     test_comp_timing_and_traversal()
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
-    print("\nENGINE OK: 28 backend tests passed")
+    print("\nENGINE OK: 29 backend tests passed")
 
 
 if __name__ == "__main__":

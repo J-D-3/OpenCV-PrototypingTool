@@ -560,13 +560,21 @@ def _draw_contours_preview(payload, filled=False):
     out = bg.copy()
     thickness = cv2.FILLED if filled else 1
     nc = len(_CONTOUR_COLORS)
+    half = nc // 2
     # Batch by (nesting depth, colour): ONE cv2.drawContours call per group instead
     # of one per contour (so thousands of contours become a handful of calls — the
     # per-contour loop was the batch-switch lag). Depth ascending keeps filled
-    # children on top of parents; colour stays bound to the stable id.
+    # children on top of parents.
+    #
+    # Colour = id within a depth-parity palette: even depths use colours 0..half-1,
+    # odd depths use half..nc-1. An immediate parent (depth d) and child (depth d+1)
+    # are always in different halves, so a filled hole never vanishes into its
+    # parent's colour. Depth d+2 reuses depth d's palette (allowed — the depth d+1
+    # ring in between is a different colour). Still stable per (id, depth).
     groups = defaultdict(list)
     for i, c in enumerate(contours):
-        groups[(depths[i], ids[i] % nc)].append(c)
+        ci = (ids[i] % half) + (depths[i] % 2) * half
+        groups[(depths[i], ci)].append(c)
     for d, ci in sorted(groups):
         cv2.drawContours(out, groups[(d, ci)], -1, _CONTOUR_COLORS[ci], thickness)
     return out
