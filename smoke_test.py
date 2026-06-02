@@ -441,6 +441,7 @@ def check_inspector_pane(app) -> None:
     assert pane._node is thresh
     assert pane._disp is not None and pane._disp.ndim == 2, "threshold output should be single-channel"
     assert len(pane._hist._channels) == 1, "single-channel image -> one histogram channel"
+    assert "×" in pane._meta.text() and "Gray" in pane._meta.text(), "metadata should show size + type"
 
     # Hover updates the neighbourhood readout; click freezes it.
     pane._on_hover(5, 4)
@@ -530,11 +531,11 @@ def check_batch(app) -> None:
     for f in files:
         os.remove(f)
 
-    # Selecting the batch source shows the frame slider (range 0..2).
+    # Selecting the batch source shows the frame nav "< i/3 >".
     src.setSelected(True)
     app.processEvents()
-    assert w.inspector_pane._frame_widget.isVisible()
-    assert w.inspector_pane._frame_slider.maximum() == 2
+    assert w.inspector_pane._frame_nav.isVisible()
+    assert w.inspector_pane._frame_label.text().endswith("/3")
     w.close()
     print("OK  batched: one chain over 3 images; per-frame preview + save-all")
 

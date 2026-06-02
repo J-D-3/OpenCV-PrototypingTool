@@ -201,7 +201,9 @@ class HistogramPanel(QtWidgets.QWidget):
         header.addWidget(self._log_cb)
         self._layout.addLayout(header)
         self._plot = HistogramPlot()
-        self._layout.addWidget(self._plot)
+        self._plot.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                 QtWidgets.QSizePolicy.Policy.Expanding)
+        self._layout.addWidget(self._plot, 1)   # plot takes the slack; rows stay compact
         self._rows_box = QtWidgets.QWidget()
         self._rows = QtWidgets.QVBoxLayout(self._rows_box)
         self._rows.setContentsMargins(0, 0, 0, 0)
@@ -325,21 +327,24 @@ class NeighborhoodPanel(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(2)
-        top = QtWidgets.QHBoxLayout()
-        top.addWidget(QtWidgets.QLabel("Pixels"))
+        # One row: pixel coordinate + per-channel value (left), grid size (right).
+        row = QtWidgets.QHBoxLayout()
+        self._readout = QtWidgets.QLabel("—")
+        self._readout.setStyleSheet("font-family: monospace;")
+        row.addWidget(self._readout)
+        row.addStretch()
+        row.addWidget(QtWidgets.QLabel("Grid"))
         self._grid_combo = QtWidgets.QComboBox()
         for s in self.GRID_SIZES:
             self._grid_combo.addItem(f"{s}×{s}", s)
         self._grid_combo.setCurrentIndex(1)  # 9x9
         self._grid_combo.currentIndexChanged.connect(lambda _i: self._rebuild())
-        top.addWidget(self._grid_combo)
-        top.addStretch()
-        layout.addLayout(top)
+        row.addWidget(self._grid_combo)
+        layout.addLayout(row)
         self._view = NeighborhoodView()
-        layout.addWidget(self._view)
-        self._readout = QtWidgets.QLabel("—")
-        self._readout.setStyleSheet("font-family: monospace;")
-        layout.addWidget(self._readout)
+        self._view.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                 QtWidgets.QSizePolicy.Policy.Expanding)
+        layout.addWidget(self._view, 1)
 
         self._base = None       # uint8 display image
         self._names = ["B", "G", "R"]
@@ -495,33 +500,51 @@ class InspectorPane(QtWidgets.QWidget):
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        # Header: title (left) + batch frame nav "< i/N >" (right, only for batches).
+        header = QtWidgets.QHBoxLayout()
         self._title = QtWidgets.QLabel("Inspector — (no selection)")
         self._title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(self._title)
-
-        # Batch frame selector (visible only when the selected node holds >1 image).
-        frame_row = QtWidgets.QHBoxLayout()
+        header.addWidget(self._title)
+        header.addStretch()
+        self._prev_btn = QtWidgets.QPushButton("<")
+        self._next_btn = QtWidgets.QPushButton(">")
+        self._prev_btn.setFixedWidth(26)
+        self._next_btn.setFixedWidth(26)
         self._frame_label = QtWidgets.QLabel("")
-        self._frame_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self._frame_slider.valueChanged.connect(self._on_frame)
-        frame_row.addWidget(self._frame_label)
-        frame_row.addWidget(self._frame_slider)
-        self._frame_widget = QtWidgets.QWidget()
-        self._frame_widget.setLayout(frame_row)
-        self._frame_widget.setVisible(False)
-        layout.addWidget(self._frame_widget)
+        self._frame_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._frame_label.setMinimumWidth(44)
+        self._prev_btn.clicked.connect(lambda: self._step(-1))
+        self._next_btn.clicked.connect(lambda: self._step(1))
+        self._frame_nav = QtWidgets.QWidget()
+        nav = QtWidgets.QHBoxLayout(self._frame_nav)
+        nav.setContentsMargins(0, 0, 0, 0)
+        nav.setSpacing(2)
+        nav.addWidget(self._prev_btn)
+        nav.addWidget(self._frame_label)
+        nav.addWidget(self._next_btn)
+        self._frame_nav.setVisible(False)
+        header.addWidget(self._frame_nav)
+        layout.addLayout(header)
 
+        # Image metadata: size + color type.
+        self._meta = QtWidgets.QLabel("")
+        self._meta.setStyleSheet("color: #666;")
+        layout.addWidget(self._meta)
+
+        # Three views, ~1/3 each, with visible drag handles between them.
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        splitter.setHandleWidth(7)
+        splitter.setStyleSheet(
+            "QSplitter::handle { background: #a8a8a8; margin: 2px 0; border-radius: 1px; }")
         self._image = ImagePanel()
         self._neigh = NeighborhoodPanel()
         self._hist = HistogramPanel()
-        splitter.addWidget(self._image)
-        splitter.addWidget(self._neigh)
-        splitter.addWidget(self._hist)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setStretchFactor(2, 2)
-        layout.addWidget(splitter)
+        for i, panel in enumerate((self._image, self._neigh, self._hist)):
+            splitter.addWidget(panel)
+            splitter.setStretchFactor(i, 1)
+        layout.addWidget(splitter, 1)
 
         self._node = None
         self._disp = None       # uint8 display image (unfiltered)
@@ -547,26 +570,36 @@ class InspectorPane(QtWidgets.QWidget):
             self._recompute(reset=False)
 
     # --- internals ---------------------------------------------------------
-    def _on_frame(self, value: int) -> None:
-        # set_preview_index refreshes all node thumbnails and emits
-        # previewIndexChanged, which refreshes this pane (see MainWindow wiring).
-        if self._node is not None and self._node.controller is not None:
-            self._node.controller.set_preview_index(value)
+    def _batch_len(self) -> int:
+        value = self._node._batch_value() if self._node is not None else None
+        return len(value) if isinstance(value, Batch) else 1
+
+    def _step(self, delta: int) -> None:
+        if self._node is None or self._node.controller is None:
+            return
+        n = self._batch_len()
+        idx = max(0, min(self._node.controller.preview_index + delta, n - 1))
+        self._node.controller.set_preview_index(idx)  # emits -> pane refreshes
 
     def _update_frame_controls(self) -> None:
-        full = self._node.gnode.output if (self._node is not None and getattr(self._node, "gnode", None)) else None
-        n = len(full) if isinstance(full, Batch) else 1
+        n = self._batch_len()
         controller = getattr(self._node, "controller", None)
         if n > 1 and controller is not None:
             idx = min(controller.preview_index, n - 1)
-            self._frame_slider.blockSignals(True)
-            self._frame_slider.setRange(0, n - 1)
-            self._frame_slider.setValue(idx)
-            self._frame_slider.blockSignals(False)
-            self._frame_label.setText(f"Image {idx + 1}/{n}")
-            self._frame_widget.setVisible(True)
+            self._frame_label.setText(f"{idx + 1}/{n}")
+            self._prev_btn.setEnabled(idx > 0)
+            self._next_btn.setEnabled(idx < n - 1)
+            self._frame_nav.setVisible(True)
         else:
-            self._frame_widget.setVisible(False)
+            self._frame_nav.setVisible(False)
+
+    @staticmethod
+    def _type_text(node, channels) -> str:
+        space = (getattr(getattr(node, "gnode", None), "color_space", "") or "").lower()
+        label = {"bgr": "BGR", "hls": "HLS", "gray": "Gray", "binary": "Binary"}.get(space)
+        if label is None:
+            label = "Gray" if channels == 1 else "BGR"
+        return label
 
     def _recompute(self, reset: bool) -> None:
         self._update_frame_controls()
@@ -574,6 +607,7 @@ class InspectorPane(QtWidgets.QWidget):
         if not isinstance(raw, np.ndarray):
             self._disp = None
             self._channels = 0
+            self._meta.setText("")
             self._image.set_image(None)
             self._neigh.set_base(None, [])
             self._hist.clear()
@@ -583,6 +617,8 @@ class InspectorPane(QtWidgets.QWidget):
         self._disp = disp
         channels = 1 if disp.ndim == 2 else disp.shape[2]
         names = channel_names(self._node, channels)
+        h, w = disp.shape[:2]
+        self._meta.setText(f"{w}×{h}   {self._type_text(self._node, channels)}   {channels} ch")
 
         if reset or channels != self._channels:
             self._hist.configure(channels, names)

@@ -129,9 +129,10 @@ This is a **working prototype** being revived. The environment is now set up
 - [x] **Batched multi-image processing.** "Open Images... (batch)" creates one
       source holding N images; the engine maps every op over the batch
       (`core/batch.py`), so one chain processes many images. Two-input ops
-      zip/broadcast (e.g. diff every frame against one reference). A frame slider
-      in the inspector scrubs which element all nodes preview; Save-to-File
-      writes every element; batch sources are persisted.
+      zip/broadcast (e.g. diff every frame against one reference). The inspector
+      header's `< i/N >` buttons (or the mouse wheel over a batch node) scrub
+      which element all nodes preview; Save-to-File writes every element; batch
+      sources are persisted.
 - [x] **Create Batch node.** A variadic Input/Output node that assembles a
       batch from arbitrarily many image inputs (normalized to 3-channel BGR), so
       you can batch the outputs of separate sources/branches — without colliding
