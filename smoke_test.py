@@ -638,6 +638,39 @@ def check_icon_size_control(app) -> None:
     print("OK  canvas icon-size control: default 90, resizes nodes")
 
 
+def check_save_nonimage(app) -> None:
+    import os
+    import glob
+
+    w = make_window(app)
+    img = np.zeros((40, 40, 3), np.uint8)
+    cv2.rectangle(img, (5, 5), (22, 22), (255, 255, 255), -1)
+    src = add_image(w, img)
+    fc = add_func(w, "Find Contours")
+    save = add_func(w, "Save to File")
+
+    pattern = os.path.join("output", "nonimg_DELETEME*")
+    for f in glob.glob(pattern):
+        os.remove(f)
+    save.set_parameter("use_custom", True)
+    save.set_parameter("filename", "nonimg_DELETEME.png")
+
+    connect(w, src, fc)
+    # CONTOURS -> Save (input type ANY) must be allowed and save the rendered preview.
+    assert save.can_accept_input(fc), "Save to File should accept a non-image (contours) output"
+    connect(w, fc, save)
+    app.processEvents()
+
+    files = glob.glob(pattern)
+    assert len(files) == 1, f"expected the contours preview to be saved, got {len(files)}"
+    loaded = cv2.imread(files[0])
+    assert loaded is not None and loaded.ndim == 3, "saved fallback should be a valid image"
+    for f in files:
+        os.remove(f)
+    w.close()
+    print("OK  save-to-file falls back to the display image (e.g. contours)")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -662,6 +695,7 @@ def main() -> int:
         check_create_batch,
         check_node_icons_and_scroll,
         check_icon_size_control,
+        check_save_nonimage,
     ]
     for chk in checks:
         chk(app)

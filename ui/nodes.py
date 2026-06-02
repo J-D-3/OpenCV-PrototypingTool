@@ -13,7 +13,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from core.operations import REGISTRY
 from core.batch import Batch
 from ui import node_icons
-from ui.image_utils import cv_to_qimage
+from ui.image_utils import cv_to_qimage, to_uint8
 
 if TYPE_CHECKING:
     from ui.arrow import ArrowItem
@@ -550,15 +550,48 @@ class SaveToFileNode(FunctionNode):
     def __init__(self, icon_size: int, grid_size: int = 12):
         super().__init__(REGISTRY["save_to_file"], icon_size, grid_size)
 
+    def _source_op_params(self):
+        """The op + params of the node feeding this Save node (for rendering a
+        fallback preview when the input is not a plain image)."""
+        if self.controller is None or self.gnode is None:
+            return None, {}
+        sources = self.controller.model.inputs_of(self.gnode)  # GraphNodes feeding us
+        if not sources:
+            return None, {}
+        src = sources[0]
+        return src.op, dict(src.params)
+
+    def _savable(self, element):
+        """Turn an input element into a uint8 image to save: the image itself, or
+        — if it is a non-image payload — the upstream op's rendered preview."""
+        if isinstance(element, np.ndarray):
+            return element if element.dtype == np.uint8 else to_uint8(element)
+        op, params = self._source_op_params()
+        render = getattr(op, "render_preview", None) if op is not None else None
+        if render is None or element is None:
+            return None
+        try:
+            img = render([], element, params)
+        except Exception as e:  # noqa: BLE001
+            print(f"save preview render failed: {e}")
+            return None
+        if not isinstance(img, np.ndarray):
+            return None
+        return img if img.dtype == np.uint8 else to_uint8(img)
+
+    def get_preview_image(self):
+        # Show what would be saved (image, or the upstream rendered preview).
+        return self._savable(self.get_output_image())
+
     def on_commit(self) -> None:
-        # Write the whole batch (one file per element), or the single image.
+        # Write the whole batch (one file per element), or the single result.
         out = self.gnode.output if self.gnode is not None else None
-        if isinstance(out, Batch):
-            for i, image in enumerate(out.items):
-                if image is not None:
-                    self._write_to_disk(image, suffix=f"_{i:03d}")
-        elif out is not None:
-            self._write_to_disk(out)
+        items = out.items if isinstance(out, Batch) else [out]
+        multi = isinstance(out, Batch)
+        for i, element in enumerate(items):
+            image = self._savable(element)
+            if image is not None:
+                self._write_to_disk(image, suffix=f"_{i:03d}" if multi else "")
 
     def _write_to_disk(self, image, suffix: str = "") -> None:
         import os

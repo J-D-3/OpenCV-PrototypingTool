@@ -24,9 +24,13 @@ SPECTRUM = "spectrum"   # complex DFT result (carried between DFT and inverse DF
 
 IMAGE_TYPES = frozenset({IMAGE, IMAGE_BGR, IMAGE_GRAY, IMAGE_BINARY, IMAGE_FLOAT})
 
+ANY = "any"   # accepts any output (e.g. Save to File, which can save a preview)
+
 
 def compatible(out_type: str, in_type: str) -> bool:
     """Can an output of ``out_type`` feed an input expecting ``in_type``?"""
+    if in_type == ANY:
+        return True
     if out_type == in_type:
         return True
     # Images are permissive: operations convert between BGR/Gray/binary/float.

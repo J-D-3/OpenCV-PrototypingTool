@@ -744,7 +744,7 @@ _MORPH_OPS = [
 OPS: list = [
     Operation(
         id="save_to_file", label="Save to File", category="Input/Output",
-        inputs=[Port("in")], outputs=[Port("out")],
+        inputs=[Port("in", datatypes.ANY)], outputs=[Port("out")],
         params=[
             ParamSpec("filename", "", kind="path"),
             ParamSpec("use_custom", False, kind="bool", label="Use custom filename"),
