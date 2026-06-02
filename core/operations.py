@@ -543,11 +543,24 @@ def _compute_find_contours(inputs, p):
         return None
 
 
-# Cycle R, G, B, C, M, Y so adjacent contours are easy to tell apart (BGR order).
-_CONTOUR_COLORS = [
-    (0, 0, 255), (0, 255, 0), (255, 0, 0),
-    (255, 255, 0), (255, 0, 255), (0, 255, 255),
-]
+def _build_contour_palette(per_half=6):
+    """2*per_half evenly-spaced, full-saturation colours for contour previews.
+    The first ``per_half`` are the even-depth palette, the rest the odd-depth one;
+    their hues interleave around the wheel, so the two halves are disjoint and each
+    is evenly spread for maximum contrast (and an immediate parent/child, being in
+    different halves, always get different hues). Returns a list of BGR tuples."""
+    n = 2 * per_half
+    hsv = np.zeros((1, n, 3), np.uint8)
+    hsv[0, :, 1:] = 255                                   # full saturation + value
+    hsv[0, :, 0] = [int(round(k * 180.0 / n)) % 180 for k in range(n)]  # OpenCV hue
+    bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0]
+    even = [tuple(int(v) for v in bgr[k]) for k in range(0, n, 2)]      # hues 0,2,4..
+    odd = [tuple(int(v) for v in bgr[k]) for k in range(1, n, 2)]       # hues 1,3,5..
+    return even + odd
+
+
+# Evenly-spaced, high-contrast palette; split in half by nesting-depth parity.
+_CONTOUR_COLORS = _build_contour_palette(6)
 
 
 def _draw_contours_preview(payload, filled=False):
