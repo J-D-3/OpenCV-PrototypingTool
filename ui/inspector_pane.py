@@ -188,7 +188,7 @@ class HistogramPlot(QtWidgets.QWidget):
         """A dashed line + an 'x = <value>' tag (Hue in degrees) at the handle."""
         p.setPen(QtGui.QPen(color, 1, QtCore.Qt.PenStyle.DashLine))
         p.drawLine(QtCore.QPointF(x, 0), QtCore.QPointF(x, h))
-        text = f"x={_ch_value_label(name, raw)}"
+        text = f"{name}={_ch_value_label(name, raw)}"   # e.g. "H=170°"
         fm = p.fontMetrics()
         tw = fm.horizontalAdvance(text)
         tx = x + 2 if x + 2 + tw < self.width() else x - 2 - tw   # keep on-screen
