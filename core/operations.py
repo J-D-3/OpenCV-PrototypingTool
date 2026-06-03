@@ -383,18 +383,41 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1, in_space
     """Pick k by smoothing one channel's histogram (Gaussian) and counting local
     maxima above a prominence threshold — the histogram mode-seeking idea. The
     channel is an HLS index (1=Luminance/L, 0=Hue, 2=Saturation); the input is
-    first mapped to BGR via its tracked color space, so the chosen channel is
-    correct regardless of the upstream space (H is 0–179, L/S are 0–255)."""
-    hls = cv2.cvtColor(_as_bgr(img, in_space), cv2.COLOR_BGR2HLS)
-    chan = hls[:, :, int(channel)]
-    hist = cv2.calcHist([chan.astype(np.uint8)], [0], None, [256], [0, 256]).flatten()
-    hist = cv2.GaussianBlur(hist.reshape(-1, 1).astype(np.float32), (0, 0),
-                            max(0.5, float(sigma))).flatten()
+    first mapped to BGR via its tracked color space.
+
+    Hue (channel 0) gets two extra treatments because raw hue is unreliable: the
+    histogram is **weighted by saturation** (so washed-out / gray pixels — whose
+    hue is essentially noise — don't create phantom peaks), and smoothing + peak
+    detection are **circular** (hue 0 and 179 are adjacent)."""
+    hls = cv2.cvtColor(_as_bgr(img, in_space), cv2.COLOR_BGR2HLS)   # H, L, S
+    ch = int(channel)
+    sig = max(0.5, float(sigma))
+    if ch == 0:                                   # Hue: saturation-weighted + circular
+        h = hls[:, :, 0].reshape(-1).astype(np.int64)        # 0..179
+        s = hls[:, :, 2].reshape(-1).astype(np.float32)      # weight by saturation
+        hist = np.bincount(h, weights=s, minlength=180).astype(np.float32)
+        nbins, circular = 180, True
+    else:
+        chan = hls[:, :, ch].astype(np.uint8)
+        hist = cv2.calcHist([chan], [0], None, [256], [0, 256]).flatten().astype(np.float32)
+        nbins, circular = 256, False
+
+    if circular:                                  # wrap-pad so smoothing is seamless
+        pad = int(np.ceil(sig * 3)) + 1
+        ext = np.concatenate([hist[-pad:], hist, hist[:pad]])
+        ext = cv2.GaussianBlur(ext.reshape(-1, 1), (0, 0), sig).flatten()
+        hist = ext[pad:pad + nbins]
+    else:
+        hist = cv2.GaussianBlur(hist.reshape(-1, 1), (0, 0), sig).flatten()
+
     thr = float(hist.max()) * float(min_prominence)
     peaks = 0
-    for i in range(256):
-        left = hist[i - 1] if i > 0 else -1.0
-        right = hist[i + 1] if i < 255 else -1.0
+    for i in range(nbins):
+        if circular:
+            left, right = hist[(i - 1) % nbins], hist[(i + 1) % nbins]
+        else:
+            left = hist[i - 1] if i > 0 else -1.0
+            right = hist[i + 1] if i < nbins - 1 else -1.0
         if hist[i] >= thr and hist[i] > left and hist[i] >= right:
             peaks += 1
     return max(1, min(peaks, int(max_k)))

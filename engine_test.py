@@ -602,6 +602,26 @@ def test_auto_cluster():
     print("OK  auto_cluster: detects cluster count from histogram peaks (per channel)")
 
 
+def test_auto_cluster_hue_robust():
+    from core.operations import _detect_cluster_count as dc
+    rng = np.random.RandomState(0)
+    base = np.zeros((100, 100, 3), np.uint8); base[:] = (0, 0, 200)        # saturated red
+    noisy = base.copy()
+    noisy[:, 60:] = rng.randint(115, 141, (100, 40, 3), np.uint8)          # desaturated noise
+    # saturation-weighted: washed-out pixels don't add phantom hue peaks
+    assert dc(base, 3.0, 0.15, 8, channel=0) == dc(noisy, 3.0, 0.15, 8, channel=0), \
+        "desaturated pixels must not change the hue cluster count"
+    # circular: hues straddling the 0/179 wrap are a single peak
+    hls = np.zeros((100, 100, 3), np.uint8); hls[:, :, 1] = 128; hls[:, :, 2] = 255
+    hls[:, :50, 0] = 178; hls[:, 50:, 0] = 2
+    assert dc(cv2.cvtColor(hls, cv2.COLOR_HLS2BGR), 2.0, 0.1, 8, channel=0) == 1, \
+        "hue wraps: 178 and 2 are adjacent, one peak"
+    # but two genuinely different hues stay two peaks
+    hls[:, :50, 0] = 20; hls[:, 50:, 0] = 120
+    assert dc(cv2.cvtColor(hls, cv2.COLOR_HLS2BGR), 2.0, 0.1, 8, channel=0) == 2
+    print("OK  auto_cluster hue: saturation-weighted + circular peak detection")
+
+
 def _color_scene(light=False):
     """4 distinct colored blobs on gray; optionally re-lit (gain + L->R ramp)."""
     img = np.full((80, 80, 3), 110, np.uint8)
@@ -762,12 +782,13 @@ def main():
     test_invert()
     test_local_hdr()
     test_auto_cluster()
+    test_auto_cluster_hue_robust()
     test_cluster_space()
     test_mean_shift()
     test_comp_timing_and_traversal()
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
-    print("\nENGINE OK: 31 backend tests passed")
+    print("\nENGINE OK: 32 backend tests passed")
 
 
 if __name__ == "__main__":
