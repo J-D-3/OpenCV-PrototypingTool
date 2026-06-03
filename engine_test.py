@@ -622,6 +622,25 @@ def test_auto_cluster_hue_robust():
     print("OK  auto_cluster hue: saturation-weighted + circular peak detection")
 
 
+def test_auto_cluster_elbow():
+    # 3 colour blobs + 1 GRAY blob. Hue-peak k ignores the (hueless) gray; the
+    # data-driven elbow in 3D Lab includes it.
+    img = np.full((90, 90, 3), 110, np.uint8)
+    img[5:40, 5:40] = (40, 40, 200); img[5:40, 50:85] = (40, 200, 40)
+    img[50:85, 5:40] = (200, 120, 40); img[50:85, 50:85] = (90, 90, 90)
+
+    def k_of(method):
+        m = GraphModel(); s = _src(m, img)
+        n = _op(m, "auto_cluster", max_k=8, k_method=method, channel=0,
+                cluster_space="lab", lum_weight=0.3)
+        m.add_edge(s, n); Engine(m).evaluate_all()
+        return n.output["k"]
+
+    assert k_of("elbow") > k_of("peaks"), \
+        "the 3D elbow should add a cluster for the gray blob that hue-peaks miss"
+    print("OK  auto_cluster elbow: data-driven 3D k includes gray (hue-peaks miss it)")
+
+
 def _color_scene(light=False):
     """4 distinct colored blobs on gray; optionally re-lit (gain + L->R ramp)."""
     img = np.full((80, 80, 3), 110, np.uint8)
@@ -783,12 +802,13 @@ def main():
     test_local_hdr()
     test_auto_cluster()
     test_auto_cluster_hue_robust()
+    test_auto_cluster_elbow()
     test_cluster_space()
     test_mean_shift()
     test_comp_timing_and_traversal()
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
-    print("\nENGINE OK: 32 backend tests passed")
+    print("\nENGINE OK: 33 backend tests passed")
 
 
 if __name__ == "__main__":

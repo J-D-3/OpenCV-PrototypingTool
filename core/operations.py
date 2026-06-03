@@ -423,16 +423,47 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1, in_space
     return max(1, min(peaks, int(max_k)))
 
 
+def _detect_k_elbow(feat, max_k, attempts=3):
+    """Data-driven k: run k-means for k=2..max_k on the *full feature space* and
+    pick the elbow (knee) of the inertia/compactness curve — the k of greatest
+    perpendicular distance below the first->last chord. No colour-channel
+    assumption, so it treats colour and gray uniformly and is reproducible across
+    lighting (the channel/smoothing params don't apply in this mode)."""
+    mk = max(2, int(max_k))
+    ks = list(range(2, mk + 1))
+    if len(ks) <= 1:
+        return ks[0] if ks else 2
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+    inertias = []
+    for k in ks:
+        with _KMEANS_LOCK:
+            cv2.setRNGSeed(0)
+            compactness, _, _ = cv2.kmeans(feat, k, None, criteria, int(attempts),
+                                           cv2.KMEANS_PP_CENTERS)
+        inertias.append(float(compactness))
+    x = np.array(ks, np.float64)
+    y = np.array(inertias, np.float64)
+    x = (x - x[0]) / ((x[-1] - x[0]) or 1.0)
+    y = (y - y.min()) / ((y.max() - y.min()) or 1.0)   # decreasing -> y[0]~1, y[-1]~0
+    dist = np.abs(x + y - 1.0)                          # chord (0,1)->(1,0): x+y-1=0
+    return int(ks[int(np.argmax(dist))])
+
+
 def _compute_auto_cluster(inputs, p, in_space="bgr"):
-    """K-means with an auto-detected cluster count (histogram peak count). The
-    peak detection runs on a chosen HLS channel; clustering itself still uses the
-    full image as received."""
+    """K-means with an auto-detected cluster count. 'k_method' picks how k is
+    found: 'peaks' counts modes in a chosen HLS channel histogram; 'elbow' runs
+    k-means over a range and takes the inertia knee in the full feature space
+    (colour + gray, more stable). Clustering itself is the chosen 3D space."""
     try:
         img = inputs[0]
-        k = _detect_cluster_count(img, p["smoothing"], p["min_prominence"],
-                                  p["max_k"], p.get("channel", 1), in_space)
-        return _kmeans_clusters(img, k, 5, p.get("cluster_space", "bgr"),
-                                p.get("lum_weight", 1.0), in_space)
+        space, lw = p.get("cluster_space", "bgr"), p.get("lum_weight", 1.0)
+        if p.get("k_method", "peaks") == "elbow":
+            feat = _cluster_features(img, space, lw, in_space)
+            k = _detect_k_elbow(feat, p["max_k"])
+        else:
+            k = _detect_cluster_count(img, p["smoothing"], p["min_prominence"],
+                                      p["max_k"], p.get("channel", 1), in_space)
+        return _kmeans_clusters(img, k, 5, space, lw, in_space)
     except Exception as e:
         print(f"Error executing auto_cluster: {e}")
         return None
@@ -1223,6 +1254,11 @@ _CLUSTER_SPACES = [
     ("Lab", "lab"),
     ("HLS", "hls"),
 ]
+# How Auto Cluster picks k.
+_KMETHODS = [
+    ("Histogram peaks", "peaks"),
+    ("Elbow (3D, data-driven)", "elbow"),
+]
 _MORPH_OPS = [
     ("Erode", cv2.MORPH_ERODE),
     ("Dilate", cv2.MORPH_DILATE),
@@ -1479,6 +1515,8 @@ OPS: list = [
         outputs=[Port("out", datatypes.CLUSTERS)],
         params=[
             ParamSpec("max_k", 12, kind="int", min=2, max=24, label="Max clusters"),
+            ParamSpec("k_method", "peaks", kind="enum", choices=_KMETHODS,
+                      label="k detection"),
             ParamSpec("channel", 1, kind="enum", choices=_CLUSTER_CHANNELS,
                       label="Peak channel"),
             ParamSpec("smoothing", 4.0, kind="float", min=0.5, max=15.0, step=0.5,
