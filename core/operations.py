@@ -1095,6 +1095,38 @@ def _compute_invert(inputs, p):
         return None
 
 
+_LIGHTING_MODES = [
+    ("Gray-world WB", "grayworld"),
+    ("Global brightness", "global"),
+    ("Flat-field (/ blur)", "flatfield"),
+]
+
+
+def _compute_normalize_lighting(inputs, p, in_space="bgr"):
+    """Reduce lighting differences so the SAME object under different light maps to
+    similar pixel values (more reproducible clustering across photos):
+      grayworld  — scale each channel so its mean equals the overall mean
+                   (removes a colour cast + brightness gain);
+      global     — one gain so the mean brightness hits a target (gain only);
+      flatfield  — divide by a large Gaussian blur (removes a smooth lighting
+                   gradient / vignette), then rescale."""
+    try:
+        img = _as_bgr(inputs[0], in_space).astype(np.float32)
+        mode = p.get("mode", "grayworld")
+        if mode == "grayworld":
+            means = img.reshape(-1, 3).mean(axis=0) + 1e-6
+            img *= float(means.mean()) / means
+        elif mode == "global":
+            img *= 128.0 / (float(img.mean()) + 1e-6)
+        else:  # flatfield
+            blur = cv2.GaussianBlur(img, (0, 0), max(1.0, float(p.get("radius", 25))))
+            img = img / (blur + 1e-6) * float(blur.mean())
+        return np.clip(img, 0, 255).astype(np.uint8)
+    except Exception as e:
+        print(f"Error executing normalize_lighting: {e}")
+        return None
+
+
 def _compute_local_hdr(inputs, p):
     """Local (adaptive) histogram normalization with a smooth Gaussian window.
 
@@ -1433,6 +1465,19 @@ OPS: list = [
         inputs=[Port("in")], outputs=[Port("out")], params=[],
         compute=_compute_invert, color=(69, 90, 100), out_space="passthrough",
         in_label="Mat (BGR/Gray)", out_label="Mat (BGR/Gray)",
+    ),
+    Operation(
+        id="normalize_lighting", label="Normalize Lighting", category="Intensity & Enhancement",
+        inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE)],
+        params=[
+            ParamSpec("mode", "grayworld", kind="enum", choices=_LIGHTING_MODES, label="Mode"),
+            ParamSpec("radius", 25, kind="int", min=3, max=200, label="Flat-field radius"),
+        ],
+        compute=_compute_normalize_lighting, color=(0, 121, 107), out_space="bgr",
+        space_aware=True, in_label="Mat (any)", out_label="Mat (BGR)",
+        description="Reduce lighting differences (gray-world white balance, global "
+                    "brightness, or flat-field) so the same object under different "
+                    "light clusters consistently. Put it before K-Means / Auto Cluster.",
     ),
     Operation(
         id="local_hdr", label="Local HDR", category="Intensity & Enhancement",

@@ -641,6 +641,24 @@ def test_auto_cluster_elbow():
     print("OK  auto_cluster elbow: data-driven 3D k includes gray (hue-peaks miss it)")
 
 
+def test_normalize_lighting():
+    base = np.full((60, 60, 3), 110, np.uint8); base[10:50, 10:50] = (40, 40, 200)
+    lit = np.clip(base.astype(np.float32) * np.array([0.8, 1.0, 1.4]) * 1.2,
+                  0, 255).astype(np.uint8)   # warm cast + brightness gain
+
+    def norm(img, mode):
+        m = GraphModel(); s = _src(m, img)
+        n = _op(m, "normalize_lighting", mode=mode); m.add_edge(s, n)
+        Engine(m).evaluate_all()
+        return n.output
+
+    before = float(np.abs(base.astype(int) - lit.astype(int)).mean())
+    for mode in ("grayworld", "global", "flatfield"):
+        after = float(np.abs(norm(base, mode).astype(int) - norm(lit, mode).astype(int)).mean())
+        assert after < before, f"{mode} should shrink the same-object lighting gap"
+    print("OK  normalize_lighting: shrinks same-object cross-lighting differences")
+
+
 def _color_scene(light=False):
     """4 distinct colored blobs on gray; optionally re-lit (gain + L->R ramp)."""
     img = np.full((80, 80, 3), 110, np.uint8)
@@ -803,12 +821,13 @@ def main():
     test_auto_cluster()
     test_auto_cluster_hue_robust()
     test_auto_cluster_elbow()
+    test_normalize_lighting()
     test_cluster_space()
     test_mean_shift()
     test_comp_timing_and_traversal()
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
-    print("\nENGINE OK: 33 backend tests passed")
+    print("\nENGINE OK: 34 backend tests passed")
 
 
 if __name__ == "__main__":

@@ -218,6 +218,14 @@ def _emit_save_to_file(o, i, p):
     return [f"cv::imwrite(path, {i[0]})"]
 
 
+def _emit_normalize_lighting(o, i, p):
+    return [
+        f"# reduce lighting differences (mode={p.get('mode')!r}); input via cv::cvtColor:",
+        "#   grayworld -> per-channel gain to a common mean; global -> single gain;",
+        "#   flatfield -> divide by a large cv::GaussianBlur then rescale",
+        f"{o} = normalize_lighting({i[0]}, mode={p.get('mode')!r})"]
+
+
 def _emit_color_mask(o, i, p):
     return [
         f"# binary mask of pixels within +/-{p.get('delta')} of "
@@ -256,6 +264,7 @@ _CODE.update({
     "color_mask": _emit_color_mask,
     "largest_contour": _emit_largest_contour,
     "crop_to_contour": _emit_crop_to_contour,
+    "normalize_lighting": _emit_normalize_lighting,
     "contour_filter": _emit_contour_filter,
     "find_contours": _emit_find_contours,
 })
