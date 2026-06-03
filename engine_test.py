@@ -352,6 +352,26 @@ def test_codegen():
     print("OK  codegen: upstream walk -> pseudocode (cv:: + custom blocks + params)")
 
 
+def test_codegen_clustering_detail():
+    from core import codegen
+    # K-Means spells out the feature space, params, and the k-means/centre/order steps.
+    km = codegen.op_pseudocode(REGISTRY["kmeans"],
+                               {"k": 6, "cluster_space": "lab", "lum_weight": 0.3})
+    for tok in ("k=6", "space='lab'", "lum_weight=0.3", "BGR2Lab", "cv::kmeans",
+                "mean INPUT-space", "dark->light"):
+        assert tok in km, f"K-Means pseudocode missing {tok!r}:\n{km}"
+    # Auto Cluster shows the ACTUAL k-detection used (saturation-weighted circular hue).
+    ac = codegen.op_pseudocode(REGISTRY["auto_cluster"],
+                               {"k_method": "peaks", "channel": 0, "smoothing": 3.0,
+                                "min_prominence": 0.15, "max_k": 5})
+    for tok in ("Hue channel", "weights=hls.Saturation", "circular", "sigma=3.0",
+                "0.15 * max", "clamp(K, 1, 5)"):
+        assert tok in ac, f"Auto Cluster (peaks) pseudocode missing {tok!r}:\n{ac}"
+    el = codegen.op_pseudocode(REGISTRY["auto_cluster"], {"k_method": "elbow", "max_k": 8})
+    assert "inertia" in el and "elbow" in el.lower() and "for k in 2..8" in el, el
+    print("OK  codegen: clustering pseudocode spells out every step + parameter")
+
+
 def test_fourier_roundtrip():
     rng = np.arange(32 * 48, dtype=np.uint8).reshape(32, 48)  # deterministic gray image
     m = GraphModel()
@@ -808,6 +828,7 @@ def main():
     test_segmentation_nodes()
     test_crop_no_clip_when_deskewed()
     test_codegen()
+    test_codegen_clustering_detail()
     test_fourier_roundtrip()
     test_more_ops()
     test_conversions()
@@ -827,7 +848,7 @@ def main():
     test_comp_timing_and_traversal()
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
-    print("\nENGINE OK: 34 backend tests passed")
+    print("\nENGINE OK: 35 backend tests passed")
 
 
 if __name__ == "__main__":

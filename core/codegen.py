@@ -127,24 +127,78 @@ _CODE = {
 }
 
 
-def _emit_kmeans(o, i, p):
+_HLS_CHAN = {0: "Hue", 1: "Luminance(L)", 2: "Saturation"}
+
+
+def _emit_feature_block(src, space, lum_weight):
+    """The exact feature-space construction shared by K-Means and Auto Cluster."""
+    lines = [f"bgr = as_bgr({src})                                  # cv::cvtColor from the tracked colour space"]
+    if space == "lab":
+        lines += [
+            "feat = cv::cvtColor(bgr, COLOR_BGR2Lab).reshape(-1, 3)   # cluster in Lab",
+            f"feat[:, 0] *= {lum_weight}                           # scale L (lightness) by lum_weight",
+        ]
+    elif space == "hls":
+        lines += [
+            "feat = cv::cvtColor(bgr, COLOR_BGR2HLS).reshape(-1, 3)   # cluster in HLS",
+            f"feat[:, 1] *= {lum_weight}                           # scale L (lightness) by lum_weight",
+        ]
+    else:
+        lines.append("feat = bgr.reshape(-1, 3).astype(float32)            # cluster in BGR (lum_weight n/a)")
+    return lines
+
+
+def _emit_cluster_tail(o, p):
+    """The k-means call + center/order steps, shared by both clustering ops."""
     return [
-        "# cluster pixels with k-means in a chosen feature space; report each",
-        "# center as the mean *input-space* color, ordered dark->light (stable).",
-        f"feat = features({i[0]}, space={p.get('cluster_space')!r}, lum_weight={p.get('lum_weight')})   # cv::cvtColor to Lab/HLS",
-        f"cv::setRNGSeed(0)   # deterministic partition",
-        f"_, labels, _ = cv::kmeans(feat, K={p.get('k')}, criteria, attempts={p.get('attempts')}, KMEANS_PP_CENTERS)",
-        f"{o} = {{centers, labels, shape}}   # CLUSTERS payload"]
+        "cv::setRNGSeed(0)                                    # deterministic init (no per-call seed)",
+        "_, labels, _ = cv::kmeans(feat, K, criteria=(EPS|MAX_ITER, 10, 1.0), attempts=5, KMEANS_PP_CENTERS)",
+        "centers[c] = mean INPUT-space colour of pixels labelled c   # report true colours, not feature space",
+        "reorder clusters dark->light by perceptual luminance; remap labels   # stable ids/colours",
+        f"{o} = {{centers, labels, shape, k=K}}               # CLUSTERS payload",
+    ]
+
+
+def _emit_kmeans(o, i, p):
+    space, lw = p.get("cluster_space"), p.get("lum_weight")
+    out = [f"# K-Means colour clustering: k={p.get('k')}, space={space!r}, lum_weight={lw}, attempts={p.get('attempts')}"]
+    out += _emit_feature_block(i[0], space, lw)
+    out += [f"K = {p.get('k')}"]
+    out += _emit_cluster_tail(o, p)
+    return out
 
 
 def _emit_auto_cluster(o, i, p):
-    return [
-        "# pick K by counting smoothed histogram peaks on one HLS channel, then k-means:",
-        "#   cv::cvtColor (channel) -> cv::calcHist -> cv::GaussianBlur (smooth) -> count maxima",
-        f"K = count_peaks({i[0]}, channel={p.get('channel')!r}, smoothing={p.get('smoothing')}, min_prominence={p.get('min_prominence')}, max_k={p.get('max_k')})",
-        f"feat = features({i[0]}, space={p.get('cluster_space')!r}, lum_weight={p.get('lum_weight')})   # cv::cvtColor to Lab/HLS",
-        f"cv::setRNGSeed(0); _, labels, _ = cv::kmeans(feat, K, criteria, attempts, KMEANS_PP_CENTERS)",
-        f"{o} = {{centers, labels, shape}}   # CLUSTERS payload"]
+    space, lw = p.get("cluster_space"), p.get("lum_weight")
+    method = p.get("k_method", "peaks")
+    out = [f"# Auto Cluster = detect K, then K-Means. k_method={method!r}, max_k={p.get('max_k')}, "
+           f"space={space!r}, lum_weight={lw}"]
+    out += _emit_feature_block(i[0], space, lw)
+    if method == "elbow":
+        out += [
+            "# --- K via the elbow of the inertia curve (full feature space) ---",
+            f"for k in 2..{p.get('max_k')}:  inertia[k] = cv::kmeans(feat, k, ..., KMEANS_PP_CENTERS).compactness",
+            "K = the k of greatest perpendicular distance below the first->last chord (the knee)",
+        ]
+    else:
+        ch = _HLS_CHAN.get(p.get("channel"), str(p.get("channel")))
+        out += [f"# --- K via histogram peak count on the {ch} channel ---",
+                "hls = cv::cvtColor(bgr, COLOR_BGR2HLS)"]
+        if p.get("channel") == 0:
+            out += [
+                f"hist = histogram(hls.Hue, 180 bins, weights=hls.Saturation)   # ignore washed-out hues; (L/S use cv::calcHist)",
+                f"hist = circular cv::GaussianBlur(hist, sigma={p.get('smoothing')})   # wrap 0<->179 (hue is circular)",
+                f"K = count CIRCULAR local maxima where hist > {p.get('min_prominence')} * max(hist)",
+            ]
+        else:
+            out += [
+                f"hist = cv::calcHist(hls.{ch}, 256 bins)",
+                f"hist = cv::GaussianBlur(hist, sigma={p.get('smoothing')})",
+                f"K = count local maxima where hist > {p.get('min_prominence')} * max(hist)",
+            ]
+        out += [f"K = clamp(K, 1, {p.get('max_k')})"]
+    out += _emit_cluster_tail(o, p)
+    return out
 
 
 def _emit_reduce_colors(o, i, p):
