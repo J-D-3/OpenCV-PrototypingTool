@@ -432,12 +432,44 @@ def _compute_kmeans(inputs, p, in_space="bgr"):
         return None
 
 
+def _topographic_prominence(hist, i, circular):
+    """Height of peak ``i`` above its *key col*: descend left and right until the
+    terrain rises above the peak (or the array bounds), tracking the lowest point
+    reached on each side; the key col is the higher of those two minima. This is
+    the standard 'how isolated is this peak' measure — crucially it compares the
+    peak to its own surrounding valley, **not** to the global maximum, so a small
+    feature on a large uniform background still scores as a genuine peak (whereas a
+    bump on the shoulder of a big peak scores low and is rejected as noise)."""
+    n = len(hist)
+    h = float(hist[i])
+
+    def base(step):
+        m = h
+        j = i
+        for _ in range(n):
+            j = (j + step) % n if circular else j + step
+            if not circular and (j < 0 or j >= n):
+                break
+            v = float(hist[j])
+            if v > h:            # reached higher terrain -> stop
+                break
+            if v < m:
+                m = v
+        return m
+
+    return h - max(base(-1), base(1))
+
+
 def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
                           in_space="bgr", return_diag=False, sat_weight=1.0):
     """Pick k by smoothing one channel's histogram (Gaussian) and counting local
-    maxima above a prominence threshold — the histogram mode-seeking idea. The
-    channel is an HLS index (1=Luminance/L, 0=Hue, 2=Saturation); the input is
-    first mapped to BGR via its tracked color space.
+    maxima whose **topographic prominence** (height above the surrounding valley,
+    as a fraction of the peak's own height) clears ``min_prominence``. Comparing a
+    peak to its own valley rather than to the global maximum means a small colored
+    feature on a big uniform background is kept (it is a real, isolated peak), while
+    a bump on the shoulder of a dominant peak is dropped. The channel is an HLS
+    index (1=Luminance/L, 0=Hue, 2=Saturation); the input is first mapped to BGR
+    via its tracked color space.
 
     Hue (channel 0) gets two extra treatments because raw hue is unreliable: the
     histogram is **weighted by saturation** (so washed-out / gray pixels — whose
@@ -484,7 +516,7 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
     else:
         hist = cv2.GaussianBlur(base.reshape(-1, 1), (0, 0), sig).flatten()
 
-    thr = float(hist.max()) * float(min_prominence)
+    thr = max(0.0, float(min_prominence))
     peak_idx = []
     for i in range(nbins):
         if circular:
@@ -492,7 +524,12 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
         else:
             left = hist[i - 1] if i > 0 else -1.0
             right = hist[i + 1] if i < nbins - 1 else -1.0
-        if hist[i] >= thr and hist[i] > left and hist[i] >= right:
+        h = float(hist[i])
+        if h <= 0 or not (h > left and h >= right):     # not a local maximum
+            continue
+        # Keep the peak if it rises far enough above its key col, measured relative
+        # to its own height — independent of how tall the global maximum is.
+        if _topographic_prominence(hist, i, circular) >= thr * h:
             peak_idx.append(i)
     k = max(1, min(len(peak_idx), int(max_k)))
     if not return_diag:
@@ -1961,9 +1998,13 @@ OPS: list = [
             ParamSpec("smoothing", 4.0, kind="float", min=0.5, max=15.0, step=0.5,
                       label="Histogram smoothing", enabled_if=("k_method", "peaks"),
                       help="Gaussian blur of the histogram before peak finding; higher = fewer peaks."),
-            ParamSpec("min_prominence", 0.05, kind="float", min=0.0, max=0.5, step=0.01,
+            ParamSpec("min_prominence", 0.2, kind="float", min=0.0, max=1.0, step=0.01,
                       label="Min peak prominence", enabled_if=("k_method", "peaks"),
-                      help="Minimum peak height (fraction of the tallest) to count as a cluster."),
+                      help="How far a peak must rise above its surrounding valley "
+                           "(fraction of its own height) to count — measured locally, "
+                           "so a small colored feature isn't lost beside a big "
+                           "background peak. Higher = stricter; raise 'smoothing' "
+                           "to drop noise."),
             ParamSpec("sat_weight", 1.0, kind="float", min=0.0, max=4.0, step=0.1,
                       label="Saturation weight",
                       enabled_if=[("k_method", "peaks"), ("channel", 0)],

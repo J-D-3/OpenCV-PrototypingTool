@@ -365,7 +365,7 @@ def test_codegen_clustering_detail():
                                {"k_method": "peaks", "channel": 0, "smoothing": 3.0,
                                 "min_prominence": 0.15, "max_k": 5})
     for tok in ("Hue channel", "weights=hls.Saturation", "circular", "sigma=3.0",
-                "0.15 * max", "clamp(K, 1, 5)"):
+                "prominence", "0.15 * peak_height", "clamp(K, 1, 5)"):
         assert tok in ac, f"Auto Cluster (peaks) pseudocode missing {tok!r}:\n{ac}"
     el = codegen.op_pseudocode(REGISTRY["auto_cluster"], {"k_method": "elbow", "max_k": 8})
     assert "inertia" in el and "elbow" in el.lower() and "for k in 2..8" in el, el
@@ -657,6 +657,28 @@ def test_auto_cluster_hue_robust():
     print("OK  auto_cluster hue: saturation-weighted (sat_weight exponent) + circular + 180-wrap")
 
 
+def test_auto_cluster_small_feature():
+    from core.operations import _detect_cluster_count as dc, _topographic_prominence as tp
+    # A tiny saturated-red feature (~0.6% of pixels) on a large saturated-blue
+    # background. min_prominence is now TOPOGRAPHIC: a peak is judged against its
+    # own surrounding valley, not the global max — so the small but isolated
+    # feature peak (which rises from ~0) is kept even though it is dwarfed by the
+    # background peak. The old global-max rule dropped it.
+    img = np.full((100, 100, 3), (200, 60, 60), np.uint8)   # blue-ish background
+    img[2:10, 2:10] = (60, 60, 200)                          # small red feature
+    assert dc(img, 2.0, 0.2, 8, channel=0) >= 2, \
+        "a small colored feature on a uniform background must be its own cluster"
+
+    # Topographic prominence in detail: an isolated peak rising from an empty
+    # valley has ~full prominence; a bump on the shoulder of a taller peak has low
+    # prominence (its key col sits just below it) and is rejected as noise.
+    hist = np.array([0, 2, 0, 0, 10, 6, 6.5, 6, 0], np.float32)  # peaks at 1, 4, shoulder at 6
+    assert tp(hist, 1, False) == 2.0, "isolated small peak: prominence == its height"
+    assert tp(hist, 4, False) == 10.0, "the tall peak rises the full way from the valley"
+    assert tp(hist, 6, False) == 0.5, "the shoulder bump beside the tall peak has tiny prominence"
+    print("OK  auto_cluster: topographic prominence keeps small features, rejects shoulders")
+
+
 def test_auto_cluster_elbow():
     # 3 colour blobs + 1 GRAY blob. Hue-peak k ignores the (hueless) gray; the
     # data-driven elbow in 3D Lab includes it.
@@ -899,6 +921,7 @@ def main():
     test_local_hdr()
     test_auto_cluster()
     test_auto_cluster_hue_robust()
+    test_auto_cluster_small_feature()
     test_auto_cluster_elbow()
     test_cluster_preview_diag()
     test_normalize_lighting()
@@ -908,7 +931,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 37 backend tests passed")
+    print("\nENGINE OK: 38 backend tests passed")
 
 
 if __name__ == "__main__":

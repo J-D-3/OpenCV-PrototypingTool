@@ -244,20 +244,30 @@ class HistogramPanel(QtWidgets.QWidget):
         self._view_combo.addItems(["BGR", "HSL"])
         self._view_combo.currentIndexChanged.connect(lambda _i: self.viewChanged.emit())
         header.addWidget(self._view_combo)
+        header.addWidget(self._vsep())
         self._log_cb = QtWidgets.QCheckBox("Log scale")
         self._log_cb.toggled.connect(self._refresh_plot)
         header.addWidget(self._log_cb)
+        header.addWidget(self._vsep())
         # Gaussian smoothing of the plotted curves (display only — does not affect
         # the range filter). 0 = off; higher = smoother (sigma in histogram bins).
+        # Slider + editable value field, mirroring the parameter-panel sliders.
         header.addWidget(QtWidgets.QLabel("Smooth"))
         self._smooth = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self._smooth.setRange(0, 15)
         self._smooth.setValue(0)
         self._smooth.setFixedWidth(70)
-        self._smooth.setToolTip("Gaussian smoothing of the histogram curve "
-                                "(display only); 0 = off")
-        self._smooth.valueChanged.connect(self._refresh_plot)
+        smooth_tip = "Gaussian smoothing of the histogram curve (display only); 0 = off"
+        self._smooth.setToolTip(smooth_tip)
+        self._smooth.valueChanged.connect(self._on_smooth_slider)
         header.addWidget(self._smooth)
+        self._smooth_field = QtWidgets.QLineEdit("0")
+        self._smooth_field.setFixedWidth(30)
+        self._smooth_field.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight
+                                        | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self._smooth_field.setToolTip(smooth_tip)
+        self._smooth_field.editingFinished.connect(self._on_smooth_field_edited)
+        header.addWidget(self._smooth_field)
         self._layout.addLayout(header)
         self._plot = HistogramPlot()
         self._plot.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
@@ -334,6 +344,29 @@ class HistogramPanel(QtWidgets.QWidget):
     def _on_changed(self):
         self._refresh_plot()
         self.rangesChanged.emit()
+
+    @staticmethod
+    def _vsep() -> QtWidgets.QFrame:
+        """A minimal vertical separator between header control groups."""
+        line = QtWidgets.QFrame()
+        line.setFrameShape(QtWidgets.QFrame.Shape.VLine)
+        line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
+        return line
+
+    def _on_smooth_slider(self, value: int) -> None:
+        self._smooth_field.setText(str(int(value)))
+        self._refresh_plot()
+
+    def _on_smooth_field_edited(self) -> None:
+        """Type an exact smoothing value; clamp it and snap the slider to match."""
+        try:
+            v = int(self._smooth_field.text().strip())
+        except ValueError:
+            v = self._smooth.value()
+        v = max(self._smooth.minimum(), min(self._smooth.maximum(), v))
+        self._smooth_field.setText(str(v))
+        if v != self._smooth.value():
+            self._smooth.setValue(v)   # fires _on_smooth_slider -> field + refresh
 
     def _refresh_plot(self):
         log = self._log_cb.isChecked()

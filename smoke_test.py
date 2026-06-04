@@ -585,10 +585,15 @@ def check_inspector_pane(app) -> None:
     pane._hist._log_cb.setChecked(True)
     app.processEvents()
 
-    # Gaussian smoothing slider re-plots without error (display only).
+    # Gaussian smoothing slider re-plots without error (display only); the value
+    # field mirrors the slider, and typing into it snaps the slider back.
     pane._hist._smooth.setValue(5)
     app.processEvents()
     assert pane._hist._smooth.value() == 5, "histogram smoothing slider should apply"
+    assert pane._hist._smooth_field.text() == "5", "value field should mirror the slider"
+    pane._hist._smooth_field.setText("9")
+    pane._hist._on_smooth_field_edited()           # simulate editingFinished
+    assert pane._hist._smooth.value() == 9, "typing a value should move the slider"
     pane._hist._smooth.setValue(0)
     pane._hist._log_cb.setChecked(False)
     app.processEvents()

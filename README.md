@@ -184,6 +184,15 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-04** — **Auto Cluster peak detection: topographic prominence + histogram
+  header polish.** Auto Cluster's **Min peak prominence** now measures each peak
+  against its **own surrounding valley** (topographic prominence, relative to the
+  peak's height) instead of against the global maximum — so a small colored feature
+  on a large uniform background is kept as its own cluster (it was previously
+  dropped for not rivalling the background peak), while a bump on the shoulder of a
+  dominant peak is still rejected as noise. The inspector histogram header gained
+  minimal vertical separators between the view / log / smoothing groups and an
+  editable value field beside the smoothing slider. Suites: 33 smoke + 38 engine.
 - **2026-06-04** — **Fixed canvas coordinate system + inspector histogram smoothing.**
   The pipeline pane now has a fixed origin pinned at **(0, 0)** top-left; the scene
   only grows right/down to enclose the nodes (it never shifts the origin), so
