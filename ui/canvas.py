@@ -81,15 +81,20 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         super().resizeEvent(event)
 
     def _update_scene_rect(self) -> None:
-        """Scene is ~2x the viewport so there's room to lay out many nodes, and
-        always grows to enclose the existing nodes (+ margin)."""
+        """Fixed coordinate origin: the scene's top-left is pinned at (0, 0) and it
+        only ever grows right/down to enclose the nodes — it never shifts the
+        origin. So every node's (x, y) is a stable absolute position: zoom and
+        scroll move all nodes and the grid together, scaling a node keeps its
+        top-left fixed, and save/load round-trips positions exactly (the layout is
+        never squashed into a moved or too-small rect)."""
         vw = max(self.viewport().width(), 400)
         vh = max(self.viewport().height(), 400)
-        rect = QtCore.QRectF(0, 0, vw * 2, vh * 2)
+        w, h = vw * 2.0, vh * 2.0
         items = self._scene.itemsBoundingRect()
         if not items.isEmpty():
-            rect = rect.united(items.adjusted(-120, -120, 120, 120))
-        self._scene.setSceneRect(rect)
+            w = max(w, items.right() + 200)
+            h = max(h, items.bottom() + 200)
+        self._scene.setSceneRect(0, 0, w, h)
 
     def _zoom(self, factor: float) -> None:
         target = max(0.3, min(3.0, self._zoom_level * factor))
@@ -517,6 +522,7 @@ class ImageDropWidget(QtWidgets.QWidget):
         self._size_label.setText(f"Icon size: {value} px")
         self.view.set_thumb_size(self.icon_size)
         self.resize_all_icons(self.icon_size)
+        self.view._update_scene_rect()   # grow the scene if bigger icons overflow it
 
     def add_function_node(self, label: str, scene_pos: Optional[QtCore.QPointF] = None, meta: Optional[dict] = None):
         # Look the operation up in the registry and build the right node.
@@ -638,6 +644,25 @@ class ImageDropWidget(QtWidgets.QWidget):
         self.view._scene.clear()
         controller.adopt(model)
 
+        # Older pipelines were saved with the previous shifting-origin scene, so
+        # some node positions are negative. Translate the whole layout into the
+        # positive quadrant (relative positions preserved; all-positive layouts are
+        # left untouched) so nothing clamps to the pinned (0,0) origin on load.
+        if positions:
+            margin = 24
+            min_x = min(x for x, _ in positions.values())
+            min_y = min(y for _, y in positions.values())
+            dx = (margin - min_x) if min_x < 0 else 0
+            dy = (margin - min_y) if min_y < 0 else 0
+            if dx or dy:
+                positions = {gid: (x + dx, y + dy) for gid, (x, y) in positions.items()}
+            # Give the scene room for the WHOLE layout BEFORE placing any node, so
+            # the position clamp in Node.itemChange (which keeps a node inside the
+            # scene rect) can't squash a wide pipeline into the default rect.
+            max_x = max(x for x, _ in positions.values())
+            max_y = max(y for _, y in positions.values())
+            self.view._scene.setSceneRect(0, 0, max_x + 600, max_y + 600)
+
         # Recreate a view item per backend node and bind it.
         qt_by_gid = {}
         for gid, gn in model.nodes.items():
@@ -665,6 +690,7 @@ class ImageDropWidget(QtWidgets.QWidget):
 
         if model.nodes:
             self.instruction.setText("")
+        self.view._update_scene_rect()   # shrink the temporary rect back to fit the content
         controller.recompute_all()
 
     def resize_all_icons(self, new_size: int) -> None:

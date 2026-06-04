@@ -107,6 +107,7 @@ does not cycle at runtime.
 | **Add an OpenCV operation** | Add one `Operation` entry in `core/operations.py` (id, label, category, ports, param schema, a `compute(inputs, params)` function). The sidebar and node factory pick it up automatically. |
 | Add a many-input node (e.g. Create Batch) | Set `variadic=True` (accepts N inputs) and, to consume batches directly, `raw=True` (engine passes inputs as-is). |
 | Give an op a non-image preview (e.g. draw contours) | Set its `render_preview(inputs, output, params) -> image` hook (consumed from Phase 4). |
+| Mark a preview as a chart (hide the inspector histogram) | `Operation(preview_is_chart=True)` → the inspector pane hides its per-channel histogram for that node (a histogram of a plotted graph is meaningless). Used by the clustering ops + the Histogram node. |
 | Show key stats for an op (e.g. #contours) | Set its `summary(output, params) -> dict` hook (consumed from Phase 4). |
 | Give an op a tooltip / better pseudocode | Set `Operation.description` (else its `compute` docstring is used); for a precise code line add a `core/codegen.py` `_CODE` emitter. |
 | Make an int slider non-linear | `ParamSpec(kind="int", log=True)` → logarithmic slider (`ui/parameters._add_log_int`). |
@@ -162,6 +163,19 @@ discoverable sidebar entry — and then add the migration alias in `from_dict`.
   and follows it (`canvas._update_flow_highlight` using `GraphModel.ancestors/
   descendants`; `Node.set_flow_role`, `ArrowItem.set_flow_highlight`).
 - **Save / Load Pipeline** (sidebar): persist the whole graph to JSON.
+
+## Canvas coordinate system
+The scene origin is **pinned at (0, 0)** in the top-left (x right, y down). The
+scene rect only ever grows right/down to enclose the nodes (`GraphicsImageView.
+_update_scene_rect`) — it never shifts the origin — so a node's `(x, y)` (its
+QGraphicsPixmapItem top-left, offset 0) is a stable absolute position: zoom
+(`AnchorUnderMouse`) and scroll move every node and the grid together, and scaling
+a node keeps its top-left fixed. `Node.itemChange` snaps positions to the 12 px
+grid and clamps them inside the scene rect. On load, `ImageDropWidget.load_dict`
+sizes the scene to the saved layout *before* placing nodes (so the clamp can't
+squash a wide pipeline) and translates any negative coordinates (from older,
+shifting-origin saves) into the positive quadrant — preserving the relative layout.
+The range is not unbounded but grows with the content, which is sufficient.
 
 ## Node decorations (corners)
 A computational node carries two badges baked into its thumbnail pixmap: the

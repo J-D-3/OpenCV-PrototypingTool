@@ -647,7 +647,14 @@ def test_auto_cluster_hue_robust():
         dc(noisy, 3.0, 0.15, 8, channel=0, sat_weight=1.0), "default must equal sat_weight=1.0"
     assert dc(noisy, 3.0, 0.15, 8, channel=0, sat_weight=0.0) >= \
         dc(noisy, 3.0, 0.15, 8, channel=0), "unweighted (0.0) must not suppress the noise peaks"
-    print("OK  auto_cluster hue: saturation-weighted (sat_weight exponent) + circular")
+
+    # OpenCV's 8-bit BGR2HLS can emit hue 180 (e.g. BGR (53,51,174)); it must wrap
+    # to 0 (hue is circular) so the histogram stays 180 bins, not a spurious 181.
+    h180 = np.full((20, 20, 3), (53, 51, 174), np.uint8)
+    assert int(cv2.cvtColor(h180, cv2.COLOR_BGR2HLS)[0, 0, 0]) == 180, "fixture should hit hue 180"
+    _, hd = dc(h180, 2.0, 0.1, 8, channel=0, return_diag=True)
+    assert len(hd["raw"]) == 180 and len(hd["smooth"]) == 180, "hue 180 must wrap, not add a 181st bin"
+    print("OK  auto_cluster hue: saturation-weighted (sat_weight exponent) + circular + 180-wrap")
 
 
 def test_auto_cluster_elbow():

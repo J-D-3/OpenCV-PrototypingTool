@@ -184,6 +184,22 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-04** — **Fixed canvas coordinate system + inspector histogram smoothing.**
+  The pipeline pane now has a fixed origin pinned at **(0, 0)** top-left; the scene
+  only grows right/down to enclose the nodes (it never shifts the origin), so
+  zoom/scroll move every node and the grid together and a node's `(x, y)` is a
+  stable absolute position. **Loading a pipeline preserves the exact relative
+  layout** — older saves that contain negative coordinates are translated into the
+  positive quadrant instead of being clamped/cluttered against the edges. The
+  inspector **histogram gained a Gaussian smoothing slider** (display only).
+  Suites: 33 smoke + 37 engine.
+- **2026-06-04** — **Inspector histogram hidden on chart nodes + hue-wrap fix.**
+  Nodes whose preview is a plotted graph (the clustering diagnostics and the
+  Histogram node) now set `Operation.preview_is_chart=True`, so the inspector pane
+  hides its per-channel histogram for them (a histogram of a graph is meaningless).
+  Fixed a hue-binning quirk: OpenCV's 8-bit BGR→HLS can emit hue 180, which made
+  Auto Cluster's peak histogram a spurious 181 bins; hue now wraps 180→0 (it's
+  circular), keeping it a clean 180-bin histogram consistent with the inspector.
 - **2026-06-04** — **Parameter tooltips now explain each knob.** Every parameter
   carries a one-line `ParamSpec.help` describing how it affects the result; the
   control's tooltip shows the full name *and* that blurb (was name only). A

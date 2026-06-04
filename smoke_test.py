@@ -353,8 +353,14 @@ def check_save_load(app) -> None:
     src = add_image(w, gradient_bgr())
     thresh = add_func(w, "Threshold")
     connect(w, src, thresh)
+    # Known, grid-aligned positions; the layout must survive a round-trip (the
+    # fixed-origin scene must not clamp/clutter the nodes on load).
+    src.setPos(120, 156)
+    thresh.setPos(480, 300)
     app.processEvents()
     expected = thresh.get_output_image().copy()
+    src_pos = (src.x(), src.y())
+    thresh_pos = (thresh.x(), thresh.y())
 
     data = json.loads(json.dumps(w.drop_widget.to_dict()))  # round-trip through JSON
     w.drop_widget.load_dict(data)
@@ -365,8 +371,14 @@ def check_save_load(app) -> None:
     imgs = [it for it in scene.items() if isinstance(it, ImageNode)]
     assert len(funcs) == 1 and len(imgs) == 1, "node count not preserved across save/load"
     assert np.array_equal(expected, funcs[0].get_output_image()), "result not preserved"
+    assert (imgs[0].x(), imgs[0].y()) == src_pos, \
+        f"image node position not preserved: {(imgs[0].x(), imgs[0].y())} != {src_pos}"
+    assert (funcs[0].x(), funcs[0].y()) == thresh_pos, \
+        f"func node position not preserved: {(funcs[0].x(), funcs[0].y())} != {thresh_pos}"
+    sr = scene.sceneRect()
+    assert sr.left() == 0 and sr.top() == 0, "origin must stay pinned at (0,0) after load"
     w.close()
-    print("OK  pipeline save/load round-trips structure and result")
+    print("OK  pipeline save/load round-trips structure, result, and node positions")
 
 
 def check_progressive_load(app) -> None:
@@ -573,6 +585,14 @@ def check_inspector_pane(app) -> None:
     pane._hist._log_cb.setChecked(True)
     app.processEvents()
 
+    # Gaussian smoothing slider re-plots without error (display only).
+    pane._hist._smooth.setValue(5)
+    app.processEvents()
+    assert pane._hist._smooth.value() == 5, "histogram smoothing slider should apply"
+    pane._hist._smooth.setValue(0)
+    pane._hist._log_cb.setChecked(False)
+    app.processEvents()
+
     # A 3-channel image gives three histogram channels labelled B/G/R, and the
     # old single 'Gray' row must be cleared (no leftover widgets).
     img_node = add_image(w, gradient_bgr())
@@ -596,8 +616,20 @@ def check_inspector_pane(app) -> None:
     img_pt_after = ((cursor.x() - ip._origin.x()) / ip._scale,
                     (cursor.y() - ip._origin.y()) / ip._scale)
     assert abs(img_pt_before[0] - img_pt_after[0]) < 1e-6, "zoom must anchor to the cursor"
+
+    # Chart-preview nodes (cluster diagnostics) hide the histogram — a per-channel
+    # histogram of a plotted graph is meaningless. A normal image node shows it.
+    assert not pane._hist.isHidden(), "normal image node should show the histogram"
+    ac = add_func(w, "Auto Cluster")
+    connect(w, img_node, ac)
+    w.drop_widget.view._scene.clearSelection()
+    ac.setSelected(True)
+    app.processEvents()
+    assert pane._node is ac and pane._hist.isHidden(), \
+        "chart-preview node (Auto Cluster) should hide the histogram panel"
+
     w.close()
-    print("OK  inspector pane: colors, channel-clear, log toggle, zoom-to-cursor")
+    print("OK  inspector pane: colors, channel-clear, log toggle, zoom; chart hides histogram")
 
 
 def check_batch(app) -> None:
@@ -954,6 +986,7 @@ def check_canvas_zoom_scroll(app) -> None:
     view = w.drop_widget.view
     vp = view.viewport().rect()
     sr = view._scene.sceneRect()
+    assert sr.left() == 0 and sr.top() == 0, "scene origin must be pinned at (0, 0)"
     assert sr.width() >= vp.width() * 1.8 and sr.height() >= vp.height() * 1.8, \
         "scene should be ~2x the viewport so large pipelines have room to scroll"
     assert view.horizontalScrollBarPolicy() == QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded

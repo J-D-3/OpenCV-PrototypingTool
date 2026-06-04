@@ -247,6 +247,17 @@ class HistogramPanel(QtWidgets.QWidget):
         self._log_cb = QtWidgets.QCheckBox("Log scale")
         self._log_cb.toggled.connect(self._refresh_plot)
         header.addWidget(self._log_cb)
+        # Gaussian smoothing of the plotted curves (display only — does not affect
+        # the range filter). 0 = off; higher = smoother (sigma in histogram bins).
+        header.addWidget(QtWidgets.QLabel("Smooth"))
+        self._smooth = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._smooth.setRange(0, 15)
+        self._smooth.setValue(0)
+        self._smooth.setFixedWidth(70)
+        self._smooth.setToolTip("Gaussian smoothing of the histogram curve "
+                                "(display only); 0 = off")
+        self._smooth.valueChanged.connect(self._refresh_plot)
+        header.addWidget(self._smooth)
         self._layout.addLayout(header)
         self._plot = HistogramPlot()
         self._plot.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
@@ -326,11 +337,14 @@ class HistogramPanel(QtWidgets.QWidget):
 
     def _refresh_plot(self):
         log = self._log_cb.isChecked()
+        sigma = float(self._smooth.value())
         curves = []
         markers = []
         for i, ch in enumerate(self._channels):
             if i < len(self._hists) and ch["cb"].isChecked():
                 h = self._hists[i].astype(np.float32)
+                if sigma > 0:                       # Gaussian-smooth the raw counts
+                    h = cv2.GaussianBlur(h.reshape(-1, 1), (0, 0), sigma).flatten()
                 if log:
                     h = np.log1p(h)
                 peak = float(h.max())
@@ -744,13 +758,22 @@ class InspectorPane(QtWidgets.QWidget):
 
         # The histogram + filter operate on the chosen BGR/HSL view of the image.
         self._chan_img, view_names, self._vmaxes = self._channel_view(disp, channels)
-        nch = len(view_names)
-        if reset or nch != self._channels:
-            self._hist.configure(nch, view_names)
-            self._channels = nch
+        # For chart previews (cluster diagnostics, the Histogram node) the "image"
+        # is a plotted graph, so a per-channel histogram of it is meaningless —
+        # hide the histogram panel for those nodes.
+        chart = getattr(getattr(self._node, "op", None), "preview_is_chart", False)
+        self._hist.setVisible(not chart)
+        if chart:
+            self._hist.clear()
+            self._channels = 0
+        else:
+            nch = len(view_names)
+            if reset or nch != self._channels:
+                self._hist.configure(nch, view_names)
+                self._channels = nch
+            self._hist.set_hists(self._compute_hists(self._chan_img, self._vmaxes))
         if reset:
             self._neigh.reset_center()
-        self._hist.set_hists(self._compute_hists(self._chan_img, self._vmaxes))
         self._apply_filter()   # updates both the image and the neighbourhood
 
     def _native_space(self) -> str:

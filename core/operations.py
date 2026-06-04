@@ -103,6 +103,10 @@ class Operation:
     # fan-out) so the op can assemble/consume batches itself.
     variadic: bool = False
     raw: bool = False
+    # The render_preview is a synthetic chart (histogram / cluster diagnostics),
+    # not a sampleable image — so the inspector hides its per-channel histogram
+    # (running a histogram over a plotted graph is meaningless).
+    preview_is_chart: bool = False
 
     def defaults(self) -> dict:
         return {p.name: p.default for p in self.params}
@@ -454,7 +458,10 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
     ch = int(channel)
     sig = max(0.5, float(sigma))
     if ch == 0:                                   # Hue: saturation-weighted + circular
-        h = hls[:, :, 0].reshape(-1).astype(np.int64)        # 0..179
+        # OpenCV's 8-bit BGR2HLS can emit hue 180 (documented 0..179) for some
+        # pixels; hue is circular so 180 (=360°) wraps to 0. Without this the
+        # histogram would gain a spurious 181st bin.
+        h = (hls[:, :, 0].reshape(-1).astype(np.int64)) % 180  # 0..179
         s = hls[:, :, 2].reshape(-1).astype(np.float32)      # weight by saturation
         sw = np.power(s / 255.0, max(0.0, float(sat_weight)))  # exponent (1.0 = linear)
         # "original" = plain hue count; the damped curve weights each pixel by its
@@ -504,7 +511,7 @@ def _peak_mean_colors(bgr, hls, ch, nbins, circular, peak_idx, sig, sat_weight=1
     of the detection channel — same weighting the peak detection uses, so vivid
     pixels dominate the colour. Falls back to a synthetic swatch where there's no
     saturated support (e.g. an all-gray bin)."""
-    vals = hls[:, :, ch].reshape(-1).astype(np.int64)        # bin per pixel
+    vals = hls[:, :, ch].reshape(-1).astype(np.int64) % nbins  # bin per pixel (hue wraps 180->0)
     sat = hls[:, :, 2].reshape(-1).astype(np.float32) / 255.0
     w = np.maximum(np.power(sat, max(0.0, float(sat_weight))), 1e-3)  # saturation weight
     flat = bgr.reshape(-1, 3).astype(np.float32)
@@ -1936,7 +1943,7 @@ OPS: list = [
         ],
         compute=_compute_kmeans, color=(0, 150, 136), out_space="passthrough",
         space_aware=True, in_label="Mat (any)", out_label="Clusters",
-        render_preview=_render_kmeans, summary=_summary_kmeans,
+        render_preview=_render_kmeans, summary=_summary_kmeans, preview_is_chart=True,
     ),
     Operation(
         id="auto_cluster", label="Auto Cluster", category="Color Quantization",
@@ -1970,7 +1977,7 @@ OPS: list = [
         ],
         compute=_compute_auto_cluster, color=(0, 150, 136), out_space="passthrough",
         space_aware=True, in_label="Mat (any)", out_label="Clusters (auto k)",
-        render_preview=_render_auto_cluster, summary=_summary_kmeans,
+        render_preview=_render_auto_cluster, summary=_summary_kmeans, preview_is_chart=True,
     ),
     Operation(
         id="reduce_colors", label="Reduce Colors", category="Color Quantization",
@@ -2136,7 +2143,7 @@ OPS: list = [
         outputs=[Port("out", datatypes.HISTOGRAM)], params=[],
         compute=_compute_histogram, color=(0, 188, 212),
         in_label="Mat (any)", out_label="Histogram",
-        render_preview=_render_histogram, summary=_summary_histogram,
+        render_preview=_render_histogram, summary=_summary_histogram, preview_is_chart=True,
     ),
 ]
 
