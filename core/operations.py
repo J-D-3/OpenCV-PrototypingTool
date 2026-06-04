@@ -679,12 +679,33 @@ def _peak_mean_colors(bgr, hls, ch, nbins, circular, peak_idx, sig, sat_weight=1
     return colors
 
 
-def _detect_k_elbow(feat, max_k, attempts=3, return_diag=False):
+def _elbow_k(ks, inertias, k_bias=0):
+    """The k at the inertia knee, nudged by ``k_bias`` clusters. The knee is the
+    point of greatest perpendicular distance below the first->last chord of the
+    *normalized* inertia curve (``dist = |x + y - 1|``); ``k_bias`` then offsets the
+    chosen index by that many steps (clamped to the available range) — a direct,
+    predictable nudge toward more (+) or fewer (−) clusters. A blind index offset is
+    used (rather than tilting the score) because past the knee the inertia curve is
+    flat, so a score tilt would jump straight to max_k instead of nudging."""
+    if not ks:
+        return 2
+    if len(ks) == 1:
+        return int(ks[0])
+    x = np.array(ks, np.float64)
+    y = np.array(inertias, np.float64)
+    x = (x - x[0]) / ((x[-1] - x[0]) or 1.0)
+    y = (y - y.min()) / ((y.max() - y.min()) or 1.0)   # decreasing -> y[0]~1, y[-1]~0
+    knee = int(np.argmax(np.abs(x + y - 1.0)))         # chord (0,1)->(1,0): x+y-1=0
+    idx = min(len(ks) - 1, max(0, knee + int(round(k_bias))))
+    return int(ks[idx])
+
+
+def _detect_k_elbow(feat, max_k, attempts=3, return_diag=False, k_bias=0):
     """Data-driven k: run k-means for k=2..max_k on the *full feature space* and
-    pick the elbow (knee) of the inertia/compactness curve — the k of greatest
-    perpendicular distance below the first->last chord. No colour-channel
-    assumption, so it treats colour and gray uniformly and is reproducible across
-    lighting (the channel/smoothing params don't apply in this mode).
+    pick the elbow (knee) of the inertia/compactness curve (``_elbow_k``), nudged
+    by ``k_bias`` toward more/fewer clusters. No colour-channel assumption, so it
+    treats colour and gray uniformly and is reproducible across lighting (the
+    channel/smoothing params don't apply in this mode).
 
     With ``return_diag`` it also returns the (ks, inertias) curve and the chosen
     knee, so the preview can draw the inertia curve the elbow was picked from."""
@@ -702,12 +723,7 @@ def _detect_k_elbow(feat, max_k, attempts=3, return_diag=False):
             compactness, _, _ = cv2.kmeans(feat, k, None, criteria, int(attempts),
                                            cv2.KMEANS_PP_CENTERS)
         inertias.append(float(compactness))
-    x = np.array(ks, np.float64)
-    y = np.array(inertias, np.float64)
-    x = (x - x[0]) / ((x[-1] - x[0]) or 1.0)
-    y = (y - y.min()) / ((y.max() - y.min()) or 1.0)   # decreasing -> y[0]~1, y[-1]~0
-    dist = np.abs(x + y - 1.0)                          # chord (0,1)->(1,0): x+y-1=0
-    chosen = int(ks[int(np.argmax(dist))])
+    chosen = _elbow_k(ks, inertias, k_bias)
     if not return_diag:
         return chosen
     return chosen, {"mode": "elbow", "ks": ks, "inertias": inertias, "chosen": chosen}
@@ -723,7 +739,8 @@ def _compute_auto_cluster(inputs, p, in_space="bgr"):
         space, lw = p.get("cluster_space", "bgr"), p.get("lum_weight", 1.0)
         if p.get("k_method", "peaks") == "elbow":
             feat = _cluster_features(img, space, lw, in_space)
-            k, kdiag = _detect_k_elbow(feat, p["max_k"], return_diag=True)
+            k, kdiag = _detect_k_elbow(feat, p["max_k"], return_diag=True,
+                                       k_bias=p.get("k_bias", 0))
         else:
             k, kdiag = _detect_cluster_count(img, p["smoothing"], p["min_prominence"],
                                              p["max_k"], p.get("channel", 1), in_space,
@@ -1037,18 +1054,40 @@ def _scale_contours(payload, scale):
     return out
 
 
+_RESIZE_MODES = [("Scale factor", "scale"), ("Longer edge → length", "fixed")]
+
+
+def _resize_factor(p, h, w):
+    """The scale factor Resize applies, given the source height/width. 'scale' uses
+    the factor directly; 'fixed' scales so the longer edge becomes ``length`` px."""
+    if p.get("mode", "scale") == "fixed":
+        longer = max(int(h), int(w))
+        return (float(p["length"]) / longer) if longer > 0 else 1.0
+    return float(p.get("scale", 1.0))
+
+
 def _compute_resize(inputs, p):
-    """Scale an image — or a CONTOURS payload (scaling the contour coordinates),
-    so a segmentation done on a downscaled image can be mapped back to the original
-    resolution. The interpolation mode applies to images only."""
+    """Scale an image — or a CONTOURS payload (scaling the contour coordinates), so a
+    segmentation done on a downscaled image can be mapped back to the original
+    resolution. ``mode`` is either a direct scale factor or 'fixed' (scale so the
+    image's longer edge becomes ``length`` px). Interpolation applies to images only."""
     try:
         data = inputs[0]
-        scale = float(p["scale"])
         if isinstance(data, dict) and "contours" in data:
-            return data if scale == 1.0 else _scale_contours(data, scale)
-        if scale <= 0 or scale == 1.0:
-            return data
-        return cv2.resize(data, None, fx=scale, fy=scale, interpolation=int(p["interpolation"]))
+            shape = data.get("shape") or (0, 0)
+            h, w = (shape[0], shape[1]) if len(shape) >= 2 else (0, 0)
+            s = _resize_factor(p, h, w)
+            return data if s == 1.0 else _scale_contours(data, s)
+        img = data
+        h, w = img.shape[:2]
+        s = _resize_factor(p, h, w)
+        if s <= 0 or s == 1.0:
+            return img
+        if p.get("mode", "scale") == "fixed":
+            # Size explicitly so the longer edge lands exactly on the target length.
+            return cv2.resize(img, (max(1, round(w * s)), max(1, round(h * s))),
+                              interpolation=int(p["interpolation"]))
+        return cv2.resize(img, None, fx=s, fy=s, interpolation=int(p["interpolation"]))
     except Exception as e:
         print(f"Error executing resize: {e}")
         return None
@@ -2217,6 +2256,11 @@ OPS: list = [
                       label="Saturation weight",
                       enabled_if=[("k_method", "peaks"), ("channel", 0)],
                       help="Exponent on saturation in the hue histogram; >1 favours vivid pixels, 0 ignores it."),
+            ParamSpec("k_bias", 0, kind="int", min=-5, max=5, label="k nudge (elbow)",
+                      enabled_if=("k_method", "elbow"),
+                      help="Shift the auto-detected k by this many clusters relative to "
+                           "the inertia knee: + for more clusters, − for fewer; 0 = the "
+                           "plain knee. Clamped to [2, Max clusters]."),
             ParamSpec("cluster_space", "bgr", kind="enum", choices=_CLUSTER_SPACES,
                       label="Cluster space",
                       help="Distance space for k-means: BGR, Lab, or HLS (Lab/HLS split chroma from luminance)."),
@@ -2252,9 +2296,18 @@ OPS: list = [
         id="resize", label="Resize", category="Geometry",
         inputs=[Port("in", datatypes.ANY)], outputs=[Port("out", datatypes.ANY)],
         params=[
+            ParamSpec("mode", "scale", kind="enum", choices=_RESIZE_MODES, label="Mode",
+                      help="'Scale factor' multiplies the size; 'Longer edge → length' "
+                           "scales so the image's longer edge becomes a fixed length "
+                           "(to normalize varying input sizes)."),
             ParamSpec("scale", 0.5, kind="float", min=0.1, max=4.0, step=0.05, label="Scale",
+                      enabled_if=("mode", "scale"),
                       help="Output size factor; <1 shrinks, >1 enlarges. Scales contour "
                            "coordinates too, to map a downscaled segmentation back to the original."),
+            ParamSpec("length", 1024, kind="int", min=16, max=8192, label="Longer-edge length",
+                      enabled_if=("mode", "fixed"),
+                      help="Target length (px) for the longer edge; the shorter edge scales "
+                           "proportionally. Aspect ratio is preserved."),
             ParamSpec("interpolation", cv2.INTER_AREA, kind="enum",
                       choices=_INTERP_MODES, label="Interpolation",
                       help="Resampling: AREA (shrink), LINEAR/CUBIC (enlarge), NEAREST "

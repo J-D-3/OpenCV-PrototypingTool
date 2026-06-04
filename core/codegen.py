@@ -107,7 +107,12 @@ _CODE = {
     "threshold": lambda o, i, p: f"{o} = cv::threshold({i[0]}, thresh={p.get('threshold_value')}, maxval={p.get('max_value')}, type={p.get('threshold_type')})   # gray via cv::cvtColor",
     "adaptive_threshold": lambda o, i, p: f"{o} = cv::adaptiveThreshold({i[0]}, maxValue={p.get('max_value')}, method={p.get('adaptive_method')}, type={p.get('threshold_type')}, blockSize={p.get('block_size')}, C={p.get('c')})   # gray via cv::cvtColor",
     # --- geometry ---
-    "resize": lambda o, i, p: f"{o} = cv::resize({i[0]}, None, fx={p.get('scale')}, fy={p.get('scale')}, interpolation={p.get('interpolation')})   # or scale contour points by {p.get('scale')} if {i[0]} is contours",
+    "resize": lambda o, i, p: (
+        f"s = {p.get('length')} / max(h, w); {o} = cv::resize({i[0]}, (round(w*s), round(h*s)), "
+        f"interpolation={p.get('interpolation')})   # longer edge -> {p.get('length')} px (or scale contour points by s)"
+        if p.get("mode") == "fixed" else
+        f"{o} = cv::resize({i[0]}, None, fx={p.get('scale')}, fy={p.get('scale')}, "
+        f"interpolation={p.get('interpolation')})   # or scale contour points by {p.get('scale')} if {i[0]} is contours"),
     "rotate": lambda o, i, p: [f"M = cv::getRotationMatrix2D(center, angle={p.get('angle')}, scale=1.0)",
                                f"{o} = cv::warpAffine({i[0]}, M, dsize)   # expand={p.get('expand')}"],
     # --- arithmetic (the second input is aligned to the first: cv::resize/cv::cvtColor) ---
@@ -178,7 +183,7 @@ def _emit_auto_cluster(o, i, p):
         out += [
             "# --- K via the elbow of the inertia curve (full feature space) ---",
             f"for k in 2..{p.get('max_k')}:  inertia[k] = cv::kmeans(feat, k, ..., KMEANS_PP_CENTERS).compactness",
-            "K = the k of greatest perpendicular distance below the first->last chord (the knee)",
+            f"K = the knee (greatest perpendicular distance below the first->last chord), nudged by k_bias={p.get('k_bias', 0)} clusters",
         ]
     else:
         ch = _HLS_CHAN.get(p.get("channel"), str(p.get("channel")))

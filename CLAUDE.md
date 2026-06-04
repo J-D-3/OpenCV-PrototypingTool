@@ -23,7 +23,7 @@ $env:QT_QPA_PLATFORM='offscreen'; .\.venv\Scripts\python.exe smoke_test.py   # G
 .\.venv\Scripts\python.exe engine_test.py                        # Qt-free backend tests
 ```
 Both suites must stay green before committing. Counts as of 2026-06-04:
-**35 smoke checks + 44 engine tests.**
+**35 smoke checks + 45 engine tests.**
 
 ## Commit convention
 - Branch first if on the default branch; commit/push only when asked.

@@ -571,6 +571,29 @@ def test_resize():
     print("OK  resize: scale (up/down) + interpolation mode")
 
 
+def test_resize_fixed_length():
+    # 'fixed' mode scales so the LONGER edge hits the target length (aspect kept).
+    m = GraphModel(); s = _src(m, np.zeros((40, 80, 3), np.uint8))   # longer edge = width 80
+    r = _op(m, "resize", mode="fixed", length=160)
+    m.add_edge(s, r); Engine(m).evaluate_all()
+    assert r.output.shape[:2] == (80, 160), f"longer edge -> 160 (got {r.output.shape[:2]})"
+
+    m2 = GraphModel(); s2 = _src(m2, np.zeros((120, 30, 3), np.uint8))  # longer edge = height 120
+    r2 = _op(m2, "resize", mode="fixed", length=60)
+    m2.add_edge(s2, r2); Engine(m2).evaluate_all()
+    assert r2.output.shape[:2] == (60, 15), f"tall image longer edge -> 60 (got {r2.output.shape[:2]})"
+
+    # Contours too: scaled by length / (longer edge of the reference shape).
+    img = np.zeros((50, 100), np.uint8); cv2.rectangle(img, (10, 10), (40, 30), 255, -1)
+    m3 = GraphModel(); s3 = _src(m3, img)
+    fc = _op(m3, "find_contours"); rz = _op(m3, "resize", mode="fixed", length=200)  # 100 -> 200, x2
+    m3.add_edge(s3, fc); m3.add_edge(fc, rz); Engine(m3).evaluate_all()
+    a0 = cv2.contourArea(fc.output["contours"][0])
+    a1 = cv2.contourArea(rz.output["contours"][0])
+    assert abs(a1 - 4 * a0) < 0.2 * a0, f"longer edge 100->200 (2x) -> ~4x contour area ({a1} vs {a0})"
+    print("OK  resize: 'fixed length' scales the longer edge to the target (images + contours)")
+
+
 def test_resize_contours():
     # Resize also scales a CONTOURS payload: segment on a downscaled image, then
     # scale the contours back up to the original resolution.
@@ -833,7 +856,17 @@ def test_auto_cluster_elbow():
 
     assert k_of("elbow") > k_of("peaks"), \
         "the 3D elbow should add a cluster for the gray blob that hue-peaks miss"
-    print("OK  auto_cluster elbow: data-driven 3D k includes gray (hue-peaks miss it)")
+
+    # k_bias nudges the elbow result by N clusters (relative to the knee), clamped.
+    from core.operations import _elbow_k
+    ks = list(range(2, 13))
+    inertias = [100, 72, 50, 33, 22, 18, 15.5, 14, 13, 12.4, 12]   # knee ~k=6
+    base = _elbow_k(ks, inertias, 0)
+    assert _elbow_k(ks, inertias, 1) == base + 1, "k_bias=+1 -> one more cluster"
+    assert _elbow_k(ks, inertias, -2) == base - 2, "k_bias=-2 -> two fewer clusters"
+    assert _elbow_k(ks, inertias, 99) == ks[-1] and _elbow_k(ks, inertias, -99) == ks[0], \
+        "k_bias is clamped to the available k range"
+    print("OK  auto_cluster elbow: data-driven 3D k includes gray; k_bias nudges k")
 
 
 def test_cluster_preview_diag():
@@ -1056,6 +1089,7 @@ def main():
     test_batched()
     test_create_batch()
     test_resize()
+    test_resize_fixed_length()
     test_resize_contours()
     test_largest_contour_outline()
     test_rotate()
@@ -1075,7 +1109,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 44 backend tests passed")
+    print("\nENGINE OK: 45 backend tests passed")
 
 
 if __name__ == "__main__":

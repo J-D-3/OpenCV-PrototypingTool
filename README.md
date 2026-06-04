@@ -184,6 +184,17 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-04** — **Resize: "longer edge → length" mode.** Resize gained a `mode`:
+  the existing scale factor, or **fixed** — scale so the image's longer edge becomes
+  a target `length` px (aspect preserved), to normalize varying input sizes. Works on
+  contours too (scaled by `length / longer edge of the reference shape`). The
+  irrelevant field (Scale / Length) grays out per mode.
+- **2026-06-04** — **Auto Cluster (elbow): a "k nudge" knob.** Elbow mode gained a
+  `k_bias` parameter that offsets the auto-detected k by N clusters relative to the
+  inertia knee (+ for more, − for fewer; 0 = the plain knee), clamped to
+  [2, Max clusters]. A direct index offset (not a score tilt — the inertia curve is
+  flat past the knee, so a tilt would jump straight to max). Elbow-only (grayed out
+  in peaks mode).
 - **2026-06-04** — **Deskew & Crop: negative border trims inward.** The Border
   parameter now accepts negative values (range [-100, 100], default 0): a negative
   border crops *tighter* than the contour's box (trims the edges) instead of only
