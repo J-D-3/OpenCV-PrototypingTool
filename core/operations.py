@@ -504,20 +504,20 @@ def _compute_kmeans(inputs, p, in_space="bgr"):
         return None
 
 
-def _topographic_prominence(hist, i, circular):
-    """Height of peak ``i`` above its *key col*: descend left and right until the
-    terrain rises above the peak (or the array bounds), tracking the lowest point
-    reached on each side; the key col is the higher of those two minima. This is
-    the standard 'how isolated is this peak' measure — crucially it compares the
-    peak to its own surrounding valley, **not** to the global maximum, so a small
-    feature on a large uniform background still scores as a genuine peak (whereas a
-    bump on the shoulder of a big peak scores low and is rejected as noise).
+# A genuine mode must dip on BOTH sides; the shallower-side drop must be at least
+# this fraction of the peak's height. It rejects the shoulder of a quasi-flat step
+# (one side ~flat -> shallower drop ~0) without rejecting a real sub-peak.
+_PEAK_DIP_FLOOR = 0.05
 
-    For a non-circular channel (L/S) the region beyond the histogram is treated as
-    count 0 — there are no pixels outside the range — so a peak sitting *on* the
-    boundary (a pure-black L=0 or white L=255 background) descends to a real 0
-    valley on the open side and keeps its full prominence, instead of being wrongly
-    flattened to 0. Hue is circular, so it has no boundary."""
+
+def _peak_bases(hist, i, circular):
+    """The two *key cols* of peak ``i``: descend left and right until the terrain
+    rises above the peak (or the array bounds), returning the lowest point reached
+    on each side as ``(left_base, right_base)``. For a non-circular channel (L/S)
+    the region beyond the histogram is treated as count 0 — there are no pixels
+    outside the range — so a peak sitting *on* the boundary (a pure-black L=0 or
+    white L=255 background) descends to a real 0 valley on the open side. Hue is
+    circular, so it has no boundary."""
     n = len(hist)
     h = float(hist[i])
 
@@ -536,19 +536,63 @@ def _topographic_prominence(hist, i, circular):
                 m = v
         return m
 
-    return h - max(base(-1), base(1))
+    return base(-1), base(1)
+
+
+def _topographic_prominence(hist, i, circular):
+    """Standard topographic prominence: peak height above its *key col* (the higher
+    of the two surrounding valleys). Compares the peak to its own valley, not to the
+    global maximum, so a small feature on a large uniform background still scores
+    as a genuine peak while a bump on a bigger peak's shoulder scores low."""
+    lb, rb = _peak_bases(hist, i, circular)
+    return float(hist[i]) - max(lb, rb)
+
+
+def _find_prominent_peaks(hist, min_prominence, circular):
+    """Indices of the histogram's modes. A bin qualifies when it is a local maximum
+    that BOTH:
+
+    * rises above the **mean** of its two surrounding valleys by at least
+      ``min_prominence`` of its own height. Using the mean (not the higher valley,
+      as standard topographic prominence does) is lenient toward a *sub-peak* nested
+      in a 'mountain range' — e.g. the 5 in ``0,0,3,5,4,7,8,3,0`` rises well above
+      the average of its valleys (0 and 4) even though it only dips 1 on the side
+      facing the taller 8; standard prominence judges it solely by that shallow side
+      and drops it.
+    * dips on **both** sides by at least ``_PEAK_DIP_FLOOR`` of its height. This
+      rejects the shoulder of a quasi-flat step (one side ~flat), which the mean
+      test alone would accept."""
+    n = len(hist)
+    thr = max(0.0, float(min_prominence))
+    peaks = []
+    for i in range(n):
+        if circular:
+            left, right = hist[(i - 1) % n], hist[(i + 1) % n]
+        else:
+            left = hist[i - 1] if i > 0 else -1.0
+            right = hist[i + 1] if i < n - 1 else -1.0
+        h = float(hist[i])
+        if h <= 0 or not (h > left and h >= right):     # not a local maximum
+            continue
+        lb, rb = _peak_bases(hist, i, circular)
+        mean_prominence = h - 0.5 * (lb + rb)            # rise above the average valley
+        bilateral_dip = h - max(lb, rb)                  # the shallower side's drop
+        if mean_prominence >= thr * h and bilateral_dip >= _PEAK_DIP_FLOOR * h:
+            peaks.append(i)
+    return peaks
 
 
 def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
                           in_space="bgr", return_diag=False, sat_weight=1.0):
-    """Pick k by smoothing one channel's histogram (Gaussian) and counting local
-    maxima whose **topographic prominence** (height above the surrounding valley,
-    as a fraction of the peak's own height) clears ``min_prominence``. Comparing a
-    peak to its own valley rather than to the global maximum means a small colored
-    feature on a big uniform background is kept (it is a real, isolated peak), while
-    a bump on the shoulder of a dominant peak is dropped. The channel is an HLS
-    index (1=Luminance/L, 0=Hue, 2=Saturation); the input is first mapped to BGR
-    via its tracked color space.
+    """Pick k by smoothing one channel's histogram (Gaussian) and counting its
+    modes (``_find_prominent_peaks``): local maxima that rise above the **mean** of
+    their two surrounding valleys by ``min_prominence`` of their height *and* dip on
+    both sides. Judging by the mean valley (not the global maximum, nor only the
+    higher valley) keeps both a small colored feature on a big background and a
+    sub-peak nested in a 'mountain range', while the both-sides-dip test rejects the
+    shoulder of a quasi-flat step. The channel is an HLS index (1=Luminance/L,
+    0=Hue, 2=Saturation); the input is first mapped to BGR via its tracked color
+    space.
 
     Hue (channel 0) gets two extra treatments because raw hue is unreliable: the
     histogram is **weighted by saturation** (so washed-out / gray pixels — whose
@@ -595,21 +639,7 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
     else:
         hist = cv2.GaussianBlur(base.reshape(-1, 1), (0, 0), sig).flatten()
 
-    thr = max(0.0, float(min_prominence))
-    peak_idx = []
-    for i in range(nbins):
-        if circular:
-            left, right = hist[(i - 1) % nbins], hist[(i + 1) % nbins]
-        else:
-            left = hist[i - 1] if i > 0 else -1.0
-            right = hist[i + 1] if i < nbins - 1 else -1.0
-        h = float(hist[i])
-        if h <= 0 or not (h > left and h >= right):     # not a local maximum
-            continue
-        # Keep the peak if it rises far enough above its key col, measured relative
-        # to its own height — independent of how tall the global maximum is.
-        if _topographic_prominence(hist, i, circular) >= thr * h:
-            peak_idx.append(i)
+    peak_idx = _find_prominent_peaks(hist, min_prominence, circular)
     k = max(1, min(len(peak_idx), int(max_k)))
     if not return_diag:
         return k
@@ -2175,13 +2205,14 @@ OPS: list = [
             ParamSpec("smoothing", 4.0, kind="float", min=0.5, max=15.0, step=0.5,
                       label="Histogram smoothing", enabled_if=("k_method", "peaks"),
                       help="Gaussian blur of the histogram before peak finding; higher = fewer peaks."),
-            ParamSpec("min_prominence", 0.2, kind="float", min=0.0, max=1.0, step=0.01,
+            ParamSpec("min_prominence", 0.3, kind="float", min=0.0, max=1.0, step=0.01,
                       label="Min peak prominence", enabled_if=("k_method", "peaks"),
-                      help="How far a peak must rise above its surrounding valley "
-                           "(fraction of its own height) to count — measured locally, "
-                           "so a small colored feature isn't lost beside a big "
-                           "background peak. Higher = stricter; raise 'smoothing' "
-                           "to drop noise."),
+                      help="How far a peak must rise above the MEAN of its two "
+                           "surrounding valleys (fraction of its own height) to count "
+                           "as a colour — lenient enough to catch a small feature or a "
+                           "sub-peak of a 'mountain range'. A peak must also dip on "
+                           "both sides, so a quasi-flat step isn't counted. Higher = "
+                           "stricter; raise 'smoothing' to drop noise."),
             ParamSpec("sat_weight", 1.0, kind="float", min=0.0, max=4.0, step=0.1,
                       label="Saturation weight",
                       enabled_if=[("k_method", "peaks"), ("channel", 0)],

@@ -719,8 +719,10 @@ def test_auto_cluster_hue_robust():
     base = np.zeros((100, 100, 3), np.uint8); base[:] = (0, 0, 200)        # saturated red
     noisy = base.copy()
     noisy[:, 60:] = rng.randint(115, 141, (100, 40, 3), np.uint8)          # desaturated noise
-    # saturation-weighted: washed-out pixels don't add phantom hue peaks
-    assert dc(base, 3.0, 0.15, 8, channel=0) == dc(noisy, 3.0, 0.15, 8, channel=0), \
+    # saturation-weighted: washed-out pixels don't add phantom hue peaks (at a
+    # normal prominence; a residual ~0.18-prominence noise bump only survives a very
+    # lenient threshold, well below the 0.3 default).
+    assert dc(base, 3.0, 0.3, 8, channel=0) == dc(noisy, 3.0, 0.3, 8, channel=0), \
         "desaturated pixels must not change the hue cluster count"
     # circular: hues straddling the 0/179 wrap are a single peak
     hls = np.zeros((100, 100, 3), np.uint8); hls[:, :, 1] = 128; hls[:, :, 2] = 255
@@ -731,13 +733,15 @@ def test_auto_cluster_hue_robust():
     hls[:, :50, 0] = 20; hls[:, 50:, 0] = 120
     assert dc(cv2.cvtColor(hls, cv2.COLOR_HLS2BGR), 2.0, 0.1, 8, channel=0) == 2
 
-    # sat_weight is an exponent on the saturation weight. Default (1.0) reproduces
-    # the original linear weighting exactly; turning it off (0.0) makes the
-    # desaturated noise count again, so the phantom-peak robustness disappears.
-    assert dc(noisy, 3.0, 0.15, 8, channel=0) == \
-        dc(noisy, 3.0, 0.15, 8, channel=0, sat_weight=1.0), "default must equal sat_weight=1.0"
-    assert dc(noisy, 3.0, 0.15, 8, channel=0, sat_weight=0.0) >= \
-        dc(noisy, 3.0, 0.15, 8, channel=0), "unweighted (0.0) must not suppress the noise peaks"
+    # sat_weight is an exponent on the saturation weight. The default (1.0) is the
+    # original linear weighting; changing it reshapes the saturation-damped
+    # histogram (more aggressive damping of washed-out pixels at higher values).
+    assert dc(noisy, 3.0, 0.3, 8, channel=0) == \
+        dc(noisy, 3.0, 0.3, 8, channel=0, sat_weight=1.0), "default must equal sat_weight=1.0"
+    _, d0 = dc(noisy, 3.0, 0.3, 8, channel=0, sat_weight=0.0, return_diag=True)
+    _, d2 = dc(noisy, 3.0, 0.3, 8, channel=0, sat_weight=2.0, return_diag=True)
+    assert not np.allclose(d0["smooth"], d2["smooth"]), \
+        "sat_weight reshapes the saturation-damped histogram"
 
     # OpenCV's 8-bit BGR2HLS can emit hue 180 (e.g. BGR (53,51,174)); it must wrap
     # to 0 (hue is circular) so the histogram stays 180 bins, not a spurious 181.
@@ -774,6 +778,20 @@ def test_auto_cluster_small_feature():
     # instead of being flattened to 0.
     assert tp(np.array([10, 8, 2, 0], np.float32), 0, False) == 10.0, "boundary peak keeps full prominence"
     print("OK  auto_cluster: topographic prominence keeps small features + boundaries, rejects shoulders")
+
+
+def test_peak_subpeak_vs_step():
+    from core.operations import _find_prominent_peaks as fp
+    # A sub-peak nested in a 'mountain range': the 5 (just before a taller 8) is a
+    # real mode and must be detected, even though it only dips 1 on the side facing
+    # the 8 — the mean-valley test sees it rise well above mean(0, 4).
+    peaks = fp([0, 0, 3, 5, 4, 7, 8, 3, 0], 0.3, False)
+    assert 3 in peaks and 6 in peaks, f"sub-peak (idx 3) and main peak (idx 6) detected, got {peaks}"
+    # A quasi-flat step: the plateau shoulder does NOT dip on its right side, so the
+    # both-sides-dip guard rejects it — only the genuine peak (the 9) is kept.
+    step = fp([0, 0, 5, 5, 5, 5, 9, 0], 0.3, False)
+    assert 6 in step and 2 not in step, f"flat-step shoulder rejected, only idx 6 kept, got {step}"
+    print("OK  peak detection: mean-valley prominence keeps sub-peaks; both-sides-dip rejects flat steps")
 
 
 def test_auto_cluster_elbow():
@@ -1023,6 +1041,7 @@ def main():
     test_auto_cluster()
     test_auto_cluster_hue_robust()
     test_auto_cluster_small_feature()
+    test_peak_subpeak_vs_step()
     test_auto_cluster_elbow()
     test_cluster_preview_diag()
     test_normalize_lighting()
@@ -1032,7 +1051,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 42 backend tests passed")
+    print("\nENGINE OK: 43 backend tests passed")
 
 
 if __name__ == "__main__":

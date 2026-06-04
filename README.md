@@ -184,6 +184,14 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-04** — **Auto Cluster peak detection: mean-valley prominence + flat-step
+  reject.** A histogram mode now counts when it rises above the **mean of its two
+  surrounding valleys** by `min_prominence` of its height (was: above the *higher*
+  valley) — so a sub-peak nested in a "mountain range" (e.g. the 5 in
+  `0,0,3,5,4,7,8,3,0`) is detected, not dropped for the shallow side facing the
+  taller peak. A peak must also **dip on both sides**, so the shoulder of a
+  quasi-flat step isn't counted. `min_prominence` default 0.2 → 0.3 (the mean
+  measure is more sensitive). Suites: 35 smoke + 43 engine.
 - **2026-06-04** — **Resize scales contours; Largest Contour draws bold outlines.**
   **Resize** is now polymorphic (ANY in/out): fed a Contours payload it scales the
   contour coordinates (and the reference shape + preview background) instead of an

@@ -188,13 +188,13 @@ def _emit_auto_cluster(o, i, p):
             out += [
                 f"hist = histogram(hls.Hue, 180 bins, weights=hls.Saturation)   # ignore washed-out hues; (L/S use cv::calcHist)",
                 f"hist = circular cv::GaussianBlur(hist, sigma={p.get('smoothing')})   # wrap 0<->179 (hue is circular)",
-                f"K = count CIRCULAR local maxima whose topographic prominence >= {p.get('min_prominence')} * peak_height   # vs surrounding valley, not the global max",
+                f"K = count CIRCULAR local maxima whose prominence above the MEAN valley >= {p.get('min_prominence')} * peak_height, dipping on both sides   # keeps sub-peaks, drops flat steps",
             ]
         else:
             out += [
                 f"hist = cv::calcHist(hls.{ch}, 256 bins)",
                 f"hist = cv::GaussianBlur(hist, sigma={p.get('smoothing')})",
-                f"K = count local maxima whose topographic prominence >= {p.get('min_prominence')} * peak_height   # vs surrounding valley, not the global max",
+                f"K = count local maxima whose prominence above the MEAN valley >= {p.get('min_prominence')} * peak_height, dipping on both sides   # keeps sub-peaks, drops flat steps",
             ]
         out += [f"K = clamp(K, 1, {p.get('max_k')})"]
     out += _emit_cluster_tail(o, p)
