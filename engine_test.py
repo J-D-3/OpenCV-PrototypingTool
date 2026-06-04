@@ -332,6 +332,29 @@ def test_crop_no_clip_when_deskewed():
     print("OK  crop: deskew canvas sized to the rect (no clipping when rotated)")
 
 
+def test_crop_negative_border():
+    # A negative border trims inward — the crop is tighter than the contour's box.
+    img = np.full((120, 160, 3), 255, np.uint8)
+    cv2.fillPoly(img, [cv2.boxPoints(((80, 60), (90, 40), 20)).astype(np.int32)], (30, 30, 30))
+
+    def crop_at(border):
+        m = GraphModel(); s = _src(m, img)
+        mask = _op(m, "color_mask", blue=255, green=255, red=255, delta=30, select="outside")
+        fc = _op(m, "find_contours"); lc = _op(m, "largest_contour")
+        crop = _op(m, "crop_to_contour", border=border)
+        m.add_edge(s, mask); m.add_edge(mask, fc); m.add_edge(fc, lc)
+        m.add_edge(s, crop, 0); m.add_edge(lc, crop, 1)
+        Engine(m).evaluate_all()
+        return crop.output
+
+    pos, neg = crop_at(10), crop_at(-10)
+    assert isinstance(pos, np.ndarray) and isinstance(neg, np.ndarray)
+    # border adds 2*border to each dimension, so +10 vs -10 differ by exactly 40 px.
+    assert pos.shape[0] - neg.shape[0] == 40 and pos.shape[1] - neg.shape[1] == 40, \
+        f"negative border should trim inward (+10 vs -10 differ by 40px): {pos.shape[:2]} vs {neg.shape[:2]}"
+    print("OK  crop: negative border trims inward (tighter than the contour box)")
+
+
 def test_codegen():
     from core import codegen
     m = GraphModel()
@@ -1022,6 +1045,7 @@ def main():
     test_connected_components()
     test_segmentation_nodes()
     test_crop_no_clip_when_deskewed()
+    test_crop_negative_border()
     test_codegen()
     test_codegen_clustering_detail()
     test_fourier_roundtrip()
@@ -1051,7 +1075,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 43 backend tests passed")
+    print("\nENGINE OK: 44 backend tests passed")
 
 
 if __name__ == "__main__":

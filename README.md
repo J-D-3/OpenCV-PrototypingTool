@@ -184,6 +184,10 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-04** — **Deskew & Crop: negative border trims inward.** The Border
+  parameter now accepts negative values (range [-100, 100], default 0): a negative
+  border crops *tighter* than the contour's box (trims the edges) instead of only
+  padding outward.
 - **2026-06-04** — **Auto Cluster peak detection: mean-valley prominence + flat-step
   reject.** A histogram mode now counts when it rises above the **mean of its two
   surrounding valleys** by `min_prominence` of its height (was: above the *higher*

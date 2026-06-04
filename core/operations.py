@@ -2365,8 +2365,9 @@ OPS: list = [
         inputs=[Port("image", datatypes.IMAGE), Port("contours", datatypes.CONTOURS)],
         outputs=[Port("out", datatypes.IMAGE)],
         params=[
-            ParamSpec("border", 8, kind="int", min=0, max=200, label="Border (px)",
-                      help="Padding (px) added around the cropped box."),
+            ParamSpec("border", 0, kind="int", min=-100, max=100, label="Border (px)",
+                      help="Padding (px) around the cropped box; negative trims inward "
+                           "(crops tighter than the contour's box)."),
             ParamSpec("scale", 1.0, kind="float", min=0.1, max=4.0, step=0.05, label="Scale",
                       help="Output size factor for the crop."),
         ],
