@@ -260,8 +260,21 @@ def _emit_local_hdr(o, i, p):
 
 
 def _emit_histogram(o, i, p):
-    return [f"# cv::calcHist per channel, then plot",
-            f"{o} = histogram({i[0]})"]
+    space = p.get("color_space", "bgr")
+    sig = float(p.get("smoothing", 0.0))
+    src = i[0]
+    conv = f"cv::cvtColor({i[0]}, COLOR_BGR2HLS)"
+    out = []
+    if space == "hls":
+        out.append(f"img = {conv}   # histogram in HLS (Hue 0..179)")
+        src = "img"
+    else:
+        out.append(f"# color_space='hls' would first {conv}")
+    out.append(f"{o} = cv::calcHist({src}) per channel")
+    blur = f"cv::GaussianBlur({o}, sigma={p.get('smoothing')})"
+    out.append(f"{o} = {blur}   # smooth the curve" if sig > 0
+               else f"# smoothing > 0 would {blur} the curve")
+    return out
 
 
 def _emit_create_batch(o, i, p):

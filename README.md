@@ -184,6 +184,14 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-04** — **Fullscreen start, sticky inspector histogram, Histogram-node
+  parity.** The app now starts maximized. The inspector histogram **keeps its
+  settings across node switches** — colour-space view, log, smoothing, *and* the
+  per-channel toggles + range filters persist (by channel name), so you can compare
+  the same curve on the next node. The **Histogram node** gained the inspector's
+  controls: a **BGR/HLS** colour space and **smoothing**; its payload now carries
+  per-channel names, space, and bin counts (Hue = 180 bins). Suites: 34 smoke + 38
+  engine.
 - **2026-06-04** — **Auto Cluster peak detection: topographic prominence + histogram
   header polish.** Auto Cluster's **Min peak prominence** now measures each peak
   against its **own surrounding valley** (topographic prominence, relative to the

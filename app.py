@@ -30,7 +30,7 @@ def main() -> None:
         window_title = f"Image - {image_path.name}"
 
     window = MainWindow(initial_image, window_title)
-    window.show()
+    window.showMaximized()   # fill the screen by default (keeps the window frame)
 
     sys.exit(app.exec())
 

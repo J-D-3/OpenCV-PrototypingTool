@@ -109,6 +109,12 @@ class RangeSlider(QtWidgets.QWidget):
         self._lo, self._hi = 0, self._vmax
         self.update()
 
+    def set_values(self, lo, hi):
+        """Restore a previously-set range (clamped to the slider's bounds)."""
+        self._lo = max(0, min(self._vmax, int(lo)))
+        self._hi = max(self._lo, min(self._vmax, int(hi)))
+        self.update()
+
     def _track_rect(self):
         return QtCore.QRect(self._margin, self.height() // 2 - 2,
                             self.width() - 2 * self._margin, 4)
@@ -284,13 +290,27 @@ class HistogramPanel(QtWidgets.QWidget):
         self._layout.addWidget(self._rows_box)
         self._channels = []   # list of dicts: {name, color, checkbox, slider}
         self._hists = []      # raw per-channel histograms (256,)
+        # Per-channel (checked, (lo, hi)) by channel name, kept across rebuilds /
+        # node switches so the user's view (isolated channels, narrowed ranges)
+        # sticks — even through the intermediate clear() on deselection.
+        self._saved_state = {}
 
     def configure(self, n_channels: int, names) -> None:
-        """(Re)build one toggle+range row per channel (resets ranges).
+        """(Re)build one toggle+range row per channel.
+
+        The per-channel toggle and range are **preserved across a rebuild for any
+        channel whose name survives** — so switching to another node with the same
+        channels keeps the user's view (isolated channels, narrowed ranges) instead
+        of resetting it. Channels that don't carry over (e.g. Gray -> B/G/R, or a
+        BGR<->HSL switch) fall back to checked + full range.
 
         Each row is wrapped in a QWidget so deleting it removes its child
         widgets too — otherwise old channel labels linger and overlap.
         """
+        # Remember the live state of the channels we're about to tear down (so a
+        # configure(0, []) on deselection doesn't drop it), then restore by name.
+        for ch in self._channels:
+            self._saved_state[ch["name"]] = (ch["cb"].isChecked(), ch["slider"].values())
         while self._rows.count():
             child = self._rows.takeAt(0)
             w = child.widget()
@@ -302,17 +322,20 @@ class HistogramPanel(QtWidgets.QWidget):
         for i in range(n_channels):
             color = _channel_color(names[i])
             vmax = _ch_vmax(names[i])
+            checked, rng = self._saved_state.get(names[i], (True, None))
             row_w = QtWidgets.QWidget()
             row = QtWidgets.QHBoxLayout(row_w)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(self._ROW_SPACING)
             # The checkbox label IS the channel indicator (B/G/R/H/S/L), in colour.
             cb = QtWidgets.QCheckBox(names[i])
-            cb.setChecked(True)
+            cb.setChecked(checked)
             cb.setFixedWidth(self._CB_W)
             cb.setStyleSheet(f"color: rgb({color.red()},{color.green()},{color.blue()}); font-weight: bold;")
             cb.setToolTip(f"{names[i]} channel (0..{vmax})")
             slider = RangeSlider(color, vmax=vmax)
+            if rng is not None:
+                slider.set_values(rng[0], rng[1])
             cb.toggled.connect(self._on_changed)
             slider.rangeChanged.connect(self._on_changed)
             row.addWidget(cb)

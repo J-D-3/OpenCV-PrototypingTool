@@ -637,6 +637,45 @@ def check_inspector_pane(app) -> None:
     print("OK  inspector pane: colors, channel-clear, log toggle, zoom; chart hides histogram")
 
 
+def check_inspector_persists_settings(app) -> None:
+    # The histogram view/log/smoothing AND the per-channel toggles + ranges must
+    # carry over when switching between nodes with the same channels, so you can
+    # compare the same curve across nodes.
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    n1 = add_func(w, "Invert")
+    n2 = add_func(w, "Blur")
+    connect(w, src, n1)
+    connect(w, src, n2)
+    app.processEvents()
+
+    pane = w.inspector_pane
+    n1.setSelected(True)
+    app.processEvents()
+    h = pane._hist
+    h._view_combo.setCurrentText("HSL")    # fires viewChanged -> rebuild as H/L/S
+    app.processEvents()
+    h._log_cb.setChecked(True)
+    h._smooth.setValue(4)
+    h._channels[1]["cb"].setChecked(False)              # hide L (isolate the curve)
+    h._channels[0]["slider"].set_values(10, 90)         # narrow the H range
+    pane._apply_filter()
+    app.processEvents()
+
+    w.drop_widget.view._scene.clearSelection()
+    n2.setSelected(True)                    # switch nodes
+    app.processEvents()
+    assert pane._node is n2
+    assert h.color_view() == "hsl", "color-space view should persist across nodes"
+    assert h._log_cb.isChecked(), "log scale should persist"
+    assert h._smooth.value() == 4, "smoothing should persist"
+    assert [c["name"] for c in h._channels] == ["H", "L", "S"], "still in HSL view"
+    assert not h._channels[1]["cb"].isChecked(), "the hidden channel should stay hidden"
+    assert h._channels[0]["slider"].values() == (10, 90), "the narrowed range should persist"
+    w.close()
+    print("OK  inspector pane: view/log/smooth/channel/range persist across node switches")
+
+
 def check_batch(app) -> None:
     import os
     import glob
@@ -1096,6 +1135,7 @@ def main() -> int:
         check_rewire,
         check_disconnect,
         check_inspector_pane,
+        check_inspector_persists_settings,
         check_batch,
         check_create_batch,
         check_node_icons_and_scroll,

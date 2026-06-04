@@ -439,7 +439,13 @@ def _topographic_prominence(hist, i, circular):
     the standard 'how isolated is this peak' measure — crucially it compares the
     peak to its own surrounding valley, **not** to the global maximum, so a small
     feature on a large uniform background still scores as a genuine peak (whereas a
-    bump on the shoulder of a big peak scores low and is rejected as noise)."""
+    bump on the shoulder of a big peak scores low and is rejected as noise).
+
+    For a non-circular channel (L/S) the region beyond the histogram is treated as
+    count 0 — there are no pixels outside the range — so a peak sitting *on* the
+    boundary (a pure-black L=0 or white L=255 background) descends to a real 0
+    valley on the open side and keeps its full prominence, instead of being wrongly
+    flattened to 0. Hue is circular, so it has no boundary."""
     n = len(hist)
     h = float(hist[i])
 
@@ -449,6 +455,7 @@ def _topographic_prominence(hist, i, circular):
         for _ in range(n):
             j = (j + step) % n if circular else j + step
             if not circular and (j < 0 or j >= n):
+                m = min(m, 0.0)  # outside the histogram the count is 0 (a valley floor)
                 break
             v = float(hist[j])
             if v > h:            # reached higher terrain -> stop
@@ -1546,41 +1553,75 @@ def _compute_local_hdr(inputs, p):
         return None
 
 
-def _compute_histogram(inputs, p):
-    """Per-channel intensity histogram. Output is a HISTOGRAM payload."""
+# Color space + per-channel curve colours for the Histogram node (mirrors the
+# inspector pane's BGR/HSL toggle).
+_HIST_SPACES = [("BGR", "bgr"), ("HLS", "hls")]
+_HIST_CH_BGR = {"B": (255, 0, 0), "G": (0, 170, 0), "R": (0, 0, 255),
+                "H": (200, 80, 255), "L": (130, 130, 130), "S": (0, 200, 255),
+                "Gray": (40, 40, 40)}
+
+
+def _compute_histogram(inputs, p, in_space="bgr"):
+    """Per-channel histogram of the image in the chosen colour space (BGR or HLS),
+    optionally Gaussian-smoothed — the same controls as the inspector pane's
+    histogram. Output is a HISTOGRAM payload carrying the per-channel curves, their
+    names, the space, and per-channel bin counts (Hue is 0..179, so it gets 180
+    bins) — so the preview and any downstream consumer know the binning."""
     try:
         img = inputs[0]
-        if img.ndim == 2:
-            hists = [cv2.calcHist([img], [0], None, [256], [0, 256])]
+        sig = max(0.0, float(p.get("smoothing", 0.0)))
+        if img.ndim == 2 or (img.ndim == 3 and img.shape[2] == 1):
+            data, names, bins, space = _to_gray_u8(img), ["Gray"], [256], "gray"
+        elif p.get("color_space", "bgr") == "hls":
+            data = cv2.cvtColor(_as_bgr(img, in_space), cv2.COLOR_BGR2HLS)
+            names, bins, space = ["H", "L", "S"], [180, 256, 256], "hls"
         else:
-            hists = [cv2.calcHist([img], [c], None, [256], [0, 256])
-                     for c in range(img.shape[2])]
-        return {"hist": hists, "channels": len(hists)}
+            data, names, bins, space = _as_bgr(img, in_space), ["B", "G", "R"], [256, 256, 256], "bgr"
+        if data.dtype != np.uint8:
+            data = np.clip(data, 0, 255).astype(np.uint8)
+        hists = []
+        for c, nb in enumerate(bins):
+            hist = cv2.calcHist([data], [c], None, [nb], [0, nb]).flatten().astype(np.float32)
+            if sig > 0:
+                hist = cv2.GaussianBlur(hist.reshape(-1, 1), (0, 0), sig).flatten()
+            hists.append(hist)
+        return {"hist": hists, "channels": len(hists), "names": names,
+                "space": space, "bins": bins}
     except Exception as e:
         print(f"Error executing histogram: {e}")
         return None
 
 
 def _render_histogram(inputs, output, p):
-    """Inspector preview: draw the histogram curve(s)."""
+    """Preview: draw the (already computed and smoothed) per-channel curves, each
+    coloured by its channel and scaled to its own maximum."""
     if not isinstance(output, dict):
         return None
-    hists = output["hist"]
-    h, w = 220, 256
+    hists = output.get("hist", [])
+    names = output.get("names") or (["B", "G", "R"] if len(hists) == 3 else ["Gray"])
+    h, w = 240, 360
     canvas = np.full((h, w, 3), 255, np.uint8)
-    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)] if len(hists) == 3 else [(0, 0, 0)]
-    for hist, color in zip(hists, colors):
-        norm = cv2.normalize(hist, None, 0, h - 1, cv2.NORM_MINMAX).flatten()
-        for x in range(1, w):
-            cv2.line(canvas, (x - 1, h - 1 - int(norm[x - 1])),
-                     (x, h - 1 - int(norm[x])), color, 1)
+    for hist, name in zip(hists, names):
+        arr = np.asarray(hist, np.float32).flatten()
+        n = len(arr)
+        if n == 0:
+            continue
+        mx = float(arr.max()) or 1.0
+        color = _HIST_CH_BGR.get(name, (0, 0, 0))
+        prev = None
+        for b in range(n):
+            x = int(b / (n - 1) * (w - 1)) if n > 1 else 0
+            y = int((h - 1) - (arr[b] / mx) * (h - 5))
+            if prev is not None:
+                cv2.line(canvas, prev, (x, y), color, 1, cv2.LINE_AA)
+            prev = (x, y)
     return canvas
 
 
 def _summary_histogram(output, p):
     if not isinstance(output, dict):
         return {}
-    return {"channels": int(output.get("channels", 0))}
+    return {"channels": int(output.get("channels", 0)), "space": output.get("space", "")}
 
 
 # save_to_file is genuinely special: it has a side effect (writing a file),
@@ -2181,8 +2222,17 @@ OPS: list = [
     Operation(
         id="histogram", label="Histogram", category="Analysis",
         inputs=[Port("in", datatypes.IMAGE)],
-        outputs=[Port("out", datatypes.HISTOGRAM)], params=[],
-        compute=_compute_histogram, color=(0, 188, 212),
+        outputs=[Port("out", datatypes.HISTOGRAM)],
+        params=[
+            ParamSpec("color_space", "bgr", kind="enum", choices=_HIST_SPACES,
+                      label="Color space",
+                      help="Histogram the BGR channels or HLS (Hue / Lum / Sat). "
+                           "Ignored for a single-channel (gray) input."),
+            ParamSpec("smoothing", 0.0, kind="float", min=0.0, max=15.0, step=0.5,
+                      label="Smoothing",
+                      help="Gaussian smoothing of the histogram curve; 0 = off."),
+        ],
+        compute=_compute_histogram, color=(0, 188, 212), space_aware=True,
         in_label="Mat (any)", out_label="Histogram",
         render_preview=_render_histogram, summary=_summary_histogram, preview_is_chart=True,
     ),

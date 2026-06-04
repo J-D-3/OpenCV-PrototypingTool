@@ -676,7 +676,13 @@ def test_auto_cluster_small_feature():
     assert tp(hist, 1, False) == 2.0, "isolated small peak: prominence == its height"
     assert tp(hist, 4, False) == 10.0, "the tall peak rises the full way from the valley"
     assert tp(hist, 6, False) == 0.5, "the shoulder bump beside the tall peak has tiny prominence"
-    print("OK  auto_cluster: topographic prominence keeps small features, rejects shoulders")
+    # Flat-topped plateau is one peak (its left edge), with full prominence.
+    assert tp(np.array([0, 0, 5, 5, 5, 0, 0], np.float32), 2, False) == 5.0, "plateau keeps full prominence"
+    # A peak on a non-circular boundary (L/S channel, e.g. a black L=0 background)
+    # descends to the implicit 0 beyond the edge, so it keeps full prominence
+    # instead of being flattened to 0.
+    assert tp(np.array([10, 8, 2, 0], np.float32), 0, False) == 10.0, "boundary peak keeps full prominence"
+    print("OK  auto_cluster: topographic prominence keeps small features + boundaries, rejects shoulders")
 
 
 def test_auto_cluster_elbow():
