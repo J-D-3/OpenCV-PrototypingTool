@@ -184,6 +184,11 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-04** — **Parameter tooltips now explain each knob.** Every parameter
+  carries a one-line `ParamSpec.help` describing how it affects the result; the
+  control's tooltip shows the full name *and* that blurb (was name only). A
+  regression test (`test_param_help_present`) enforces that every shown parameter
+  documents its effect. Suites: 33 smoke + 37 engine.
 - **2026-06-04** — **Clustering preview polish + Auto Cluster saturation control.**
   The diagnostic preview now renders at 1024px (crisp, scaled from the design grid)
   with a shorter proportional palette captioned "palette after clustering". Auto

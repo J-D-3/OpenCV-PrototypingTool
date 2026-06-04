@@ -232,6 +232,12 @@ def check_parameter_panel(app) -> None:
     app.processEvents()
     assert w.param_panel.has_controls(), "threshold should expose auto-built controls"
 
+    # The control's tooltip shows the full name AND a 'how it affects the result'
+    # blurb (ParamSpec.help), not just the name.
+    tip = w.param_panel._rows["threshold_value"].toolTip()
+    assert "Threshold Value" in tip and "\n" in tip and "pass" in tip.lower(), \
+        f"param tooltip should carry name + help, got {tip!r}"
+
     # Log-scaled int sliders (Filter Contours area params): build an isolated
     # panel so stale deleteLater widgets don't pollute the child lookup.
     from ui.parameters import ParameterPanel

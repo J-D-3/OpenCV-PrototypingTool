@@ -100,6 +100,14 @@ class ParameterPanel(QtWidgets.QWidget):
     def _title(spec) -> str:
         return spec.label or spec.name.replace("_", " ").title()
 
+    @classmethod
+    def _tooltip(cls, spec) -> str:
+        """Tooltip text: the full parameter name, plus a short note on how it
+        affects the result (``ParamSpec.help``) when one is defined."""
+        title = cls._title(spec)
+        hint = getattr(spec, "help", "") or ""
+        return f"{title}\n{hint}" if hint else title
+
     def _row(self, spec=None, add_label=True):
         """Add a horizontal row (label on the left) and return its layout so the
         caller can append the control inline. When ``spec`` is given the row's
@@ -112,10 +120,13 @@ class ParameterPanel(QtWidgets.QWidget):
         self._layout.addWidget(w)
         if spec is not None:
             self._rows[spec.name] = w
+            # Tooltip on the row container; Qt forwards a child's empty tooltip up
+            # to the parent, so hovering any control in the row shows name + help.
+            w.setToolTip(self._tooltip(spec))
             if add_label:
                 lbl = QtWidgets.QLabel(self._title(spec))
                 lbl.setFixedWidth(self.LABEL_W)
-                lbl.setToolTip(self._title(spec))   # full text if the column clips it
+                lbl.setToolTip(self._tooltip(spec))   # name (+ help) if the column clips it
                 h.addWidget(lbl)
         return h
 

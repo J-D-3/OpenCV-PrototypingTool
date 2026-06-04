@@ -854,6 +854,15 @@ def test_cycle_prevention():
     print("OK  cycle detection prevents back-edges")
 
 
+def test_param_help_present():
+    # Every parameter the panel shows must carry a `help` blurb (how it affects the
+    # result) so its tooltip explains it — not just repeats the name.
+    missing = [f"{op.id}.{p.name}" for op in REGISTRY.values() for p in op.params
+               if getattr(p, "show", True) and not (getattr(p, "help", "") or "").strip()]
+    assert not missing, f"visible params without a help blurb: {missing}"
+    print(f"OK  every visible parameter documents its effect ({sum(1 for op in REGISTRY.values() for p in op.params if getattr(p, 'show', True))} params)")
+
+
 def main():
     test_linear_chain_and_caching()
     test_dirty_propagation()
@@ -891,7 +900,8 @@ def main():
     test_comp_timing_and_traversal()
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
-    print("\nENGINE OK: 36 backend tests passed")
+    test_param_help_present()
+    print("\nENGINE OK: 37 backend tests passed")
 
 
 if __name__ == "__main__":
