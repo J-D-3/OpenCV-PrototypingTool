@@ -557,8 +557,24 @@ def _compute_mean_shift(inputs, p):
         return None
 
 
-_PREVIEW_W = 320
+# The diagnostic bands were authored against a 320px-wide design; _S scales every
+# length, font, and stroke up to the real preview width so the image is drawn at
+# full resolution (crisp when the inspector zooms in) rather than upscaled.
+_PREVIEW_W = 1024
+_S = _PREVIEW_W / 320.0
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+
+def _fs(base):
+    return base * _S                          # font scale at the current width
+
+
+def _tk(base=1):
+    return max(1, int(round(base * _S)))      # stroke thickness
+
+
+def _px(base):
+    return int(round(base * _S))              # a length in pixels
 
 
 def _center_bgr(c):
@@ -568,24 +584,31 @@ def _center_bgr(c):
 
 def _titled(band, title):
     """Prepend a small dark caption strip to a plotted band."""
-    strip = np.full((15, band.shape[1], 3), 45, np.uint8)
-    cv2.putText(strip, title, (4, 11), _FONT, 0.36, (210, 210, 210), 1, cv2.LINE_AA)
+    h = _px(16)
+    strip = np.full((h, band.shape[1], 3), 45, np.uint8)
+    cv2.putText(strip, title, (_px(4), int(h * 0.72)), _FONT, _fs(0.36),
+                (210, 210, 210), _tk(1), cv2.LINE_AA)
     return np.vstack([strip, band])
 
 
-def _simple_swatch(centers, width=_PREVIEW_W, height=60):
+def _simple_swatch(centers, width=_PREVIEW_W, height=None):
     """Fallback preview (no diagnostics available): equal-width color cells."""
     k = len(centers)
     if k == 0:
         return None
+    height = height or _px(60)
     band = np.zeros((height, width, 3), np.uint8)
     for i, c in enumerate(centers):
         band[:, i * width // k:(i + 1) * width // k] = _center_bgr(c)
     return band
 
 
-def _band_palette(centers, counts, width=_PREVIEW_W, height=48):
-    """Proportional palette: each cluster's width ∝ its pixel population, % labelled."""
+def _band_palette(centers, counts, width=_PREVIEW_W):
+    """Proportional palette: each cluster's width ∝ its pixel population, % labelled.
+    Kept short — about twice the label height — since it only shows the colors."""
+    fs = _fs(0.34)
+    (_, gh), _ = cv2.getTextSize("100%", _FONT, fs, _tk(1))
+    height = gh * 2 + _px(4)
     band = np.full((height, width, 3), 30, np.uint8)
     total = int(counts.sum()) or 1
     x = 0
@@ -595,17 +618,18 @@ def _band_palette(centers, counts, width=_PREVIEW_W, height=48):
             continue
         color = _center_bgr(c)
         band[:, x:x + w] = color
-        if w >= 26:
+        if w >= _px(26):
             tcol = (0, 0, 0) if sum(color) > 384 else (235, 235, 235)
-            cv2.putText(band, f"{100 * counts[i] / total:.0f}%", (x + 3, height - 7),
-                        _FONT, 0.34, tcol, 1, cv2.LINE_AA)
+            cv2.putText(band, f"{100 * counts[i] / total:.0f}%",
+                        (x + _px(3), (height + gh) // 2), _FONT, fs, tcol, _tk(1), cv2.LINE_AA)
         x += w
     return band
 
 
-def _band_scatter(diag, centers, width=_PREVIEW_W, height=150):
+def _band_scatter(diag, centers, width=_PREVIEW_W, height=None):
     """Feature-space scatter: subsampled pixels in the 2 most-spread feature
     channels, colored by cluster, with each cluster center ringed."""
+    height = height or _px(150)
     band = np.full((height, width, 3), 30, np.uint8)
     pts = diag.get("scatter")
     if pts is None or len(pts) == 0:
@@ -613,25 +637,29 @@ def _band_scatter(diag, centers, width=_PREVIEW_W, height=150):
     labs = diag["scatter_labels"]
     mn = pts.min(axis=0)
     rng = np.where((pts.max(axis=0) - mn) == 0, 1.0, pts.max(axis=0) - mn)
-    m = 12
+    m = _px(12)
     def project(p):
         nx = (p[0] - mn[0]) / rng[0]
         ny = (p[1] - mn[1]) / rng[1]
         return int(m + nx * (width - 2 * m)), int((height - m) - ny * (height - 2 * m))
+    r = _tk(1)
     for p, l in zip(pts, labs):
-        cv2.circle(band, project(p), 1, _center_bgr(centers[l]), -1, cv2.LINE_AA)
+        cv2.circle(band, project(p), r, _center_bgr(centers[l]), -1, cv2.LINE_AA)
     for c2, c in zip(diag.get("centers2d", []), centers):
         px, py = project(c2)
-        cv2.circle(band, (px, py), 5, (255, 255, 255), 1, cv2.LINE_AA)
-        cv2.circle(band, (px, py), 4, _center_bgr(c), -1, cv2.LINE_AA)
+        cv2.circle(band, (px, py), _px(6), (255, 255, 255), _tk(1), cv2.LINE_AA)
+        cv2.circle(band, (px, py), _px(5), _center_bgr(c), -1, cv2.LINE_AA)
     ax = diag.get("axnames", ("", ""))
-    cv2.putText(band, ax[0], (width - 16, height - 4), _FONT, 0.34, (170, 170, 170), 1, cv2.LINE_AA)
-    cv2.putText(band, ax[1], (4, 12), _FONT, 0.34, (170, 170, 170), 1, cv2.LINE_AA)
+    cv2.putText(band, ax[0], (width - _px(16), height - _px(4)), _FONT, _fs(0.34),
+                (170, 170, 170), _tk(1), cv2.LINE_AA)
+    cv2.putText(band, ax[1], (_px(4), _px(12)), _FONT, _fs(0.34),
+                (170, 170, 170), _tk(1), cv2.LINE_AA)
     return band
 
 
-def _band_spread(centers, spread, width=_PREVIEW_W, height=70):
+def _band_spread(centers, spread, width=_PREVIEW_W, height=None):
     """A bar per cluster = intra-cluster RMS spread (taller = looser / more mixed)."""
+    height = height or _px(70)
     band = np.full((height, width, 3), 30, np.uint8)
     k = len(spread)
     if k == 0:
@@ -639,8 +667,8 @@ def _band_spread(centers, spread, width=_PREVIEW_W, height=70):
     mx = float(spread.max()) or 1.0
     bw = width / k
     for i in range(k):
-        x0, x1 = int(i * bw) + 1, int((i + 1) * bw) - 1
-        bh = int((spread[i] / mx) * (height - 14))
+        x0, x1 = int(i * bw) + _px(1), int((i + 1) * bw) - _px(1)
+        bh = int((spread[i] / mx) * (height - _px(14)))
         cv2.rectangle(band, (x0, height - 1), (x1, height - 1 - bh),
                       _center_bgr(centers[i]), -1)
     return band
@@ -658,16 +686,17 @@ def _peak_color(v, ch):
     return tuple(int(x) for x in cv2.cvtColor(hls, cv2.COLOR_HLS2BGR)[0, 0])
 
 
-def _band_hist(kdiag, width=_PREVIEW_W, height=150):
+def _band_hist(kdiag, width=_PREVIEW_W, height=None):
     """The k-detection histogram: original curve (gray) vs the smoothed,
     saturation-damped curve peaks were detected on (amber), with each detected
     peak marked by a vertical line in the color that peak represents."""
+    height = height or _px(150)
     band = np.full((height, width, 3), 30, np.uint8)
     raw, sm = kdiag["raw"], kdiag["smooth"]
     n = len(sm)
     if n < 2:
         return band
-    pad = 12
+    pad = _px(14)
     def plot(arr, color):
         mx = float(arr.max()) or 1.0
         prev = None
@@ -675,7 +704,7 @@ def _band_hist(kdiag, width=_PREVIEW_W, height=150):
             x = int(b / (n - 1) * (width - 1))
             y = int((height - pad) - (arr[b] / mx) * (height - 2 * pad))
             if prev is not None:
-                cv2.line(band, prev, (x, y), color, 1, cv2.LINE_AA)
+                cv2.line(band, prev, (x, y), color, _tk(1), cv2.LINE_AA)
             prev = (x, y)
     plot(raw, (120, 120, 120))                 # original histogram
     plot(sm, (0, 200, 255))                     # smoothed / saturation-damped
@@ -684,40 +713,42 @@ def _band_hist(kdiag, width=_PREVIEW_W, height=150):
         x = int(pk / (n - 1) * (width - 1))
         col = _peak_color(pk, kdiag["channel"])
         y = int((height - pad) - (sm[pk] / smx) * (height - 2 * pad))
-        cv2.line(band, (x, pad), (x, height - pad), col, 1, cv2.LINE_AA)
-        cv2.circle(band, (x, y), 3, col, -1, cv2.LINE_AA)
+        cv2.line(band, (x, pad), (x, height - pad), col, _tk(1), cv2.LINE_AA)
+        cv2.circle(band, (x, y), _tk(3), col, -1, cv2.LINE_AA)
     cv2.putText(band, f"{kdiag.get('chname', '')}  |  original",
-                (4, 11), _FONT, 0.34, (150, 150, 150), 1, cv2.LINE_AA)
-    cv2.putText(band, "damped+smoothed", (width - 118, 11), _FONT, 0.34,
-                (0, 200, 255), 1, cv2.LINE_AA)
+                (_px(4), _px(12)), _FONT, _fs(0.34), (150, 150, 150), _tk(1), cv2.LINE_AA)
+    cv2.putText(band, "damped+smoothed", (width - _px(118), _px(12)), _FONT, _fs(0.34),
+                (0, 200, 255), _tk(1), cv2.LINE_AA)
     return band
 
 
-def _band_elbow(kdiag, width=_PREVIEW_W, height=150):
+def _band_elbow(kdiag, width=_PREVIEW_W, height=None):
     """The inertia-vs-k curve the elbow method chose from; chosen k marked green."""
+    height = height or _px(150)
     band = np.full((height, width, 3), 30, np.uint8)
     ks, ys = kdiag["ks"], np.array(kdiag["inertias"], np.float64)
     if len(ks) < 1 or len(ys) != len(ks):
         return band
     mn, mx = float(ys.min()), float(ys.max())
     rng = (mx - mn) or 1.0
-    m = 16
+    m = _px(16)
     def xof(i):
         return int(m + (i / max(1, len(ks) - 1)) * (width - 2 * m))
     def yof(v):
         return int((height - m) - ((v - mn) / rng) * (height - 2 * m))
     for i in range(len(ks) - 1):
         cv2.line(band, (xof(i), yof(ys[i])), (xof(i + 1), yof(ys[i + 1])),
-                 (0, 200, 255), 1, cv2.LINE_AA)
+                 (0, 200, 255), _tk(1), cv2.LINE_AA)
     for i in range(len(ks)):
-        cv2.circle(band, (xof(i), yof(ys[i])), 2, (200, 200, 200), -1, cv2.LINE_AA)
+        cv2.circle(band, (xof(i), yof(ys[i])), _tk(2), (200, 200, 200), -1, cv2.LINE_AA)
     if kdiag.get("chosen") in ks:
         ci = ks.index(kdiag["chosen"])
-        cv2.line(band, (xof(ci), m), (xof(ci), height - m), (0, 230, 0), 1, cv2.LINE_AA)
-        cv2.circle(band, (xof(ci), yof(ys[ci])), 5, (0, 230, 0), 1, cv2.LINE_AA)
-        cv2.putText(band, f"k={kdiag['chosen']}", (xof(ci) + 4, m + 12),
-                    _FONT, 0.36, (0, 230, 0), 1, cv2.LINE_AA)
-    cv2.putText(band, "inertia vs k", (4, 11), _FONT, 0.34, (150, 150, 150), 1, cv2.LINE_AA)
+        cv2.line(band, (xof(ci), m), (xof(ci), height - m), (0, 230, 0), _tk(1), cv2.LINE_AA)
+        cv2.circle(band, (xof(ci), yof(ys[ci])), _px(5), (0, 230, 0), _tk(1), cv2.LINE_AA)
+        cv2.putText(band, f"k={kdiag['chosen']}", (xof(ci) + _px(4), m + _px(12)),
+                    _FONT, _fs(0.36), (0, 230, 0), _tk(1), cv2.LINE_AA)
+    cv2.putText(band, "inertia vs k", (_px(4), _px(12)), _FONT, _fs(0.34),
+                (150, 150, 150), _tk(1), cv2.LINE_AA)
     return band
 
 
@@ -733,7 +764,7 @@ def _render_kmeans(inputs, output, p):
     if diag is None:
         return _simple_swatch(centers)
     return np.vstack([
-        _titled(_band_palette(centers, diag["counts"]), "palette (width = % of pixels)"),
+        _titled(_band_palette(centers, diag["counts"]), "palette after clustering"),
         _titled(_band_scatter(diag, centers), "feature space (clusters)"),
         _titled(_band_spread(centers, diag["spread"]), "cluster spread (tightness)"),
     ])
@@ -758,7 +789,7 @@ def _render_auto_cluster(inputs, output, p):
                       f"k from {kdiag.get('chname', '')} peaks  (k={output.get('k', '?')})")
     else:
         top = None
-    palette = _titled(_band_palette(centers, diag["counts"]), "palette (width = % of pixels)")
+    palette = _titled(_band_palette(centers, diag["counts"]), "palette after clustering")
     return np.vstack([b for b in (top, palette) if b is not None])
 
 
