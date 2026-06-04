@@ -184,6 +184,17 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-04** — **Clustering preview polish + Auto Cluster saturation control.**
+  The diagnostic preview now renders at 1024px (crisp, scaled from the design grid)
+  with a shorter proportional palette captioned "palette after clustering". Auto
+  Cluster's hue **peak markers are now colored by the real saturation-weighted mean
+  BGR** of the pixels at that hue (with a visibility ring), instead of an idealized
+  pure hue — so they track the actual image content. Exposed the peak-detection
+  **saturation weighting as a parameter** (`sat_weight`, an exponent on `(S/255)`;
+  1.0 = the former hardcoded linear weighting, 0 = ignore saturation, >1 = favour
+  vivid pixels harder) — gated to peaks mode + the Hue channel via a two-condition
+  `enabled_if` (the gray-out mechanism now supports AND-lists). Suites: 33 smoke + 36
+  engine.
 - **2026-06-03** — **Clustering diagnostics in the inspector preview.** The
   clustering nodes no longer show just a flat color swatch. **Auto Cluster** now
   draws *how k was chosen*: in peak mode, the original vs the smoothed /

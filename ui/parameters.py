@@ -79,10 +79,17 @@ class ParameterPanel(QtWidgets.QWidget):
             if row is not None:
                 row.setEnabled(self._cond_met(getattr(spec, "enabled_if", None), values))
 
-    @staticmethod
-    def _cond_met(cond, values) -> bool:
+    @classmethod
+    def _cond_met(cls, cond, values) -> bool:
         if not cond:
             return True
+        # A list of conditions (first element is itself a tuple) -> all must hold.
+        if isinstance(cond[0], (tuple, list)):
+            return all(cls._one_cond_met(c, values) for c in cond)
+        return cls._one_cond_met(cond, values)
+
+    @staticmethod
+    def _one_cond_met(cond, values) -> bool:
         name, accepted = cond[0], cond[1]
         current = values.get(name)
         if isinstance(accepted, (tuple, list, set)):

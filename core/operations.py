@@ -66,9 +66,11 @@ class ParamSpec:
     enabled_if: Optional[tuple] = None
     # Gray this control out unless another param has a given value. Form:
     # ``("other_param", value)`` (equality) or ``("other_param", (v1, v2, ...))``
-    # (membership). The control still exists and persists; it's only disabled in
-    # the panel when the condition is unmet — so mode-specific params (e.g. Auto
-    # Cluster's peak-detection knobs in 'elbow' mode) read as inactive.
+    # (membership); or a **list** of such tuples, all of which must hold (AND) —
+    # e.g. ``[("k_method", "peaks"), ("channel", 0)]``. The control still exists
+    # and persists; it's only disabled in the panel when the condition is unmet —
+    # so mode-specific params (e.g. Auto Cluster's peak-detection knobs in 'elbow'
+    # mode) read as inactive.
 
 
 @dataclass
@@ -425,7 +427,7 @@ def _compute_kmeans(inputs, p, in_space="bgr"):
 
 
 def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
-                          in_space="bgr", return_diag=False):
+                          in_space="bgr", return_diag=False, sat_weight=1.0):
     """Pick k by smoothing one channel's histogram (Gaussian) and counting local
     maxima above a prominence threshold — the histogram mode-seeking idea. The
     channel is an HLS index (1=Luminance/L, 0=Hue, 2=Saturation); the input is
@@ -434,23 +436,30 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
     Hue (channel 0) gets two extra treatments because raw hue is unreliable: the
     histogram is **weighted by saturation** (so washed-out / gray pixels — whose
     hue is essentially noise — don't create phantom peaks), and smoothing + peak
-    detection are **circular** (hue 0 and 179 are adjacent).
+    detection are **circular** (hue 0 and 179 are adjacent). ``sat_weight`` is the
+    exponent on that saturation weight: each hue-bin pixel contributes
+    ``(S/255) ** sat_weight``. 1.0 (default) = the original linear weighting; 0 =
+    ignore saturation entirely (every hue counts equally, so grays can form
+    phantom peaks); > 1 = favour vivid pixels more aggressively. It only applies
+    to the Hue channel.
 
     With ``return_diag`` the function also returns a dict describing the curves
     and peaks it found, so the preview can draw exactly what k-detection saw: the
     original (undamped) histogram, the smoothed/saturation-damped curve the peaks
     were detected on, and the peak bin positions."""
-    hls = cv2.cvtColor(_as_bgr(img, in_space), cv2.COLOR_BGR2HLS)   # H, L, S
+    bgr = _as_bgr(img, in_space)
+    hls = cv2.cvtColor(bgr, cv2.COLOR_BGR2HLS)   # H, L, S
     ch = int(channel)
     sig = max(0.5, float(sigma))
     if ch == 0:                                   # Hue: saturation-weighted + circular
         h = hls[:, :, 0].reshape(-1).astype(np.int64)        # 0..179
         s = hls[:, :, 2].reshape(-1).astype(np.float32)      # weight by saturation
+        sw = np.power(s / 255.0, max(0.0, float(sat_weight)))  # exponent (1.0 = linear)
         # "original" = plain hue count; the damped curve weights each pixel by its
         # saturation so washed-out pixels barely contribute — showing both makes
         # the saturation damping visible in the preview.
         raw = np.bincount(h, minlength=180).astype(np.float32)
-        base = np.bincount(h, weights=s, minlength=180).astype(np.float32)
+        base = np.bincount(h, weights=sw, minlength=180).astype(np.float32)
         nbins, circular = 180, True
     else:
         chan = hls[:, :, ch].astype(np.uint8)
@@ -481,8 +490,38 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
         return k
     diag = {"mode": "peaks", "raw": raw, "smooth": hist, "peaks": peak_idx,
             "channel": ch, "nbins": nbins, "circular": circular,
-            "chname": _CLUSTER_CHANNEL_NAMES.get(ch, "channel")}
+            "chname": _CLUSTER_CHANNEL_NAMES.get(ch, "channel"),
+            "peak_colors": _peak_mean_colors(bgr, hls, ch, nbins, circular,
+                                             peak_idx, sig, sat_weight)}
     return k, diag
+
+
+def _peak_mean_colors(bgr, hls, ch, nbins, circular, peak_idx, sig, sat_weight=1.0):
+    """The real color each detected peak stands for: the **saturation-weighted
+    mean BGR** of the pixels that fall in (a small ±window around) the peak's bin
+    of the detection channel — same weighting the peak detection uses, so vivid
+    pixels dominate the colour. Falls back to a synthetic swatch where there's no
+    saturated support (e.g. an all-gray bin)."""
+    vals = hls[:, :, ch].reshape(-1).astype(np.int64)        # bin per pixel
+    sat = hls[:, :, 2].reshape(-1).astype(np.float32) / 255.0
+    w = np.maximum(np.power(sat, max(0.0, float(sat_weight))), 1e-3)  # saturation weight
+    flat = bgr.reshape(-1, 3).astype(np.float32)
+    wsum = np.bincount(vals, weights=w, minlength=nbins)
+    chan_sum = [np.bincount(vals, weights=w * flat[:, c], minlength=nbins) for c in range(3)]
+    win = max(1, int(round(sig)))
+    colors = []
+    for pk in peak_idx:
+        if circular:
+            idx = [(pk + d) % nbins for d in range(-win, win + 1)]
+        else:
+            idx = list(range(max(0, pk - win), min(nbins, pk + win + 1)))
+        wtot = float(wsum[idx].sum())
+        if wtot > 1e-6:
+            col = tuple(int(np.clip(chan_sum[c][idx].sum() / wtot, 0, 255)) for c in range(3))
+        else:
+            col = _peak_color(pk, ch)
+        colors.append(col)
+    return colors
 
 
 def _detect_k_elbow(feat, max_k, attempts=3, return_diag=False):
@@ -533,7 +572,8 @@ def _compute_auto_cluster(inputs, p, in_space="bgr"):
         else:
             k, kdiag = _detect_cluster_count(img, p["smoothing"], p["min_prominence"],
                                              p["max_k"], p.get("channel", 1), in_space,
-                                             return_diag=True)
+                                             return_diag=True,
+                                             sat_weight=p.get("sat_weight", 1.0))
         out = _kmeans_clusters(img, k, 5, space, lw, in_space)
         if isinstance(out, dict):
             out["kdiag"] = kdiag       # how k was chosen (peaks histogram / elbow curve)
@@ -709,12 +749,16 @@ def _band_hist(kdiag, width=_PREVIEW_W, height=None):
     plot(raw, (120, 120, 120))                 # original histogram
     plot(sm, (0, 200, 255))                     # smoothed / saturation-damped
     smx = float(sm.max()) or 1.0
-    for pk in kdiag["peaks"]:
+    peak_colors = kdiag.get("peak_colors")      # real saturation-weighted mean colors
+    for i, pk in enumerate(kdiag["peaks"]):
         x = int(pk / (n - 1) * (width - 1))
-        col = _peak_color(pk, kdiag["channel"])
+        col = peak_colors[i] if peak_colors and i < len(peak_colors) \
+            else _peak_color(pk, kdiag["channel"])
         y = int((height - pad) - (sm[pk] / smx) * (height - 2 * pad))
         cv2.line(band, (x, pad), (x, height - pad), col, _tk(1), cv2.LINE_AA)
         cv2.circle(band, (x, y), _tk(3), col, -1, cv2.LINE_AA)
+        # light ring so a near-black real colour is still locatable on the dark band
+        cv2.circle(band, (x, y), _tk(3), (210, 210, 210), _tk(1), cv2.LINE_AA)
     cv2.putText(band, f"{kdiag.get('chname', '')}  |  original",
                 (_px(4), _px(12)), _FONT, _fs(0.34), (150, 150, 150), _tk(1), cv2.LINE_AA)
     cv2.putText(band, "damped+smoothed", (width - _px(118), _px(12)), _FONT, _fs(0.34),
@@ -1864,6 +1908,9 @@ OPS: list = [
                       label="Histogram smoothing", enabled_if=("k_method", "peaks")),
             ParamSpec("min_prominence", 0.05, kind="float", min=0.0, max=0.5, step=0.01,
                       label="Min peak prominence", enabled_if=("k_method", "peaks")),
+            ParamSpec("sat_weight", 1.0, kind="float", min=0.0, max=4.0, step=0.1,
+                      label="Saturation weight",
+                      enabled_if=[("k_method", "peaks"), ("channel", 0)]),
             ParamSpec("cluster_space", "bgr", kind="enum", choices=_CLUSTER_SPACES,
                       label="Cluster space"),
             ParamSpec("lum_weight", 1.0, kind="float", min=0.0, max=2.0, step=0.1,

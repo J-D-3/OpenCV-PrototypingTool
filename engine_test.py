@@ -639,7 +639,15 @@ def test_auto_cluster_hue_robust():
     # but two genuinely different hues stay two peaks
     hls[:, :50, 0] = 20; hls[:, 50:, 0] = 120
     assert dc(cv2.cvtColor(hls, cv2.COLOR_HLS2BGR), 2.0, 0.1, 8, channel=0) == 2
-    print("OK  auto_cluster hue: saturation-weighted + circular peak detection")
+
+    # sat_weight is an exponent on the saturation weight. Default (1.0) reproduces
+    # the original linear weighting exactly; turning it off (0.0) makes the
+    # desaturated noise count again, so the phantom-peak robustness disappears.
+    assert dc(noisy, 3.0, 0.15, 8, channel=0) == \
+        dc(noisy, 3.0, 0.15, 8, channel=0, sat_weight=1.0), "default must equal sat_weight=1.0"
+    assert dc(noisy, 3.0, 0.15, 8, channel=0, sat_weight=0.0) >= \
+        dc(noisy, 3.0, 0.15, 8, channel=0), "unweighted (0.0) must not suppress the noise peaks"
+    print("OK  auto_cluster hue: saturation-weighted (sat_weight exponent) + circular")
 
 
 def test_auto_cluster_elbow():

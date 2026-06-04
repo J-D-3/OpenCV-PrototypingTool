@@ -257,8 +257,9 @@ def check_parameter_panel(app) -> None:
 
 def check_param_enable_conditions(app) -> None:
     # Auto Cluster's peak-detection params (channel/smoothing/min_prominence) carry
-    # enabled_if=("k_method","peaks"); they must gray out in 'elbow' mode and the
-    # shared params stay active — switching the mode combo flips it reactively.
+    # enabled_if=("k_method","peaks"); they gray out in 'elbow' mode. sat_weight
+    # carries a two-condition AND (peaks mode AND Hue channel). Switching either
+    # controlling combo flips the enabled state reactively.
     from ui.parameters import ParameterPanel
     w = make_window(app)
     src = add_image(w, gradient_bgr())
@@ -271,6 +272,13 @@ def check_param_enable_conditions(app) -> None:
     peak_only = ("channel", "smoothing", "min_prominence")
     shared = ("max_k", "cluster_space", "lum_weight")
     assert all(panel._rows[p].isEnabled() for p in peak_only), "peaks mode: peak params active"
+    # sat_weight needs peaks AND Hue; the default channel is Luminance, so it's off
+    assert not panel._rows["sat_weight"].isEnabled(), "sat_weight off unless channel is Hue"
+    ch_combo = panel._rows["channel"].findChild(QtWidgets.QComboBox)
+    hue_i = next(i for i in range(ch_combo.count()) if ch_combo.itemData(i) == 0)
+    ch_combo.setCurrentIndex(hue_i)
+    ac.controller.wait_idle(); app.processEvents()
+    assert panel._rows["sat_weight"].isEnabled(), "sat_weight on in peaks mode + Hue channel"
 
     combo = panel._rows["k_method"].findChild(QtWidgets.QComboBox)
     elbow_i = next(i for i in range(combo.count()) if combo.itemData(i) == "elbow")
@@ -278,11 +286,12 @@ def check_param_enable_conditions(app) -> None:
     ac.controller.wait_idle()
     app.processEvents()
     assert not any(panel._rows[p].isEnabled() for p in peak_only), "elbow mode: peak params gray out"
+    assert not panel._rows["sat_weight"].isEnabled(), "elbow mode: sat_weight off (AND condition)"
     assert all(panel._rows[s].isEnabled() for s in shared), "shared params stay active in elbow mode"
 
     panel.deleteLater()
     w.close()
-    print("OK  param panel: mode-specific params gray out (Auto Cluster: elbow vs peaks)")
+    print("OK  param panel: mode-specific params gray out (single + AND conditions)")
 
 
 def check_display_conversion(app) -> None:
