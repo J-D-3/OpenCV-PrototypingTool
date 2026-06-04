@@ -302,6 +302,27 @@ def _emit_color_mask(o, i, p):
     ]
 
 
+def _emit_auto_threshold(o, i, p):
+    m = p.get("method", "otsu")
+    inv = "_INV" if p.get("invert") else ""
+    out = [f"gray = cv::cvtColor({i[0]}, COLOR_BGR2GRAY)"]
+    if m == "valley":
+        out += [f"hist = cv::calcHist(gray); hist = cv::GaussianBlur(hist, sigma=2)",
+                f"t = deepest valley between the two largest modes",
+                f"{o} = cv::threshold(gray, t, 255, BINARY{inv})"]
+    else:
+        flag = "OTSU" if m == "otsu" else "TRIANGLE"
+        out += [f"# Valley method would cv::calcHist + cv::GaussianBlur to find the dip",
+                f"{o} = cv::threshold(gray, 0, 255, BINARY{inv} | {flag})"]
+    return out
+
+
+def _emit_backproject(o, i, p):
+    return [f"# backproject a histogram model ({i[1]}) onto the target {i[0]}",
+            f"px = cv::cvtColor({i[0]}, into the model's colour space)",
+            f"{o} = product over channels of model_hist[px], rescaled 0..255   # likelihood map"]
+
+
 def _emit_largest_contour(o, i, p):
     return [f"{o} = top {p.get('count')} of {i[0]} by cv::contourArea (descending)"]
 
@@ -326,6 +347,8 @@ _CODE.update({
     "normalize": _emit_normalize,
     "local_hdr": _emit_local_hdr,
     "histogram": _emit_histogram,
+    "auto_threshold": _emit_auto_threshold,
+    "backproject": _emit_backproject,
     "create_batch": _emit_create_batch,
     "save_to_file": _emit_save_to_file,
     "color_mask": _emit_color_mask,

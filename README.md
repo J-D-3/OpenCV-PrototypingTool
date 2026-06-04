@@ -184,6 +184,15 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-04** — **Two histogram-driven ops: Auto Threshold + Backproject.**
+  **Auto Threshold** (Thresholding) picks the cut level automatically — Otsu,
+  Triangle, or Valley (deepest dip between the two largest histogram modes) — and
+  outputs a binary mask (with optional invert). **Backproject** (Analysis) is a
+  two-input op (target image + a Histogram-node model) that projects the model's
+  distribution onto the target to produce a likelihood map (bright where the image
+  matches the modelled colour); `chroma_only` matches on Hue+Saturation for
+  lighting robustness. The Histogram node's Hue smoothing is now circular (0/179
+  join), so reds smooth correctly. Suites: 34 smoke + 40 engine.
 - **2026-06-04** — **Fullscreen start, sticky inspector histogram, Histogram-node
   parity.** The app now starts maximized. The inspector histogram **keeps its
   settings across node switches** — colour-space view, log, smoothing, *and* the

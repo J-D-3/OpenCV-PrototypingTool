@@ -167,6 +167,78 @@ def _compute_adaptive_threshold(inputs, p):
         return None
 
 
+_AUTO_THRESH_METHODS = [("Otsu", "otsu"), ("Triangle", "triangle"), ("Valley", "valley")]
+
+
+def _valley_threshold(gray):
+    """Threshold at the deepest histogram valley between the two largest modes;
+    falls back to Otsu when fewer than two modes are found."""
+    hist = cv2.calcHist([gray], [0], None, [256], [0, 256]).flatten().astype(np.float32)
+    hist = cv2.GaussianBlur(hist.reshape(-1, 1), (0, 0), 2.0).flatten()
+    peaks = [i for i in range(1, 255) if hist[i] > hist[i - 1] and hist[i] >= hist[i + 1]]
+    if len(peaks) < 2:
+        t, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        return int(t)
+    a, b = sorted(sorted(peaks, key=lambda i: float(hist[i]), reverse=True)[:2])
+    return a + int(np.argmin(hist[a:b + 1]))
+
+
+def _compute_auto_threshold(inputs, p):
+    """Binary-threshold a grayscale image at an automatically chosen level
+    (Otsu / Triangle / Valley) — no manual threshold value needed."""
+    try:
+        gray = _to_gray_u8(inputs[0])
+        ttype = cv2.THRESH_BINARY_INV if p.get("invert", False) else cv2.THRESH_BINARY
+        method = p.get("method", "otsu")
+        if method == "triangle":
+            _, out = cv2.threshold(gray, 0, 255, ttype | cv2.THRESH_TRIANGLE)
+        elif method == "valley":
+            _, out = cv2.threshold(gray, _valley_threshold(gray), 255, ttype)
+        else:
+            _, out = cv2.threshold(gray, 0, 255, ttype | cv2.THRESH_OTSU)
+        return out
+    except Exception as e:
+        print(f"Error executing auto_threshold: {e}")
+        return None
+
+
+def _compute_backproject(inputs, p, in_space="bgr"):
+    """Histogram backprojection: turn a histogram 'model' (a Histogram node) into a
+    likelihood map on a target image. The target (input 0) is converted into the
+    model's colour space, then each model-channel histogram is looked up per pixel
+    and the per-channel likelihoods are multiplied — bright where the target
+    matches the modelled distribution. For an HLS model, ``chroma_only`` ignores
+    luminance (uses H + S) for lighting-robust colour matching."""
+    try:
+        image, model = inputs[0], inputs[1]
+        if not isinstance(model, dict) or "hist" not in model:
+            return None
+        hists, names = model["hist"], model.get("names", [])
+        space = model.get("space", "bgr")
+        bgr = _as_bgr(image, in_space)
+        if space == "hls":
+            conv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HLS)
+        elif space == "gray":
+            conv = _to_gray_u8(bgr)[:, :, None]
+        else:
+            conv = bgr
+        chans = conv.shape[2] if conv.ndim == 3 else 1
+        use = list(range(min(chans, len(hists))))
+        if space == "hls" and p.get("chroma_only", True):   # drop luminance for robustness
+            use = [c for c in use if c < len(names) and names[c] in ("H", "S")] or use
+        like = np.ones(conv.shape[:2], np.float32)
+        for c in use:
+            h = np.asarray(hists[c], np.float32)
+            h = h / (float(h.max()) or 1.0)
+            chan = conv[:, :, c] if conv.ndim == 3 else conv
+            like *= h[np.clip(chan.astype(np.int64), 0, len(h) - 1)]
+        mx = float(like.max()) or 1.0
+        return np.clip(like / mx * 255.0, 0, 255).astype(np.uint8)
+    except Exception as e:
+        print(f"Error executing backproject: {e}")
+        return None
+
+
 # --- color-space conversions (space-aware: they receive the input space) -----
 # A single op per target space delegates to the right cv2 conversion based on
 # the input's tracked color space (the engine passes it in). One source array
@@ -1583,7 +1655,13 @@ def _compute_histogram(inputs, p, in_space="bgr"):
         for c, nb in enumerate(bins):
             hist = cv2.calcHist([data], [c], None, [nb], [0, nb]).flatten().astype(np.float32)
             if sig > 0:
-                hist = cv2.GaussianBlur(hist.reshape(-1, 1), (0, 0), sig).flatten()
+                if space == "hls" and c == 0:        # Hue is circular: wrap-pad so 0/179 join
+                    pad = int(np.ceil(sig * 3)) + 1
+                    ext = np.concatenate([hist[-pad:], hist, hist[:pad]])
+                    ext = cv2.GaussianBlur(ext.reshape(-1, 1), (0, 0), sig).flatten()
+                    hist = ext[pad:pad + nb]
+                else:
+                    hist = cv2.GaussianBlur(hist.reshape(-1, 1), (0, 0), sig).flatten()
             hists.append(hist)
         return {"hist": hists, "channels": len(hists), "names": names,
                 "space": space, "bins": bins}
@@ -1820,6 +1898,22 @@ OPS: list = [
         ],
         compute=_compute_adaptive_threshold, color=(255, 152, 0),
         in_label="Mat (Gray)", out_label="Mat (Binary)",
+    ),
+    Operation(
+        id="auto_threshold", label="Auto Threshold", category="Thresholding",
+        inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE_BINARY)],
+        params=[
+            ParamSpec("method", "otsu", kind="enum", choices=_AUTO_THRESH_METHODS, label="Method",
+                      help="How the cut level is chosen automatically: Otsu (maximises "
+                           "between-class variance), Triangle (geometric), or Valley "
+                           "(deepest dip between the two largest histogram modes)."),
+            ParamSpec("invert", False, kind="bool", label="Invert",
+                      help="Output the inverse mask (foreground and background swapped)."),
+        ],
+        compute=_compute_auto_threshold, color=(255, 152, 0), out_space="binary",
+        in_label="Mat (Gray)", out_label="Mat (Binary)",
+        description="Threshold a grayscale image at an automatically chosen level "
+                    "(Otsu / Triangle / Valley) — no manual threshold value needed.",
     ),
     Operation(
         id="color_mask", label="Color Mask", category="Thresholding",
@@ -2235,6 +2329,22 @@ OPS: list = [
         compute=_compute_histogram, color=(0, 188, 212), space_aware=True,
         in_label="Mat (any)", out_label="Histogram",
         render_preview=_render_histogram, summary=_summary_histogram, preview_is_chart=True,
+    ),
+    Operation(
+        id="backproject", label="Backproject", category="Analysis",
+        inputs=[Port("image", datatypes.IMAGE), Port("hist", datatypes.HISTOGRAM)],
+        outputs=[Port("out", datatypes.IMAGE_GRAY)],
+        params=[
+            ParamSpec("chroma_only", True, kind="bool", label="Chroma only (HLS)",
+                      help="For an HLS histogram model, match on Hue + Saturation only "
+                           "(ignore Luminance) for lighting-robust colour matching."),
+        ],
+        compute=_compute_backproject, color=(0, 188, 212), out_space="gray",
+        space_aware=True, in_label="Mat + Histogram", out_label="Mat (likelihood)",
+        description="Histogram backprojection: project a Histogram-node model onto a "
+                    "target image to get a likelihood map (bright where the image "
+                    "matches the modelled colour/intensity distribution) — for "
+                    "colour-based segmentation or tracking. Feed it into Threshold.",
     ),
 ]
 

@@ -411,6 +411,47 @@ def test_more_ops():
     print("OK  more ops: gaussian/morphology/canny/sobel/laplacian + histogram")
 
 
+def test_auto_threshold():
+    # Bimodal gray: dark background + a bright square. Every method should find the
+    # split automatically and output a binary mask separating the two.
+    img = np.full((60, 60), 40, np.uint8)
+    img[20:40, 20:40] = 200
+    for method in ("otsu", "triangle", "valley"):
+        m = GraphModel(); s = _src(m, img)
+        n = _op(m, "auto_threshold", method=method)
+        m.add_edge(s, n); Engine(m).evaluate_all()
+        out = n.output
+        assert out is not None and set(np.unique(out)).issubset({0, 255}), f"{method} must be binary"
+        assert out[30, 30] == 255 and out[5, 5] == 0, f"{method} should separate square from background"
+    m = GraphModel(); s = _src(m, img)
+    n = _op(m, "auto_threshold", method="otsu", invert=True)
+    m.add_edge(s, n); Engine(m).evaluate_all()
+    assert n.output[30, 30] == 0 and n.output[5, 5] == 255, "invert swaps foreground/background"
+    print("OK  auto_threshold: Otsu/Triangle/Valley separate a bimodal image; invert swaps")
+
+
+def test_backproject():
+    # Model = a red patch; target = a red square on a blue background. The hue
+    # histogram of the model, backprojected onto the target, must light up the red
+    # square and leave the blue background dark.
+    model_img = np.full((20, 20, 3), (40, 40, 200), np.uint8)   # red (BGR)
+    target = np.full((60, 60, 3), (200, 40, 40), np.uint8)       # blue background
+    target[20:40, 20:40] = (40, 40, 200)                         # red square
+    m = GraphModel()
+    s_model, s_target = _src(m, model_img), _src(m, target)
+    hist = _op(m, "histogram", color_space="hls")
+    bp = _op(m, "backproject", chroma_only=True)
+    m.add_edge(s_model, hist)
+    m.add_edge(s_target, bp, 0)         # target image -> port 0
+    m.add_edge(hist, bp, 1)             # histogram model -> port 1
+    Engine(m).evaluate_all()
+    out = bp.output
+    assert out is not None and out.ndim == 2, "backproject -> a single-channel likelihood map"
+    assert int(out[30, 30]) > 150, "the matching red square should light up"
+    assert int(out[30, 30]) > int(out[5, 5]) + 100, "non-matching blue background stays dark"
+    print("OK  backproject: histogram model lights up the matching colour in the target")
+
+
 def test_conversions():
     bgr = gradient()  # source inferred as BGR
 
@@ -917,6 +958,8 @@ def main():
     test_codegen_clustering_detail()
     test_fourier_roundtrip()
     test_more_ops()
+    test_auto_threshold()
+    test_backproject()
     test_conversions()
     test_batched()
     test_create_batch()
@@ -937,7 +980,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 38 backend tests passed")
+    print("\nENGINE OK: 40 backend tests passed")
 
 
 if __name__ == "__main__":
