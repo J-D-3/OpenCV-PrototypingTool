@@ -184,6 +184,20 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-03** — **Clustering diagnostics in the inspector preview.** The
+  clustering nodes no longer show just a flat color swatch. **Auto Cluster** now
+  draws *how k was chosen*: in peak mode, the original vs the smoothed /
+  saturation-damped channel histogram the peaks were detected on, with each
+  detected peak marked in the color it represents; in elbow mode, the inertia-vs-k
+  curve with the chosen knee. **K-Means** shows a proportional palette (each
+  cluster's width ∝ its pixel share), a feature-space scatter colored by cluster
+  with ringed centers, and per-cluster spread (tightness) bars. All diagnostics are
+  precomputed in `compute()` and stashed in the clusters payload, so the preview
+  stays a cheap pure-draw pass. Also added **conditional parameters**
+  (`ParamSpec.enabled_if`): a control grays out when it doesn't apply to the
+  current mode — Auto Cluster's peak-detection params (channel / smoothing / min
+  prominence) deactivate in elbow mode, so the panel shows at a glance which knobs
+  are live. Suites: 33 smoke checks + 36 engine tests.
 - **2026-06-02** — Added Geometry **Resize** (scale + interpolation mode) and
   **Rotate** (angle + expand); tone ops **Normalize** (stretch/equalize/CLAHE),
   **Invert**, and **Local HDR**; clustering ops **Auto Cluster** (histogram-peak

@@ -111,6 +111,7 @@ does not cycle at runtime.
 | Give an op a tooltip / better pseudocode | Set `Operation.description` (else its `compute` docstring is used); for a precise code line add a `core/codegen.py` `_CODE` emitter. |
 | Make an int slider non-linear | `ParamSpec(kind="int", log=True)` → logarithmic slider (`ui/parameters._add_log_int`). |
 | Make a slider evaluate while dragging | `ParamSpec(..., live=True)` (cheap params only) → commits every step, not just on release. |
+| Gray out a param unless a mode is set | `ParamSpec(..., enabled_if=("other_param", value))` (or a tuple of accepted values) → the control disables when the condition is unmet (`ui/parameters._refresh_enabled`, re-run on every committed change). |
 | Add a non-image payload op (clusters, contours, regions) | Declare the port `datatypes` type; ops with the same payload type compose (e.g. Label Regions → Filter Contours). |
 | Change how a parameter control looks | `ui/parameters.py`; the widget is derived from the `ParamSpec.kind`. |
 | Change batch parallelism / worker count | `core/engine.py` (`_max_workers`, `_run_batched`). Hold `operations._KMEANS_LOCK` around any new global cv2 state used inside a parallelised op. |
@@ -121,6 +122,29 @@ does not cycle at runtime.
 | Change evaluation / propagation | `core/engine.py`. |
 | Change how the view drives the backend | `ui/controller.py`. |
 | Change the save/load format | `core/persistence.py`. |
+
+## Conventions
+
+### Ops with a *mode* (an enum that switches which params apply)
+Prefer **one node + conditional params** over splitting into a node per mode.
+Give the mode-specific params `ParamSpec(enabled_if=("mode_param", value))` so they
+**gray out** when they don't apply (`ui/parameters._refresh_enabled`). Example:
+Auto Cluster's `k_method` (peaks | elbow) — the peak-detection params
+(`channel`, `smoothing`, `min_prominence`) are `enabled_if=("k_method", "peaks")`.
+
+Rationale (apply the same reasoning to future mode-bearing ops):
+- The modes share one **role and output payload** and feed the same downstream —
+  the textbook case for a mode enum, not separate nodes.
+- **Persistence:** `persistence.from_dict` resolves a node by op id and *silently
+  skips unknown ids*, so removing/renaming an op id makes existing saved pipelines
+  drop that node on load. Splitting therefore needs a load-time migration alias;
+  conditional params need none.
+- `enabled_if` is generic and reusable — declare it in the schema, the panel
+  follows (no per-op UI code).
+
+**Split into separate ops only** when a mode starts producing a *different output
+type/role*, grows many unique params of its own, or should be a separately
+discoverable sidebar entry — and then add the migration alias in `from_dict`.
 
 ## Canvas controls
 - **Right-drag** between two nodes: create a connection. Dropping on a full

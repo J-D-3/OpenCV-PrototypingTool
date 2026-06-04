@@ -661,6 +661,40 @@ def test_auto_cluster_elbow():
     print("OK  auto_cluster elbow: data-driven 3D k includes gray (hue-peaks miss it)")
 
 
+def test_cluster_preview_diag():
+    # The clustering preview is data-driven: compute() must stash the diagnostics
+    # (per-cluster counts/spread + a subsampled feature-space scatter, plus how k
+    # was chosen for Auto Cluster) so render_preview stays a cheap pure draw.
+    img = np.full((90, 90, 3), 110, np.uint8)
+    img[5:40, 5:40] = (40, 40, 200); img[5:40, 50:85] = (40, 200, 40)
+    img[50:85, 5:40] = (200, 120, 40); img[50:85, 50:85] = (90, 90, 90)
+
+    def run(op_id, **params):
+        m = GraphModel(); s = _src(m, img)
+        n = _op(m, op_id, **params); m.add_edge(s, n); Engine(m).evaluate_all()
+        return n.output, REGISTRY[op_id].render_preview([img], n.output, params)
+
+    km, prev = run("kmeans", k=5, cluster_space="lab", lum_weight=0.4)
+    d = km["diag"]
+    assert d["counts"].sum() == 90 * 90, "palette counts must cover every pixel"
+    assert d["spread"].shape == (5,) and d["scatter"].shape[1] == 2, "scatter is 2D, spread per-k"
+    assert len(d["scatter"]) == len(d["scatter_labels"]) and d["scatter_labels"].max() < 5
+    assert prev is not None and prev.ndim == 3 and prev.shape[2] == 3, "kmeans preview is a BGR image"
+
+    pk, prev = run("auto_cluster", k_method="peaks", channel=0,
+                   cluster_space="lab", lum_weight=0.4)
+    assert pk["kdiag"]["mode"] == "peaks" and len(pk["kdiag"]["peaks"]) >= 1
+    assert len(pk["kdiag"]["raw"]) == len(pk["kdiag"]["smooth"]), "both hist curves same length"
+    assert prev is not None and prev.ndim == 3, "auto(peaks) preview renders"
+
+    el, prev = run("auto_cluster", k_method="elbow", max_k=8,
+                   cluster_space="lab", lum_weight=0.4)
+    kd = el["kdiag"]
+    assert kd["mode"] == "elbow" and kd["chosen"] in kd["ks"] and len(kd["inertias"]) == len(kd["ks"])
+    assert prev is not None and prev.ndim == 3, "auto(elbow) preview renders"
+    print("OK  cluster preview: compute() stashes palette/scatter/spread + k-detection diag")
+
+
 def test_normalize_lighting():
     base = np.full((60, 60, 3), 110, np.uint8); base[10:50, 10:50] = (40, 40, 200)
     lit = np.clip(base.astype(np.float32) * np.array([0.8, 1.0, 1.4]) * 1.2,
@@ -842,13 +876,14 @@ def main():
     test_auto_cluster()
     test_auto_cluster_hue_robust()
     test_auto_cluster_elbow()
+    test_cluster_preview_diag()
     test_normalize_lighting()
     test_cluster_space()
     test_mean_shift()
     test_comp_timing_and_traversal()
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
-    print("\nENGINE OK: 35 backend tests passed")
+    print("\nENGINE OK: 36 backend tests passed")
 
 
 if __name__ == "__main__":

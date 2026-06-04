@@ -22,8 +22,8 @@ follow automatically. Add a corner glyph by keying the op id in
 $env:QT_QPA_PLATFORM='offscreen'; .\.venv\Scripts\python.exe smoke_test.py   # GUI safety net
 .\.venv\Scripts\python.exe engine_test.py                        # Qt-free backend tests
 ```
-Both suites must stay green before committing. Counts as of 2026-06-02:
-**23 smoke checks + 21 engine tests.**
+Both suites must stay green before committing. Counts as of 2026-06-04:
+**33 smoke checks + 36 engine tests.**
 
 ## Commit convention
 - Branch first if on the default branch; commit/push only when asked.

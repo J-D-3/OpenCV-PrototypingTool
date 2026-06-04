@@ -23,6 +23,7 @@ class ParameterPanel(QtWidgets.QWidget):
         self._node = None
         self._loading = False        # suppress callbacks while populating
         self._suppress_slider = False  # set while a typed value snaps the slider
+        self._rows = {}              # spec.name -> row container widget (for enable/disable)
 
     # --- public API --------------------------------------------------------
     def clear(self) -> None:
@@ -44,12 +45,14 @@ class ParameterPanel(QtWidgets.QWidget):
             self._layout.addStretch(1)
         finally:
             self._loading = False
+        self._refresh_enabled()      # gray out params inactive in the current mode
 
     def has_controls(self) -> bool:
         return self._layout.count() > 0
 
     # --- internals ---------------------------------------------------------
     def _clear_widgets(self) -> None:
+        self._rows = {}
         while self._layout.count():
             child = self._layout.takeAt(0)
             w = child.widget()
@@ -60,24 +63,53 @@ class ParameterPanel(QtWidgets.QWidget):
         if self._loading or self._node is None:
             return
         self._node.set_parameter(name, value, preview_mode=not commit)
+        if commit:
+            # A committed change (e.g. switching k detection mode) may flip which
+            # other params are active — re-evaluate the enable conditions.
+            self._refresh_enabled()
+
+    def _refresh_enabled(self) -> None:
+        """Gray out each control whose ``enabled_if`` condition is unmet given the
+        node's current parameter values (the control still exists / persists)."""
+        if self._node is None:
+            return
+        values = self._node.get_parameters()
+        for spec in self._node.op.params:
+            row = self._rows.get(spec.name)
+            if row is not None:
+                row.setEnabled(self._cond_met(getattr(spec, "enabled_if", None), values))
+
+    @staticmethod
+    def _cond_met(cond, values) -> bool:
+        if not cond:
+            return True
+        name, accepted = cond[0], cond[1]
+        current = values.get(name)
+        if isinstance(accepted, (tuple, list, set)):
+            return current in accepted
+        return current == accepted
 
     @staticmethod
     def _title(spec) -> str:
         return spec.label or spec.name.replace("_", " ").title()
 
-    def _row(self, spec=None):
+    def _row(self, spec=None, add_label=True):
         """Add a horizontal row (label on the left) and return its layout so the
-        caller can append the control inline."""
+        caller can append the control inline. When ``spec`` is given the row's
+        container is registered under ``spec.name`` so it can be enabled/disabled;
+        pass ``add_label=False`` for controls that carry their own label (bool)."""
         w = QtWidgets.QWidget()
         h = QtWidgets.QHBoxLayout(w)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(6)
         self._layout.addWidget(w)
         if spec is not None:
-            lbl = QtWidgets.QLabel(self._title(spec))
-            lbl.setFixedWidth(self.LABEL_W)
-            lbl.setToolTip(self._title(spec))   # full text if the column clips it
-            h.addWidget(lbl)
+            self._rows[spec.name] = w
+            if add_label:
+                lbl = QtWidgets.QLabel(self._title(spec))
+                lbl.setFixedWidth(self.LABEL_W)
+                lbl.setToolTip(self._title(spec))   # full text if the column clips it
+                h.addWidget(lbl)
         return h
 
     def _value_field(self, text: str) -> QtWidgets.QLineEdit:
@@ -224,7 +256,7 @@ class ParameterPanel(QtWidgets.QWidget):
 
     def _add_bool(self, spec, value) -> None:
         # The checkbox carries its own label, so it sits on one line already.
-        row = self._row()
+        row = self._row(spec, add_label=False)
         cb = QtWidgets.QCheckBox(self._title(spec))
         cb.setChecked(bool(value))
         cb.toggled.connect(lambda checked: self._commit(spec.name, checked, commit=True))

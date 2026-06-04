@@ -63,6 +63,12 @@ class ParamSpec:
                                  # low end) — for wide-range values like areas
     live: bool = False           # slider recomputes on every drag step (not just
                                  # on release) — for cheap, see-it-live params
+    enabled_if: Optional[tuple] = None
+    # Gray this control out unless another param has a given value. Form:
+    # ``("other_param", value)`` (equality) or ``("other_param", (v1, v2, ...))``
+    # (membership). The control still exists and persists; it's only disabled in
+    # the panel when the condition is unmet — so mode-specific params (e.g. Auto
+    # Cluster's peak-detection knobs in 'elbow' mode) read as inactive.
 
 
 @dataclass
@@ -363,7 +369,46 @@ def _kmeans_clusters(img, k, attempts=5, space="bgr", lum_weight=1.0, in_space="
     remap[order] = np.arange(k)
     labels = remap[labels]
     centers = centers[order]
-    return {"centers": centers, "labels": labels, "shape": img.shape, "k": k}
+    return {"centers": centers, "labels": labels, "shape": img.shape, "k": k,
+            "diag": _cluster_diag(feat, labels, k, space)}
+
+
+def _cluster_diag(feat, labels, k, space, max_points=4000):
+    """Precompute the data the cluster preview draws — done once here (in compute)
+    so ``render_preview`` stays a cheap pure-drawing pass (it runs for every node
+    on every batch-preview switch). Captures: per-cluster pixel ``counts``; a
+    subsampled feature-space ``scatter`` (the two highest-variance feature
+    channels) with each point's ``labels`` and the per-cluster centroids
+    (``centers2d``) for marking; and per-cluster ``spread`` (RMS distance to the
+    cluster's feature centroid = how tight / how mixed each cluster is)."""
+    counts = np.bincount(labels, minlength=k).astype(np.int64)
+    dims = feat.shape[1]
+    names = {"lab": ("L", "a", "b"), "hls": ("H", "L", "S")}.get(space, ("B", "G", "R"))
+    # Two most-spread feature channels make the most informative 2D projection.
+    if dims >= 2:
+        var = feat.var(axis=0)
+        ax0, ax1 = (int(a) for a in np.argsort(var)[::-1][:2])
+    else:
+        ax0 = ax1 = 0
+    n = feat.shape[0]
+    if n > max_points:
+        sel = np.random.default_rng(0).choice(n, size=max_points, replace=False)
+    else:
+        sel = np.arange(n)
+    scatter = feat[np.ix_(sel, [ax0, ax1])].astype(np.float32)
+    scatter_labels = labels[sel].astype(np.int32)
+    centers2d = np.zeros((k, 2), np.float32)
+    spread = np.zeros(k, np.float32)
+    for c in range(k):
+        m = labels == c
+        if m.any():
+            pts = feat[m]
+            centers2d[c] = pts[:, [ax0, ax1]].mean(axis=0)
+            d = pts - pts.mean(axis=0)
+            spread[c] = float(np.sqrt((d * d).sum(axis=1).mean()))
+    return {"counts": counts, "scatter": scatter, "scatter_labels": scatter_labels,
+            "centers2d": centers2d, "spread": spread,
+            "axes": (ax0, ax1), "axnames": (names[ax0], names[ax1])}
 
 
 def _compute_kmeans(inputs, p, in_space="bgr"):
@@ -379,7 +424,8 @@ def _compute_kmeans(inputs, p, in_space="bgr"):
         return None
 
 
-def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1, in_space="bgr"):
+def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
+                          in_space="bgr", return_diag=False):
     """Pick k by smoothing one channel's histogram (Gaussian) and counting local
     maxima above a prominence threshold — the histogram mode-seeking idea. The
     channel is an HLS index (1=Luminance/L, 0=Hue, 2=Saturation); the input is
@@ -388,30 +434,40 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1, in_space
     Hue (channel 0) gets two extra treatments because raw hue is unreliable: the
     histogram is **weighted by saturation** (so washed-out / gray pixels — whose
     hue is essentially noise — don't create phantom peaks), and smoothing + peak
-    detection are **circular** (hue 0 and 179 are adjacent)."""
+    detection are **circular** (hue 0 and 179 are adjacent).
+
+    With ``return_diag`` the function also returns a dict describing the curves
+    and peaks it found, so the preview can draw exactly what k-detection saw: the
+    original (undamped) histogram, the smoothed/saturation-damped curve the peaks
+    were detected on, and the peak bin positions."""
     hls = cv2.cvtColor(_as_bgr(img, in_space), cv2.COLOR_BGR2HLS)   # H, L, S
     ch = int(channel)
     sig = max(0.5, float(sigma))
     if ch == 0:                                   # Hue: saturation-weighted + circular
         h = hls[:, :, 0].reshape(-1).astype(np.int64)        # 0..179
         s = hls[:, :, 2].reshape(-1).astype(np.float32)      # weight by saturation
-        hist = np.bincount(h, weights=s, minlength=180).astype(np.float32)
+        # "original" = plain hue count; the damped curve weights each pixel by its
+        # saturation so washed-out pixels barely contribute — showing both makes
+        # the saturation damping visible in the preview.
+        raw = np.bincount(h, minlength=180).astype(np.float32)
+        base = np.bincount(h, weights=s, minlength=180).astype(np.float32)
         nbins, circular = 180, True
     else:
         chan = hls[:, :, ch].astype(np.uint8)
-        hist = cv2.calcHist([chan], [0], None, [256], [0, 256]).flatten().astype(np.float32)
+        raw = cv2.calcHist([chan], [0], None, [256], [0, 256]).flatten().astype(np.float32)
+        base = raw.copy()
         nbins, circular = 256, False
 
     if circular:                                  # wrap-pad so smoothing is seamless
         pad = int(np.ceil(sig * 3)) + 1
-        ext = np.concatenate([hist[-pad:], hist, hist[:pad]])
+        ext = np.concatenate([base[-pad:], base, base[:pad]])
         ext = cv2.GaussianBlur(ext.reshape(-1, 1), (0, 0), sig).flatten()
         hist = ext[pad:pad + nbins]
     else:
-        hist = cv2.GaussianBlur(hist.reshape(-1, 1), (0, 0), sig).flatten()
+        hist = cv2.GaussianBlur(base.reshape(-1, 1), (0, 0), sig).flatten()
 
     thr = float(hist.max()) * float(min_prominence)
-    peaks = 0
+    peak_idx = []
     for i in range(nbins):
         if circular:
             left, right = hist[(i - 1) % nbins], hist[(i + 1) % nbins]
@@ -419,20 +475,31 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1, in_space
             left = hist[i - 1] if i > 0 else -1.0
             right = hist[i + 1] if i < nbins - 1 else -1.0
         if hist[i] >= thr and hist[i] > left and hist[i] >= right:
-            peaks += 1
-    return max(1, min(peaks, int(max_k)))
+            peak_idx.append(i)
+    k = max(1, min(len(peak_idx), int(max_k)))
+    if not return_diag:
+        return k
+    diag = {"mode": "peaks", "raw": raw, "smooth": hist, "peaks": peak_idx,
+            "channel": ch, "nbins": nbins, "circular": circular,
+            "chname": _CLUSTER_CHANNEL_NAMES.get(ch, "channel")}
+    return k, diag
 
 
-def _detect_k_elbow(feat, max_k, attempts=3):
+def _detect_k_elbow(feat, max_k, attempts=3, return_diag=False):
     """Data-driven k: run k-means for k=2..max_k on the *full feature space* and
     pick the elbow (knee) of the inertia/compactness curve — the k of greatest
     perpendicular distance below the first->last chord. No colour-channel
     assumption, so it treats colour and gray uniformly and is reproducible across
-    lighting (the channel/smoothing params don't apply in this mode)."""
+    lighting (the channel/smoothing params don't apply in this mode).
+
+    With ``return_diag`` it also returns the (ks, inertias) curve and the chosen
+    knee, so the preview can draw the inertia curve the elbow was picked from."""
     mk = max(2, int(max_k))
     ks = list(range(2, mk + 1))
     if len(ks) <= 1:
-        return ks[0] if ks else 2
+        k = ks[0] if ks else 2
+        return (k, {"mode": "elbow", "ks": ks, "inertias": [], "chosen": k}) \
+            if return_diag else k
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
     inertias = []
     for k in ks:
@@ -446,7 +513,10 @@ def _detect_k_elbow(feat, max_k, attempts=3):
     x = (x - x[0]) / ((x[-1] - x[0]) or 1.0)
     y = (y - y.min()) / ((y.max() - y.min()) or 1.0)   # decreasing -> y[0]~1, y[-1]~0
     dist = np.abs(x + y - 1.0)                          # chord (0,1)->(1,0): x+y-1=0
-    return int(ks[int(np.argmax(dist))])
+    chosen = int(ks[int(np.argmax(dist))])
+    if not return_diag:
+        return chosen
+    return chosen, {"mode": "elbow", "ks": ks, "inertias": inertias, "chosen": chosen}
 
 
 def _compute_auto_cluster(inputs, p, in_space="bgr"):
@@ -459,11 +529,15 @@ def _compute_auto_cluster(inputs, p, in_space="bgr"):
         space, lw = p.get("cluster_space", "bgr"), p.get("lum_weight", 1.0)
         if p.get("k_method", "peaks") == "elbow":
             feat = _cluster_features(img, space, lw, in_space)
-            k = _detect_k_elbow(feat, p["max_k"])
+            k, kdiag = _detect_k_elbow(feat, p["max_k"], return_diag=True)
         else:
-            k = _detect_cluster_count(img, p["smoothing"], p["min_prominence"],
-                                      p["max_k"], p.get("channel", 1), in_space)
-        return _kmeans_clusters(img, k, 5, space, lw, in_space)
+            k, kdiag = _detect_cluster_count(img, p["smoothing"], p["min_prominence"],
+                                             p["max_k"], p.get("channel", 1), in_space,
+                                             return_diag=True)
+        out = _kmeans_clusters(img, k, 5, space, lw, in_space)
+        if isinstance(out, dict):
+            out["kdiag"] = kdiag       # how k was chosen (peaks histogram / elbow curve)
+        return out
     except Exception as e:
         print(f"Error executing auto_cluster: {e}")
         return None
@@ -483,20 +557,209 @@ def _compute_mean_shift(inputs, p):
         return None
 
 
-def _render_kmeans(inputs, output, p):
-    """Inspector preview: a horizontal swatch of the cluster colors."""
-    if not isinstance(output, dict):
-        return None
-    centers = np.clip(output["centers"], 0, 255).astype(np.uint8)
+_PREVIEW_W = 320
+_FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+
+def _center_bgr(c):
+    """A cluster center's display BGR (centers are stored in the input space)."""
+    return tuple(int(v) for v in c) if len(c) == 3 else (int(c[0]),) * 3
+
+
+def _titled(band, title):
+    """Prepend a small dark caption strip to a plotted band."""
+    strip = np.full((15, band.shape[1], 3), 45, np.uint8)
+    cv2.putText(strip, title, (4, 11), _FONT, 0.36, (210, 210, 210), 1, cv2.LINE_AA)
+    return np.vstack([strip, band])
+
+
+def _simple_swatch(centers, width=_PREVIEW_W, height=60):
+    """Fallback preview (no diagnostics available): equal-width color cells."""
     k = len(centers)
     if k == 0:
         return None
-    cell_w, cell_h = 60, 80
-    swatch = np.zeros((cell_h, cell_w * k, 3), np.uint8)
+    band = np.zeros((height, width, 3), np.uint8)
     for i, c in enumerate(centers):
-        color = tuple(int(v) for v in c) if len(c) == 3 else (int(c[0]),) * 3
-        swatch[:, i * cell_w:(i + 1) * cell_w] = color
-    return swatch
+        band[:, i * width // k:(i + 1) * width // k] = _center_bgr(c)
+    return band
+
+
+def _band_palette(centers, counts, width=_PREVIEW_W, height=48):
+    """Proportional palette: each cluster's width ∝ its pixel population, % labelled."""
+    band = np.full((height, width, 3), 30, np.uint8)
+    total = int(counts.sum()) or 1
+    x = 0
+    for i, c in enumerate(centers):
+        w = width - x if i == len(centers) - 1 else int(round(width * counts[i] / total))
+        if w <= 0:
+            continue
+        color = _center_bgr(c)
+        band[:, x:x + w] = color
+        if w >= 26:
+            tcol = (0, 0, 0) if sum(color) > 384 else (235, 235, 235)
+            cv2.putText(band, f"{100 * counts[i] / total:.0f}%", (x + 3, height - 7),
+                        _FONT, 0.34, tcol, 1, cv2.LINE_AA)
+        x += w
+    return band
+
+
+def _band_scatter(diag, centers, width=_PREVIEW_W, height=150):
+    """Feature-space scatter: subsampled pixels in the 2 most-spread feature
+    channels, colored by cluster, with each cluster center ringed."""
+    band = np.full((height, width, 3), 30, np.uint8)
+    pts = diag.get("scatter")
+    if pts is None or len(pts) == 0:
+        return band
+    labs = diag["scatter_labels"]
+    mn = pts.min(axis=0)
+    rng = np.where((pts.max(axis=0) - mn) == 0, 1.0, pts.max(axis=0) - mn)
+    m = 12
+    def project(p):
+        nx = (p[0] - mn[0]) / rng[0]
+        ny = (p[1] - mn[1]) / rng[1]
+        return int(m + nx * (width - 2 * m)), int((height - m) - ny * (height - 2 * m))
+    for p, l in zip(pts, labs):
+        cv2.circle(band, project(p), 1, _center_bgr(centers[l]), -1, cv2.LINE_AA)
+    for c2, c in zip(diag.get("centers2d", []), centers):
+        px, py = project(c2)
+        cv2.circle(band, (px, py), 5, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.circle(band, (px, py), 4, _center_bgr(c), -1, cv2.LINE_AA)
+    ax = diag.get("axnames", ("", ""))
+    cv2.putText(band, ax[0], (width - 16, height - 4), _FONT, 0.34, (170, 170, 170), 1, cv2.LINE_AA)
+    cv2.putText(band, ax[1], (4, 12), _FONT, 0.34, (170, 170, 170), 1, cv2.LINE_AA)
+    return band
+
+
+def _band_spread(centers, spread, width=_PREVIEW_W, height=70):
+    """A bar per cluster = intra-cluster RMS spread (taller = looser / more mixed)."""
+    band = np.full((height, width, 3), 30, np.uint8)
+    k = len(spread)
+    if k == 0:
+        return band
+    mx = float(spread.max()) or 1.0
+    bw = width / k
+    for i in range(k):
+        x0, x1 = int(i * bw) + 1, int((i + 1) * bw) - 1
+        bh = int((spread[i] / mx) * (height - 14))
+        cv2.rectangle(band, (x0, height - 1), (x1, height - 1 - bh),
+                      _center_bgr(centers[i]), -1)
+    return band
+
+
+def _peak_color(v, ch):
+    """The display color a histogram peak at bin ``v`` in HLS channel ``ch`` stands
+    for: a hue peak → that fully-saturated hue; an L/S peak → a neutral gray."""
+    if ch == 0:
+        hls = np.uint8([[[int(v), 128, 200]]])
+    elif ch == 2:
+        hls = np.uint8([[[0, 128, int(v)]]])
+    else:
+        return (int(v), int(v), int(v))
+    return tuple(int(x) for x in cv2.cvtColor(hls, cv2.COLOR_HLS2BGR)[0, 0])
+
+
+def _band_hist(kdiag, width=_PREVIEW_W, height=150):
+    """The k-detection histogram: original curve (gray) vs the smoothed,
+    saturation-damped curve peaks were detected on (amber), with each detected
+    peak marked by a vertical line in the color that peak represents."""
+    band = np.full((height, width, 3), 30, np.uint8)
+    raw, sm = kdiag["raw"], kdiag["smooth"]
+    n = len(sm)
+    if n < 2:
+        return band
+    pad = 12
+    def plot(arr, color):
+        mx = float(arr.max()) or 1.0
+        prev = None
+        for b in range(n):
+            x = int(b / (n - 1) * (width - 1))
+            y = int((height - pad) - (arr[b] / mx) * (height - 2 * pad))
+            if prev is not None:
+                cv2.line(band, prev, (x, y), color, 1, cv2.LINE_AA)
+            prev = (x, y)
+    plot(raw, (120, 120, 120))                 # original histogram
+    plot(sm, (0, 200, 255))                     # smoothed / saturation-damped
+    smx = float(sm.max()) or 1.0
+    for pk in kdiag["peaks"]:
+        x = int(pk / (n - 1) * (width - 1))
+        col = _peak_color(pk, kdiag["channel"])
+        y = int((height - pad) - (sm[pk] / smx) * (height - 2 * pad))
+        cv2.line(band, (x, pad), (x, height - pad), col, 1, cv2.LINE_AA)
+        cv2.circle(band, (x, y), 3, col, -1, cv2.LINE_AA)
+    cv2.putText(band, f"{kdiag.get('chname', '')}  |  original",
+                (4, 11), _FONT, 0.34, (150, 150, 150), 1, cv2.LINE_AA)
+    cv2.putText(band, "damped+smoothed", (width - 118, 11), _FONT, 0.34,
+                (0, 200, 255), 1, cv2.LINE_AA)
+    return band
+
+
+def _band_elbow(kdiag, width=_PREVIEW_W, height=150):
+    """The inertia-vs-k curve the elbow method chose from; chosen k marked green."""
+    band = np.full((height, width, 3), 30, np.uint8)
+    ks, ys = kdiag["ks"], np.array(kdiag["inertias"], np.float64)
+    if len(ks) < 1 or len(ys) != len(ks):
+        return band
+    mn, mx = float(ys.min()), float(ys.max())
+    rng = (mx - mn) or 1.0
+    m = 16
+    def xof(i):
+        return int(m + (i / max(1, len(ks) - 1)) * (width - 2 * m))
+    def yof(v):
+        return int((height - m) - ((v - mn) / rng) * (height - 2 * m))
+    for i in range(len(ks) - 1):
+        cv2.line(band, (xof(i), yof(ys[i])), (xof(i + 1), yof(ys[i + 1])),
+                 (0, 200, 255), 1, cv2.LINE_AA)
+    for i in range(len(ks)):
+        cv2.circle(band, (xof(i), yof(ys[i])), 2, (200, 200, 200), -1, cv2.LINE_AA)
+    if kdiag.get("chosen") in ks:
+        ci = ks.index(kdiag["chosen"])
+        cv2.line(band, (xof(ci), m), (xof(ci), height - m), (0, 230, 0), 1, cv2.LINE_AA)
+        cv2.circle(band, (xof(ci), yof(ys[ci])), 5, (0, 230, 0), 1, cv2.LINE_AA)
+        cv2.putText(band, f"k={kdiag['chosen']}", (xof(ci) + 4, m + 12),
+                    _FONT, 0.36, (0, 230, 0), 1, cv2.LINE_AA)
+    cv2.putText(band, "inertia vs k", (4, 11), _FONT, 0.34, (150, 150, 150), 1, cv2.LINE_AA)
+    return band
+
+
+def _render_kmeans(inputs, output, p):
+    """Inspector preview for K-Means: a proportional palette (width ∝ population),
+    a feature-space scatter colored by cluster, and per-cluster spread bars."""
+    if not isinstance(output, dict):
+        return None
+    centers = np.clip(output["centers"], 0, 255).astype(np.uint8)
+    if len(centers) == 0:
+        return None
+    diag = output.get("diag")
+    if diag is None:
+        return _simple_swatch(centers)
+    return np.vstack([
+        _titled(_band_palette(centers, diag["counts"]), "palette (width = % of pixels)"),
+        _titled(_band_scatter(diag, centers), "feature space (clusters)"),
+        _titled(_band_spread(centers, diag["spread"]), "cluster spread (tightness)"),
+    ])
+
+
+def _render_auto_cluster(inputs, output, p):
+    """Inspector preview for Auto Cluster: how k was chosen (the peak-detection
+    histogram or the elbow curve), then the resulting proportional palette."""
+    if not isinstance(output, dict):
+        return None
+    centers = np.clip(output["centers"], 0, 255).astype(np.uint8)
+    if len(centers) == 0:
+        return None
+    diag = output.get("diag")
+    if diag is None:
+        return _simple_swatch(centers)
+    kdiag = output.get("kdiag") or {}
+    if kdiag.get("mode") == "elbow":
+        top = _titled(_band_elbow(kdiag), f"elbow: chose k={output.get('k', '?')}")
+    elif kdiag.get("mode") == "peaks":
+        top = _titled(_band_hist(kdiag),
+                      f"k from {kdiag.get('chname', '')} peaks  (k={output.get('k', '?')})")
+    else:
+        top = None
+    palette = _titled(_band_palette(centers, diag["counts"]), "palette (width = % of pixels)")
+    return np.vstack([b for b in (top, palette) if b is not None])
 
 
 def _summary_kmeans(output, p):
@@ -1278,6 +1541,8 @@ _CLUSTER_CHANNELS = [
     ("Hue (H)", 0),
     ("Saturation (S)", 2),
 ]
+# Short HLS channel names, keyed by index — used to caption the peak histogram.
+_CLUSTER_CHANNEL_NAMES = {0: "Hue", 1: "Luminance", 2: "Saturation"}
 # Feature space the clustering distance is measured in. Lab/HLS separate a
 # luminance channel that the "Luminance weight" param can down-weight for
 # lighting-stable, chroma-driven clusters. "bgr" = cluster on raw input pixels.
@@ -1563,11 +1828,11 @@ OPS: list = [
             ParamSpec("k_method", "peaks", kind="enum", choices=_KMETHODS,
                       label="k detection"),
             ParamSpec("channel", 1, kind="enum", choices=_CLUSTER_CHANNELS,
-                      label="Peak channel"),
+                      label="Peak channel", enabled_if=("k_method", "peaks")),
             ParamSpec("smoothing", 4.0, kind="float", min=0.5, max=15.0, step=0.5,
-                      label="Histogram smoothing"),
+                      label="Histogram smoothing", enabled_if=("k_method", "peaks")),
             ParamSpec("min_prominence", 0.05, kind="float", min=0.0, max=0.5, step=0.01,
-                      label="Min peak prominence"),
+                      label="Min peak prominence", enabled_if=("k_method", "peaks")),
             ParamSpec("cluster_space", "bgr", kind="enum", choices=_CLUSTER_SPACES,
                       label="Cluster space"),
             ParamSpec("lum_weight", 1.0, kind="float", min=0.0, max=2.0, step=0.1,
@@ -1575,7 +1840,7 @@ OPS: list = [
         ],
         compute=_compute_auto_cluster, color=(0, 150, 136), out_space="passthrough",
         space_aware=True, in_label="Mat (any)", out_label="Clusters (auto k)",
-        render_preview=_render_kmeans, summary=_summary_kmeans,
+        render_preview=_render_auto_cluster, summary=_summary_kmeans,
     ),
     Operation(
         id="reduce_colors", label="Reduce Colors", category="Color Quantization",

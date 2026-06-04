@@ -255,6 +255,36 @@ def check_parameter_panel(app) -> None:
     print("OK  parameter panel auto-builds controls from the op schema")
 
 
+def check_param_enable_conditions(app) -> None:
+    # Auto Cluster's peak-detection params (channel/smoothing/min_prominence) carry
+    # enabled_if=("k_method","peaks"); they must gray out in 'elbow' mode and the
+    # shared params stay active — switching the mode combo flips it reactively.
+    from ui.parameters import ParameterPanel
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    ac = add_func(w, "Auto Cluster")
+    connect(w, src, ac)
+    app.processEvents()
+
+    panel = ParameterPanel()
+    panel.set_node(ac)
+    peak_only = ("channel", "smoothing", "min_prominence")
+    shared = ("max_k", "cluster_space", "lum_weight")
+    assert all(panel._rows[p].isEnabled() for p in peak_only), "peaks mode: peak params active"
+
+    combo = panel._rows["k_method"].findChild(QtWidgets.QComboBox)
+    elbow_i = next(i for i in range(combo.count()) if combo.itemData(i) == "elbow")
+    combo.setCurrentIndex(elbow_i)            # fires the reactive enable refresh
+    ac.controller.wait_idle()
+    app.processEvents()
+    assert not any(panel._rows[p].isEnabled() for p in peak_only), "elbow mode: peak params gray out"
+    assert all(panel._rows[s].isEnabled() for s in shared), "shared params stay active in elbow mode"
+
+    panel.deleteLater()
+    w.close()
+    print("OK  param panel: mode-specific params gray out (Auto Cluster: elbow vs peaks)")
+
+
 def check_display_conversion(app) -> None:
     # grayscale (single channel)
     q = cv_to_qimage(np.zeros((10, 12), np.uint8))
@@ -1000,6 +1030,7 @@ def main() -> int:
         check_save_to_file,
         check_inspector,
         check_parameter_panel,
+        check_param_enable_conditions,
         check_display_conversion,
         check_preview_and_summary,
         check_save_load,
