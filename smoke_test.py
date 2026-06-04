@@ -490,6 +490,30 @@ def check_segmentation_chain(app) -> None:
     print("OK  Resize > Blur > Adaptive Threshold > Find Contours > Filter chain runs")
 
 
+def check_resize_polymorphic(app) -> None:
+    # Resize is polymorphic (ANY in/out): a CONTOURS payload flows through it and
+    # is scaled, then on into another contours consumer.
+    w = make_window(app)
+    src = add_image(w, gradient_bgr())
+    thr = add_func(w, "Threshold")
+    fc = add_func(w, "Find Contours")
+    rz = add_func(w, "Resize")
+    flt = add_func(w, "Filter Contours")
+    connect(w, src, thr)
+    connect(w, thr, fc)
+    connect(w, fc, rz)            # CONTOURS output -> Resize (ANY input)
+    connect(w, rz, flt)          # Resize (ANY output) -> CONTOURS input
+    app.processEvents()
+
+    ctrl = w.drop_widget.view.controller
+    assert ctrl.is_connected(fc, rz), "a contours payload should connect into Resize"
+    assert ctrl.is_connected(rz, flt), "Resize (contours) should connect into Filter Contours"
+    out = rz.get_output_image()
+    assert isinstance(out, dict) and "contours" in out, "Resize passes a scaled contours payload through"
+    w.close()
+    print("OK  resize polymorphic: contours flow Find Contours -> Resize -> Filter Contours")
+
+
 def check_fourier_chain(app) -> None:
     # Load > DFT > Inverse DFT, and verify the reconstruction matches the input.
     w = make_window(app)
@@ -1131,6 +1155,7 @@ def main() -> int:
         check_input_swap,
         check_color_chain,
         check_segmentation_chain,
+        check_resize_polymorphic,
         check_fourier_chain,
         check_rewire,
         check_disconnect,

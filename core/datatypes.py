@@ -29,7 +29,11 @@ ANY = "any"   # accepts any output (e.g. Save to File, which can save a preview)
 
 def compatible(out_type: str, in_type: str) -> bool:
     """Can an output of ``out_type`` feed an input expecting ``in_type``?"""
-    if in_type == ANY:
+    if in_type == ANY or out_type == ANY:
+        # ANY is a wildcard both ways: an ANY input accepts any output, and an ANY
+        # output (a polymorphic node like Resize, whose result type mirrors its
+        # input — image or contours) can feed any input. The receiving op validates
+        # the actual payload at compute time.
         return True
     if out_type == in_type:
         return True

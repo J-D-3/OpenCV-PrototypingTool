@@ -107,7 +107,7 @@ _CODE = {
     "threshold": lambda o, i, p: f"{o} = cv::threshold({i[0]}, thresh={p.get('threshold_value')}, maxval={p.get('max_value')}, type={p.get('threshold_type')})   # gray via cv::cvtColor",
     "adaptive_threshold": lambda o, i, p: f"{o} = cv::adaptiveThreshold({i[0]}, maxValue={p.get('max_value')}, method={p.get('adaptive_method')}, type={p.get('threshold_type')}, blockSize={p.get('block_size')}, C={p.get('c')})   # gray via cv::cvtColor",
     # --- geometry ---
-    "resize": lambda o, i, p: f"{o} = cv::resize({i[0]}, None, fx={p.get('scale')}, fy={p.get('scale')}, interpolation={p.get('interpolation')})",
+    "resize": lambda o, i, p: f"{o} = cv::resize({i[0]}, None, fx={p.get('scale')}, fy={p.get('scale')}, interpolation={p.get('interpolation')})   # or scale contour points by {p.get('scale')} if {i[0]} is contours",
     "rotate": lambda o, i, p: [f"M = cv::getRotationMatrix2D(center, angle={p.get('angle')}, scale=1.0)",
                                f"{o} = cv::warpAffine({i[0]}, M, dsize)   # expand={p.get('expand')}"],
     # --- arithmetic (the second input is aligned to the first: cv::resize/cv::cvtColor) ---

@@ -184,6 +184,15 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-04** — **Resize scales contours; Largest Contour draws bold outlines.**
+  **Resize** is now polymorphic (ANY in/out): fed a Contours payload it scales the
+  contour coordinates (and the reference shape + preview background) instead of an
+  image — so you can segment on a downscaled image and map the contours back onto
+  the full-resolution original (e.g. Resize ↓ → segment → Find Contours → Resize ↑
+  → Deskew & Crop the original). `datatypes.ANY` is now a wildcard both ways.
+  **Largest Contour** draws the kept contours' outlines boldly on a dimmed backdrop
+  so the selection is obvious (was a near-invisible 1px line on a white blob).
+  Suites: 35 smoke + 42 engine.
 - **2026-06-04** — **Two histogram-driven ops: Auto Threshold + Backproject.**
   **Auto Threshold** (Thresholding) picks the cut level automatically — Otsu,
   Triangle, or Valley (deepest dip between the two largest histogram modes) — and

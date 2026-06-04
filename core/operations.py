@@ -988,16 +988,48 @@ def _compute_reduce_colors(inputs, p):
         return None
 
 
+def _scale_contours(payload, scale):
+    """Scale a CONTOURS payload's geometry by ``scale`` — the contour points, the
+    reference shape, and the preview background — so contours found on a downscaled
+    image can be mapped back onto the full-resolution original (and vice versa)."""
+    out = dict(payload)
+    out["contours"] = [np.round(np.asarray(c, np.float32) * scale).astype(np.int32)
+                       for c in payload.get("contours", [])]
+    shape = payload.get("shape")
+    if shape is not None and len(shape) >= 2:
+        out["shape"] = ((max(1, int(round(shape[0] * scale))),
+                         max(1, int(round(shape[1] * scale)))) + tuple(shape[2:]))
+    bg = payload.get("background")
+    if bg is not None:
+        nw = max(1, int(round(bg.shape[1] * scale)))
+        nh = max(1, int(round(bg.shape[0] * scale)))
+        out["background"] = cv2.resize(bg, (nw, nh), interpolation=cv2.INTER_NEAREST)
+    return out
+
+
 def _compute_resize(inputs, p):
+    """Scale an image — or a CONTOURS payload (scaling the contour coordinates),
+    so a segmentation done on a downscaled image can be mapped back to the original
+    resolution. The interpolation mode applies to images only."""
     try:
-        img = inputs[0]
+        data = inputs[0]
         scale = float(p["scale"])
+        if isinstance(data, dict) and "contours" in data:
+            return data if scale == 1.0 else _scale_contours(data, scale)
         if scale <= 0 or scale == 1.0:
-            return img
-        return cv2.resize(img, None, fx=scale, fy=scale, interpolation=int(p["interpolation"]))
+            return data
+        return cv2.resize(data, None, fx=scale, fy=scale, interpolation=int(p["interpolation"]))
     except Exception as e:
         print(f"Error executing resize: {e}")
         return None
+
+
+def _render_resize(inputs, output, p):
+    """When Resize is fed contours, preview the (scaled) contours; an image output
+    displays itself."""
+    if isinstance(output, dict) and "contours" in output:
+        return _draw_contours_preview(output)
+    return None
 
 
 def _compute_rotate(inputs, p):
@@ -1080,7 +1112,7 @@ def _build_contour_palette(per_half=6):
 _CONTOUR_COLORS = _build_contour_palette(6)
 
 
-def _draw_contours_preview(payload, filled=False):
+def _draw_contours_preview(payload, filled=False, dim=1.0, thickness=1):
     bg = payload.get("background")
     if bg is None:
         return None
@@ -1088,7 +1120,9 @@ def _draw_contours_preview(payload, filled=False):
     ids = payload.get("ids", list(range(len(contours))))
     depths = payload.get("depths", [0] * len(contours))
     out = bg.copy()
-    thickness = cv2.FILLED if filled else 1
+    if dim < 1.0:                       # dim the backdrop so bright outlines pop
+        out = (out.astype(np.float32) * dim).astype(np.uint8)
+    thickness = cv2.FILLED if filled else thickness
     nc = len(_CONTOUR_COLORS)
     half = nc // 2
     # Batch by (nesting depth, colour): ONE cv2.drawContours call per group instead
@@ -1149,6 +1183,14 @@ def _render_filter_contours(inputs, output, p):
     if not isinstance(output, dict):
         return None
     return _draw_contours_preview(output, filled=bool(p.get("filled", False)))
+
+
+def _render_largest_contour(inputs, output, p):
+    """Draw the kept contours' outlines boldly on a dimmed backdrop, so which
+    contours survived is obvious (a 1px outline on a bright binary blob is not)."""
+    if not isinstance(output, dict):
+        return None
+    return _draw_contours_preview(output, dim=0.4, thickness=2)
 
 
 def _summary_filter_contours(output, p):
@@ -2177,16 +2219,22 @@ OPS: list = [
     # --- Geometry ----------------------------------------------------------
     Operation(
         id="resize", label="Resize", category="Geometry",
-        inputs=[Port("in", datatypes.IMAGE)], outputs=[Port("out", datatypes.IMAGE)],
+        inputs=[Port("in", datatypes.ANY)], outputs=[Port("out", datatypes.ANY)],
         params=[
             ParamSpec("scale", 0.5, kind="float", min=0.1, max=4.0, step=0.05, label="Scale",
-                      help="Output size factor; <1 shrinks, >1 enlarges."),
+                      help="Output size factor; <1 shrinks, >1 enlarges. Scales contour "
+                           "coordinates too, to map a downscaled segmentation back to the original."),
             ParamSpec("interpolation", cv2.INTER_AREA, kind="enum",
                       choices=_INTERP_MODES, label="Interpolation",
-                      help="Resampling: AREA (shrink), LINEAR/CUBIC (enlarge), NEAREST (hard edges)."),
+                      help="Resampling: AREA (shrink), LINEAR/CUBIC (enlarge), NEAREST "
+                           "(hard edges). Images only — contours scale exactly."),
         ],
         compute=_compute_resize, color=(63, 81, 181), out_space="passthrough",
-        in_label="Mat (any)", out_label="Mat (any)",
+        in_label="Mat / Contours", out_label="Mat / Contours",
+        render_preview=_render_resize,
+        description="Scale an image, or a Contours payload (scaling the contour "
+                    "coordinates) — so a segmentation done on a downscaled image can "
+                    "be mapped back to the full-resolution original.",
     ),
     Operation(
         id="rotate", label="Rotate", category="Geometry",
@@ -2278,7 +2326,7 @@ OPS: list = [
                           help="How many of the biggest contours (by area) to keep.")],
         compute=_compute_largest_contour, color=(233, 30, 99),
         in_label="Contours", out_label="Contours",
-        render_preview=_render_filter_contours, summary=_summary_filter_contours,
+        render_preview=_render_largest_contour, summary=_summary_filter_contours,
         description="Keep only the N largest contours by area (default 1).",
     ),
     Operation(

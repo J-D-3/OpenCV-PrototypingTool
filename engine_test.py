@@ -548,6 +548,56 @@ def test_resize():
     print("OK  resize: scale (up/down) + interpolation mode")
 
 
+def test_resize_contours():
+    # Resize also scales a CONTOURS payload: segment on a downscaled image, then
+    # scale the contours back up to the original resolution.
+    small = np.zeros((60, 80), np.uint8)
+    cv2.rectangle(small, (10, 10), (30, 40), 255, -1)
+    m = GraphModel(); s = _src(m, small)
+    fc = _op(m, "find_contours"); up = _op(m, "resize", scale=2.0)
+    m.add_edge(s, fc); m.add_edge(fc, up); Engine(m).evaluate_all()
+    assert isinstance(up.output, dict) and "contours" in up.output, "resize passes a contours payload"
+    a_small = cv2.contourArea(fc.output["contours"][0])
+    a_up = cv2.contourArea(up.output["contours"][0])
+    assert abs(a_up - 4 * a_small) < 0.2 * a_small, f"2x scale -> ~4x area ({a_up} vs {a_small})"
+    x, y, _, _ = cv2.boundingRect(up.output["contours"][0])
+    assert 16 <= x <= 24 and 16 <= y <= 24, f"top-left ~ (20,20) after 2x, got {(x, y)}"
+    assert up.output["background"].shape[:2] == (120, 160), "preview background scaled with the contours"
+
+    # End-to-end: segment small, scale contours up, crop the ORIGINAL region.
+    orig = np.zeros((120, 160, 3), np.uint8)
+    cv2.rectangle(orig, (40, 30), (110, 90), (200, 180, 160), -1)   # 70 x 60 object
+    small_c = cv2.resize(orig, None, fx=0.5, fy=0.5)
+    m2 = GraphModel()
+    a, b = _src(m2, small_c), _src(m2, orig)
+    mask = _op(m2, "color_mask", blue=0, green=0, red=0, delta=30, select="outside")
+    fc2 = _op(m2, "find_contours"); lc = _op(m2, "largest_contour")
+    up2 = _op(m2, "resize", scale=2.0); crop = _op(m2, "crop_to_contour", border=0)
+    m2.add_edge(a, mask); m2.add_edge(mask, fc2); m2.add_edge(fc2, lc); m2.add_edge(lc, up2)
+    m2.add_edge(b, crop, 0); m2.add_edge(up2, crop, 1)
+    Engine(m2).evaluate_all()
+    out = crop.output
+    assert out is not None and out.ndim == 3, "crop produced an image"
+    # Crop area ~ 70*60 = 4200 (full-res). Without scaling the contours it would be
+    # ~1/4 of that — so this proves the contours were mapped back up.
+    area = out.shape[0] * out.shape[1]
+    assert 3000 < area < 5800, f"cropped original region ~4200 px, got {area} ({out.shape[:2]})"
+    print("OK  resize: scales contours (points+shape+bg); downscaled segmentation -> crop the original")
+
+
+def test_largest_contour_outline():
+    img = np.zeros((120, 160), np.uint8)
+    cv2.circle(img, (45, 60), 30, 255, -1); cv2.circle(img, (120, 40), 14, 255, -1)
+    m = GraphModel(); s = _src(m, img)
+    fc = _op(m, "find_contours"); lc = _op(m, "largest_contour", count=1)
+    m.add_edge(s, fc); m.add_edge(fc, lc); Engine(m).evaluate_all()
+    prev = REGISTRY["largest_contour"].render_preview([fc.output], lc.output, dict(lc.params))
+    assert isinstance(prev, np.ndarray) and prev.ndim == 3, "largest_contour draws a preview"
+    # The big circle's interior (a flat 255 blob) is dimmed so the bold outline pops.
+    assert int(prev[60, 45].max()) < 160, "kept-contour preview dims the binary backdrop"
+    print("OK  largest_contour: kept outlines drawn boldly on a dimmed backdrop")
+
+
 def test_rotate():
     img = np.zeros((20, 40, 3), np.uint8)   # 20 tall x 40 wide
 
@@ -964,6 +1014,8 @@ def main():
     test_batched()
     test_create_batch()
     test_resize()
+    test_resize_contours()
+    test_largest_contour_outline()
     test_rotate()
     test_normalize()
     test_invert()
@@ -980,7 +1032,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 40 backend tests passed")
+    print("\nENGINE OK: 42 backend tests passed")
 
 
 if __name__ == "__main__":
