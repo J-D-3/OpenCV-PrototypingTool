@@ -1,4 +1,6 @@
-# CLAUDE.md — working notes for this project
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 OpenCVPrototypingTool: a PyQt6 node-graph GUI for prototyping OpenCV
 image-processing chains. See `README.md` (status/changelog) and
@@ -16,17 +18,29 @@ The sidebar tree, node factory, parameter panel, evaluation, and inspection all
 follow automatically. Add a corner glyph by keying the op id in
 `ui/node_icons.py` (`ICON_BY_OP` -> a `_DRAWERS` key).
 
+## Setup (first time / fresh clone)
+The `.venv` is git-ignored, so a fresh clone has none — create it before running
+anything. Use Python 3.13 (3.12 also works); a bare `python` on PATH may resolve
+to a bundled interpreter (e.g. Inkscape's) that lacks the packages — prefer the venv.
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
 ## Run / test (Windows PowerShell)
 ```powershell
-.\.venv\Scripts\python.exe main.py [image]                       # launch GUI
+.\.venv\Scripts\python.exe main.py [image]                       # launch GUI (or run.bat [image])
 $env:QT_QPA_PLATFORM='offscreen'; .\.venv\Scripts\python.exe smoke_test.py   # GUI safety net
 .\.venv\Scripts\python.exe engine_test.py                        # Qt-free backend tests
 ```
-Both suites must stay green before committing. Counts as of 2026-06-04:
-**35 smoke checks + 46 engine tests.**
+Both suites must stay green before committing. Each is a single script that runs
+all its checks (no test framework / per-test selection — narrow by commenting out
+calls if needed). Counts as of 2026-06-04: **35 smoke checks + 46 engine tests.**
 
 ## Commit convention
-- Branch first if on the default branch; commit/push only when asked.
+- **Commit locally and automatically** on every atomic change (precise, concise
+  message), keeping both test suites green across commits. **Push only after the
+  user confirms** — suggest it after a coherent arc of commits.
 - When a commit message contains double quotes, PowerShell's native-arg parsing
   breaks `git commit -m`. Use a here-string (`git commit -m @'...'@`) or write
   `_commitmsg.txt` and `git commit -F _commitmsg.txt` (the file is git-ignored).
@@ -48,9 +62,15 @@ Both suites must stay green before committing. Counts as of 2026-06-04:
 - Color-space tracking: `GraphNode.color_space` via `op.out_space`
   (`bgr`/`gray`/`hls`/`binary` fixed, `passthrough`, `auto`); `space_aware` ops
   (the 3 conversions) get the input space as a 3rd `compute` arg.
+- `core/codegen.py` = walks the graph upstream from a node into language-neutral
+  pseudocode (`cv::`-style). Feeds the **Export Code** node (full pipeline) and the
+  Function-info tooltip (single op). A node that's a single OpenCV call should add a
+  `_CODE` emitter so the generated line is precise; tested by `test_codegen*`.
 
 ## Canvas gestures
 Right-drag = connect; drop on a full single-input node = rewire; **right-drag
 onto a node a source is already connected to = disconnect (toggle)**. Double-click
 inspects; wheel over a batch node scrubs frames; Delete removes; S swaps a binary
-op's two inputs.
+op's two inputs. Selecting a node turns it **yellow** and its whole data flow
+(every ancestor + descendant, nodes and edges) **green** — see
+`canvas._update_flow_highlight`.
