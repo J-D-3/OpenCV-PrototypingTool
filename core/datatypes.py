@@ -1,13 +1,14 @@
 """Port data types and connection compatibility (backend, Qt-free).
 
-Ports carry a data *type* so connections can be validated. Today every
-operation produces/consumes images, so image types interconvert freely (the
-ops tolerate/convert BGR<->Gray internally). The non-image types exist for the
-operations introduced later (FindContours, Histogram, KMeans, …), where, e.g.,
-a contour list must not be fed into an image input.
+Ports carry a data *type* so connections can be validated. Image types
+interconvert freely (ops tolerate/convert BGR<->Gray internally), while the
+non-image payloads below (contours, histograms, labels, clusters, spectra)
+flow only between the ops that understand them — e.g. a contour list must not
+be fed into an image input. ``ANY`` is a wildcard for polymorphic nodes (Save
+to File, Resize); see :func:`compatible`.
 """
 
-# Image-ish types (all mutually connectable for now).
+# Image-ish types (all interconvertible — ops convert between them as needed).
 IMAGE = "image"            # generic / unknown image
 IMAGE_BGR = "image_bgr"
 IMAGE_GRAY = "image_gray"
