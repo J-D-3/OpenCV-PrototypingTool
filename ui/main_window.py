@@ -148,7 +148,7 @@ class MainWindow(QtWidgets.QMainWindow):
             for _w in (info_name, info_types, info_desc, info_group):
                 _w.setToolTip(tip)
         
-        # Parameter controls Ã¢â‚¬â€ auto-generated from the selected op's schema.
+        # Parameter controls -- auto-generated from the selected op's schema.
         param_group = QtWidgets.QGroupBox("Parameters")
         param_layout = QtWidgets.QVBoxLayout()
         param_group.setLayout(param_layout)
@@ -259,7 +259,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         info_desc.setText("")
                         ch = meta.get('channels', '?')
                         info_types.setText(
-                            f"Size: {meta.get('w','?')}ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â{meta.get('h','?')}\n"
+                            f"Size: {meta.get('w','?')}×{meta.get('h','?')}\n"
                             f"Channels: {ch}\n"
                             f"Type: {meta.get('type','?')}"
                         )
