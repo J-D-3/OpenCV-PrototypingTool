@@ -1176,6 +1176,9 @@ def check_error_surfacing(app) -> None:
     thresh.get_summary()
     assert any(lvl == "error" and "kaboom" in m for lvl, m in events), \
         "a failing summary hook should surface an error notification"
+    # ...and MainWindow's handler actually puts it on the status bar.
+    assert "kaboom" in w.statusBar().currentMessage(), \
+        "the error notification should reach the status bar"
     w.close()
     print("OK  view-layer results + failures surface as status-bar notifications")
 
