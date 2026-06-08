@@ -136,12 +136,6 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         finally:
             painter.restore()
 
-    def drawForeground(self, painter: QtGui.QPainter, rect: QtCore.QRectF) -> None:
-        # Hover highlight removed
-        super().drawForeground(painter, rect)
-
-    # Hover update removed
-
     def set_thumb_size(self, size: int) -> None:
         self._thumb_size = int(size)
         # Redraw view to reflect size-dependent overlays (if any)
@@ -354,23 +348,6 @@ class GraphicsImageView(QtWidgets.QGraphicsView):
         if item is not None:
             item.set_destination_highlighted(highlighted, is_valid)
     
-    def _is_valid_connection(self, source: Optional[Node], target: Optional[Node]) -> bool:
-        """Check if a connection between source and target would be valid."""
-        if source is None or target is None:
-            return False
-        
-        # Check if source is SaveToFile (not allowed as source)
-        if isinstance(source, SaveToFileNode):
-            return False
-
-        # Already connected -> dragging again disconnects (still a valid action).
-        if self.controller.is_connected(source, target):
-            return True
-        # Accept either a normal connection or a rewire of a full single-input node.
-        if target.can_accept_input(source):
-            return True
-        return isinstance(target, FunctionNode) and self.controller.can_rewire(source, target)
-
     def _get_connection_type(self, source: Optional[Node], target: Optional[Node]) -> str:
         """Get the type of connection: 'valid', 'invalid', or 'implicit_conversion'."""
         if source is None or target is None:
@@ -549,11 +526,6 @@ class ImageDropWidget(QtWidgets.QWidget):
         gy = round(scene_pos.y() / 12) * 12
         item.setPos(gx, gy)
         return item
-
-    #def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
-    #    if event.button() == QtCore.Qt.MouseButton.LeftButton:
-    #        self.browse_for_image()
-    #    super().mousePressEvent(event)
 
     # Delegate DnD to the view to ensure consistent behavior
     def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:
