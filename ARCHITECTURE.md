@@ -39,6 +39,7 @@ ui/                   frontend — PyQt6 view layer
                       selection (image + pixel-neighbourhood + histogram filter;
                       shows pseudocode text for the Export Code node)
   parameters.py       ParameterPanel auto-generated from a node's ParamSpec schema
+  widgets.py          shared small Qt widgets (e.g. LineSplitter — thin-line handle)
   main_window.py      MainWindow (sidebar + canvas + parameter panel)
 
 app.py                entrypoint (argparse + QApplication)
