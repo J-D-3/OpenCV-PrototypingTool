@@ -1035,6 +1035,22 @@ _HDBSCAN_SPACES = [
     ("LCh (cylindrical Lab)", "lch"),
 ]
 _HDBSCAN_METHODS = [("Excess of Mass", "eom"), ("Leaf (finest)", "leaf")]
+# Algorithm modes. HDBSCAN* is exact; sHDBSCAN / sOPTICS are scalable approximate
+# variants (CEOs random projections) from the same library, deterministic in a seed.
+_HDBSCAN_ALGOS = [
+    ("HDBSCAN (exact)", "hdbscan"),
+    ("sHDBSCAN (approx)", "shdbscan"),
+    ("sOPTICS (approx)", "soptics"),
+]
+_SOPTICS_EXTRACT = [("Hierarchical (Xi)", "xi"), ("Threshold cut", "threshold")]
+# Distance metric for the approximate variants. Cosine clusters by colour *direction*
+# (so different brightnesses of one hue merge — lighting-invariant); L2/L1 respect
+# magnitude like exact HDBSCAN.
+_HDBSCAN_METRICS = [
+    ("Cosine (hue, lighting-invariant)", "cosine"),
+    ("Euclidean (L2)", "l2"),
+    ("Manhattan (L1)", "l1"),
+]
 _NOISE_BGR = (200, 0, 200)   # magenta: the flag colour painted onto noise (-1) pixels
 
 
@@ -1091,34 +1107,45 @@ def _finalize_hdbscan(bgr, labels, in_space):
 
 
 def _compute_hdbscan(inputs, p, in_space="bgr"):
-    """Density-based colour clustering via OPTICS-Clustering's HDBSCAN* binding. No k —
-    just ``min_cluster_size``; sparse 'bridge' colours fall out as NOISE. Returns a
-    CLUSTERS payload. Errors (binding missing, too many colours) propagate to the engine,
-    which shows the node's red error border."""
+    """Density-based colour clustering via OPTICS-Clustering. No k — just a minimum size;
+    sparse 'bridge' colours fall out as NOISE. Three algorithm modes: exact HDBSCAN*, or
+    the scalable approximate sHDBSCAN / sOPTICS (CEOs random projections, deterministic in
+    a seed, cosine metric by default). Returns a CLUSTERS payload. Errors (binding missing,
+    too many colours) propagate to the engine, which shows the node's red error border."""
     img = inputs[0]
     if img is None:
         return None
     hd = optics_backend.load()              # RuntimeError (clear msg) if unavailable
     bgr = _as_bgr(img, in_space)
     feat = _hdbscan_features(bgr, p.get("color_space", "lab"))
-    # Voxel-quantize for speed/quality, then pass the FULL pixel cloud: the binding dedups
-    # bit-identical pixels internally *with weights*, so min_cluster_size stays in PIXEL
-    # units (a flat-colour region of N identical pixels still counts as N) while the O(n²)
-    # work shrinks to the unique-colour count. We cap on that unique count — the real cost
-    # driver — to refuse a pathological continuous-tone run before it starts.
+    # Voxel-quantize for speed/quality, then pass the FULL pixel cloud: HDBSCAN/sHDBSCAN
+    # dedup bit-identical pixels internally *with weights*, so the minimum size stays in
+    # PIXEL units while the O(n²) work shrinks to the unique-colour count. We cap on that
+    # unique count — the real cost driver — to refuse a pathological run before it starts.
     bin_ = int(p.get("voxel_bin", 6))
     q = feat if bin_ <= 0 else (np.floor(feat / bin_) * bin_ + bin_ / 2.0).astype(np.float32)
     n_unique = len(np.unique(q, axis=0))
     max_colors = int(p.get("max_colors", 20000))
     if n_unique > max_colors:
         raise ValueError(
-            f"HDBSCAN: {n_unique} unique colours exceed the cap ({max_colors}). "
+            f"Density Cluster: {n_unique} unique colours exceed the cap ({max_colors}). "
             "Raise 'Voxel bin' or add an upstream Resize to shrink the image.")
-    res = hd.hdbscan(np.ascontiguousarray(q, np.float64),
-                     min_cluster_size=max(2, int(p.get("min_cluster_size", 50))),
-                     min_samples=int(p.get("min_samples", 0)),
-                     method=p.get("method", "eom"))
-    labels = res["labels"].astype(np.int32)    # per-pixel (binding expands dedup), -1 = noise
+    qc = np.ascontiguousarray(q, np.float64)
+    algo = p.get("algorithm", "hdbscan")
+    mcs = max(2, int(p.get("min_cluster_size", 50)))
+    if algo == "shdbscan":
+        labels = hd.shdbscan(qc, min_cluster_size=mcs, min_samples=int(p.get("min_samples", 0)),
+                             method=p.get("method", "eom"), seed=int(p.get("seed", 42)),
+                             metric=p.get("metric", "cosine"))["labels"].astype(np.int32)
+    elif algo == "soptics":
+        labels = hd.soptics(qc, min_pts=mcs, extract=p.get("extract", "xi"),
+                            threshold=float(p.get("threshold", -1.0)), chi=float(p.get("chi", 0.05)),
+                            seed=int(p.get("seed", 42)), metric=p.get("metric", "cosine"),
+                            min_cluster_frac=0.0).astype(np.int32)
+    else:   # exact HDBSCAN*
+        labels = hd.hdbscan(qc, min_cluster_size=mcs, min_samples=int(p.get("min_samples", 0)),
+                            method=p.get("method", "eom"))["labels"].astype(np.int32)
+    labels = labels.reshape(-1)             # per-pixel, -1 = noise
     frac = float(p.get("min_cluster_frac", 0.0))
     if frac > 0 and labels.size and (labels >= 0).any():
         counts = np.bincount(labels[labels >= 0])
@@ -2470,27 +2497,56 @@ OPS: list = [
         render_preview=_render_auto_cluster, summary=_summary_kmeans, preview_is_chart=True,
     ),
     Operation(
-        id="hdbscan_cluster", label="HDBSCAN Cluster", category="Color Quantization",
+        id="hdbscan_cluster", label="Density Cluster", category="Color Quantization",
         inputs=[Port("in", datatypes.IMAGE)],
         outputs=[Port("out", datatypes.CLUSTERS)],
         params=[
+            ParamSpec("algorithm", "hdbscan", kind="enum", choices=_HDBSCAN_ALGOS,
+                      label="Algorithm",
+                      help="HDBSCAN* is exact (best quality, O(n²) on the unique colours). "
+                           "sHDBSCAN / sOPTICS are scalable approximate variants (random "
+                           "projections) — faster on big colour clouds, deterministic in a seed."),
             ParamSpec("min_cluster_size", 50, kind="int", min=2, max=5000, log=True,
                       label="Min cluster size",
-                      help="Smallest group of pixels HDBSCAN* calls a colour cluster — the one "
-                           "knob you must set. Larger = fewer, bigger clusters and more pixels "
-                           "left as noise (no k needed)."),
+                      help="Smallest group of pixels called a colour cluster — the one knob you "
+                           "must set (no k needed). Larger = fewer, bigger clusters, more noise. "
+                           "For sOPTICS this is the core-neighbour count (min_pts)."),
             ParamSpec("min_samples", 0, kind="int", min=0, max=200,
-                      label="Min samples (density)",
+                      label="Min samples (density)", enabled_if=("algorithm", ("hdbscan", "shdbscan")),
                       help="Density smoother (k for the core distance). 0 = use Min cluster size; "
                            "higher = more conservative, more pixels treated as noise."),
             ParamSpec("method", "eom", kind="enum", choices=_HDBSCAN_METHODS,
-                      label="Selection",
+                      label="Selection", enabled_if=("algorithm", ("hdbscan", "shdbscan")),
                       help="Excess of Mass keeps the most persistent clusters; Leaf takes the "
                            "finest partition (more, smaller clusters)."),
+            ParamSpec("extract", "xi", kind="enum", choices=_SOPTICS_EXTRACT,
+                      label="Extraction", enabled_if=("algorithm", "soptics"),
+                      help="How sOPTICS turns its reachability ordering into clusters. Hierarchical "
+                           "(Xi) handles modes at differing densities (recommended); a flat "
+                           "Threshold cut needs a hand-tuned level or it over-segments."),
+            ParamSpec("threshold", -1.0, kind="float", min=-1.0, max=255.0, step=1.0,
+                      label="Threshold (sOPTICS)",
+                      enabled_if=[("algorithm", "soptics"), ("extract", "threshold")],
+                      help="Reachability height at which valleys become clusters (−1 = an educated "
+                           "default; tends to over-segment, so set it by eye from the plot)."),
+            ParamSpec("chi", 0.05, kind="float", min=0.001, max=0.5, step=0.005,
+                      label="Xi steepness", enabled_if=[("algorithm", "soptics"), ("extract", "xi")],
+                      help="Relative steepness delimiting a cluster's walls; smaller = more, "
+                           "finer clusters."),
+            ParamSpec("metric", "cosine", kind="enum", choices=_HDBSCAN_METRICS,
+                      label="Metric", enabled_if=("algorithm", ("shdbscan", "soptics")),
+                      help="Distance for the approximate variants. Cosine clusters by colour "
+                           "direction (different brightnesses of one hue merge — lighting-invariant); "
+                           "L2/L1 respect magnitude like exact HDBSCAN."),
+            ParamSpec("seed", 42, kind="int", min=0, max=9999, label="Seed",
+                      enabled_if=("algorithm", ("shdbscan", "soptics")),
+                      help="The approximate variants are randomized but reproducible: the same seed "
+                           "always gives the same clustering."),
             ParamSpec("color_space", "lab", kind="enum", choices=_HDBSCAN_SPACES,
                       label="Colour space",
-                      help="Distance space: Lab (perceptual, recommended), BGR, HLS, or LCh. "
-                           "HLS/LCh carry a hue-wrap caveat (a hue near 0/max may split)."),
+                      help="Feature space the distance is measured in: Lab (perceptual, recommended), "
+                           "BGR, HLS, or LCh. HLS/LCh carry a hue-wrap caveat (a hue near 0/max may "
+                           "split). For Cosine metric, BGR clusters by hue intuitively."),
             ParamSpec("voxel_bin", 6, kind="int", min=0, max=32, label="Voxel bin",
                       help="Snap colours to a grid before clustering (speed/quality knob). 0 = off; "
                            "larger merges near-identical colours, leaving far fewer unique points "
@@ -2502,7 +2558,7 @@ OPS: list = [
             ParamSpec("max_colors", 20000, kind="int", min=1000, max=200000, show=False),
         ],
         compute=_compute_hdbscan, color=(0, 150, 136), out_space="passthrough",
-        space_aware=True, in_label="Mat (any)", out_label="Clusters (HDBSCAN)",
+        space_aware=True, in_label="Mat (any)", out_label="Clusters (density)",
         render_preview=_render_hdbscan, summary=_summary_hdbscan,
     ),
     Operation(

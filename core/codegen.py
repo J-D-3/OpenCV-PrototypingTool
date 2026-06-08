@@ -221,13 +221,24 @@ def _emit_hdbscan(o, i, p):
         "bgr": "bgr.reshape(-1, 3).astype(float32)                     # cluster in BGR",
     }.get(space, "bgr.reshape(-1, 3)")
     bin_ = p.get("voxel_bin")
+    algo = p.get("algorithm", "hdbscan")
+    mcs = p.get("min_cluster_size")
+    if algo == "shdbscan":
+        call = (f"labels = optics::shdbscan(feat, min_cluster_size={mcs}, min_samples={p.get('min_samples')}, "
+                f"method={p.get('method')!r}, seed={p.get('seed')}, metric={p.get('metric')!r}).labels   # approx, -1=noise")
+    elif algo == "soptics":
+        call = (f"reach  = optics::compute_soptics_reachability_dists(feat, min_pts={mcs}, seed={p.get('seed')}, "
+                f"metric={p.get('metric')!r})\n"
+                f"labels = extract_{p.get('extract')}(reach, threshold={p.get('threshold')}, chi={p.get('chi')})   # approx OPTICS, -1=noise")
+    else:
+        call = (f"labels = optics::hdbscan(feat, min_cluster_size={mcs}, min_samples={p.get('min_samples')}, "
+                f"method={p.get('method')!r}).labels   # exact, -1=noise; dedups internally")
     return [
-        f"# HDBSCAN* density colour clustering (no k): min_cluster_size={p.get('min_cluster_size')}, "
-        f"min_samples={p.get('min_samples')}, method={p.get('method')!r}, space={space!r}",
+        f"# Density colour clustering (no k) via OPTICS-Clustering: algorithm={algo!r}, space={space!r}",
         f"bgr  = as_bgr({i[0]})                                # cv::cvtColor from the tracked colour space",
         f"feat = {conv}",
         f"feat = floor(feat / {bin_}) * {bin_} + {bin_}/2            # voxel quantize (0 = off)",
-        "labels = optics::hdbscan(feat, min_cluster_size, min_samples, method).labels   # -1 = noise; dedups internally",
+        call,
         "centers[c] = mean BGR of pixels labelled c; reorder dark->light; append a NOISE centre (flag colour)",
         f"{o} = {{centers, labels (-1 -> noise idx), shape, k}}   # CLUSTERS payload",
     ]

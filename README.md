@@ -185,6 +185,15 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-08** — **Density Cluster: sHDBSCAN + sOPTICS modes.** The density-clustering
+  node (formerly "HDBSCAN Cluster"; op id unchanged) gained an **Algorithm** selector:
+  exact **HDBSCAN\***, or the scalable approximate **sHDBSCAN** / **sOPTICS** (CEOs
+  random projections — faster on big colour clouds, deterministic in a **seed**, with a
+  cosine/L2/L1 **metric**; cosine clusters by colour *direction*, so different brightnesses
+  of one hue merge). sOPTICS adds a threshold-vs-**Xi** extraction choice (defaults to Xi —
+  the flat cut over-segments without hand-tuning). Mode-specific params gray out per
+  algorithm. Required extending the sibling `optics_py` binding to expose `shdbscan` /
+  `soptics`. Suites: 36 smoke + 47 engine.
 - **2026-06-08** — **HDBSCAN Cluster node (density colour clustering).** A new
   *Color Quantization* op backed by the sibling **OPTICS-Clustering** library's
   `optics_py` binding (which we extended to expose HDBSCAN\*). Unlike K-Means it needs

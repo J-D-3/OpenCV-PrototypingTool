@@ -145,13 +145,13 @@ def test_color_pipeline():
 
 
 def test_hdbscan_cluster():
-    """HDBSCAN* density clustering via the optional optics_py binding -> a CLUSTERS
-    payload that Reduce Colors consumes like K-Means. Skips cleanly if the binding
-    isn't built. Uses photographic spread (flat fills collapse to isolated points,
-    which density clustering correctly calls noise)."""
+    """Density colour clustering via the optional optics_py binding (HDBSCAN / sHDBSCAN /
+    sOPTICS modes) -> a CLUSTERS payload that Reduce Colors consumes like K-Means. Skips
+    cleanly if the binding isn't built. Uses photographic spread (flat fills collapse to
+    isolated points, which density clustering correctly calls noise)."""
     from core import optics_backend
     if not optics_backend.available():
-        print("OK  hdbscan cluster: SKIPPED (optics_py binding unavailable)")
+        print("OK  density cluster: SKIPPED (optics_py binding unavailable)")
         return
     rng = np.random.default_rng(0)
     blocks = [np.clip(rng.normal(mean, 9, (900, 3)), 0, 255)
@@ -160,13 +160,17 @@ def test_hdbscan_cluster():
     rng.shuffle(pix)
     img = pix[:2700].reshape(45, 60, 3)
 
-    m = GraphModel()
-    s = _src(m, img)
-    hd = _op(m, "hdbscan_cluster", min_cluster_size=120, color_space="lab", voxel_bin=4)
-    red = _op(m, "reduce_colors")
-    m.add_edge(s, hd); m.add_edge(hd, red)
-    Engine(m).evaluate_all()
+    def run(**params):
+        m = GraphModel()
+        s = _src(m, img)
+        hd = _op(m, "hdbscan_cluster", **params)
+        red = _op(m, "reduce_colors")
+        m.add_edge(s, hd); m.add_edge(hd, red)
+        Engine(m).evaluate_all()
+        return hd, red
 
+    # Exact HDBSCAN* in Lab: the 3 colour modes should form clusters.
+    hd, red = run(algorithm="hdbscan", min_cluster_size=120, color_space="lab", voxel_bin=4)
     assert isinstance(hd.output, dict), f"hdbscan should output a clusters payload (error={hd.error})"
     k = hd.output["k"]
     assert k >= 2, f"the 3 colour modes should form clusters, got k={k}"
@@ -178,7 +182,18 @@ def test_hdbscan_cluster():
     assert red.output is not None and red.output.shape == img.shape
     uniq = np.unique(red.output.reshape(-1, 3), axis=0)
     assert uniq.shape[0] <= k + 1, f"recoloured image uses <= k+1 colours, got {uniq.shape[0]}"
-    print(f"OK  hdbscan cluster: {k} density clusters + noise flag; reduce_colors round-trips")
+
+    # The two approximate, seeded variants: a valid payload + round-trip (lenient k).
+    for algo, extra in [("shdbscan", {}), ("soptics", {"extract": "xi"})]:
+        hd2, red2 = run(algorithm=algo, min_cluster_size=120, color_space="bgr",
+                        metric="cosine", seed=42, voxel_bin=4, **extra)
+        assert isinstance(hd2.output, dict), f"{algo} payload (error={hd2.error})"
+        k2 = hd2.output["k"]
+        assert hd2.output["centers"].shape == (k2 + 1, 3), f"{algo}: centers = k+1"
+        assert hd2.output["labels"].max() <= k2, f"{algo}: labels map onto centers"
+        assert red2.output is not None and red2.output.shape == img.shape, f"{algo}: reduce_colors round-trips"
+
+    print(f"OK  density cluster: HDBSCAN ({k} clusters) + sHDBSCAN + sOPTICS modes; reduce_colors round-trips")
 
 
 def test_contours():

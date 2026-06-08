@@ -38,14 +38,16 @@ Both suites must stay green before committing. Each is a single script that runs
 all its checks (no test framework / per-test selection — narrow by commenting out
 calls if needed). Counts as of 2026-06-08: **36 smoke checks + 47 engine tests.**
 
-## Optional OPTICS backend (HDBSCAN Cluster node)
+## Optional OPTICS backend (Density Cluster node)
 `core/optics_backend.py` lazily loads `optics_py` — a compiled pybind11 module from the
 sibling **OPTICS-Clustering** repo (density clustering). It's optional and ABI-locked to
 the building Python/platform; `load()` searches `$OPTICS_PY_DIR` then
 `../OPTICS-Clustering/build-py/python/Release`, and raises a clear error (→ red node
-border) if absent. The **HDBSCAN Cluster** op (`core/operations.py`) feeds it a quantized
-pixel cloud (the binding dedups internally, so `min_cluster_size` is in *pixel* units) and
-emits the standard `CLUSTERS` payload; noise (`-1`) maps to a trailing magenta centre.
+border) if absent. The **Density Cluster** op (`core/operations.py`, id `hdbscan_cluster`)
+has three `algorithm` modes — exact `hdbscan`, approximate `shdbscan` / `soptics` (CEOs
+random projections, deterministic in `seed`, cosine/L2/L1 metric). It feeds a quantized
+pixel cloud (the binding dedups internally, so `min_cluster_size` stays in *pixel* units)
+and emits the standard `CLUSTERS` payload; noise (`-1`) maps to a trailing magenta centre.
 The engine test skips cleanly when the binding is unavailable.
 
 ## Commit convention
