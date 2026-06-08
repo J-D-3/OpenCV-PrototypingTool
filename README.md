@@ -185,6 +185,18 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-08** — **HDBSCAN Cluster node (density colour clustering).** A new
+  *Color Quantization* op backed by the sibling **OPTICS-Clustering** library's
+  `optics_py` binding (which we extended to expose HDBSCAN\*). Unlike K-Means it needs
+  **no k** — just `min_cluster_size` — finds colour modes at differing densities, and
+  labels sparse anti-aliasing/JPEG "bridge" colours as **noise** (painted a magenta
+  flag). Params: min cluster size, min samples, EOM/Leaf selection, colour space
+  (Lab / BGR / HLS / LCh), a voxel-quantize speed knob, and a min-cluster fraction.
+  It emits the standard `CLUSTERS` payload, so **Reduce Colors** and the cluster
+  diagnostics consume it like K-Means. The binding is **optional**: `core/optics_backend.py`
+  loads it defensively (searches `$OPTICS_PY_DIR` then the sibling repo's build dir) and
+  surfaces a clear error if it's missing — the node degrades, the app never crashes.
+  Suites: 36 smoke + 47 engine.
 - **2026-06-08** — **View-layer errors now surface in the UI.** Failures in the
   view layer — `render_preview` / `summary` hooks, save-to-file, and export-code —
   previously only printed to the console, so a failed save or preview looked like

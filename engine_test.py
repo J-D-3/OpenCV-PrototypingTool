@@ -144,6 +144,43 @@ def test_color_pipeline():
     print("OK  color pipeline: to_hls -> kmeans -> reduce_colors (<= k colors)")
 
 
+def test_hdbscan_cluster():
+    """HDBSCAN* density clustering via the optional optics_py binding -> a CLUSTERS
+    payload that Reduce Colors consumes like K-Means. Skips cleanly if the binding
+    isn't built. Uses photographic spread (flat fills collapse to isolated points,
+    which density clustering correctly calls noise)."""
+    from core import optics_backend
+    if not optics_backend.available():
+        print("OK  hdbscan cluster: SKIPPED (optics_py binding unavailable)")
+        return
+    rng = np.random.default_rng(0)
+    blocks = [np.clip(rng.normal(mean, 9, (900, 3)), 0, 255)
+              for mean in [(40, 40, 200), (60, 180, 60), (200, 120, 40)]]
+    pix = np.vstack(blocks).astype(np.uint8)
+    rng.shuffle(pix)
+    img = pix[:2700].reshape(45, 60, 3)
+
+    m = GraphModel()
+    s = _src(m, img)
+    hd = _op(m, "hdbscan_cluster", min_cluster_size=120, color_space="lab", voxel_bin=4)
+    red = _op(m, "reduce_colors")
+    m.add_edge(s, hd); m.add_edge(hd, red)
+    Engine(m).evaluate_all()
+
+    assert isinstance(hd.output, dict), f"hdbscan should output a clusters payload (error={hd.error})"
+    k = hd.output["k"]
+    assert k >= 2, f"the 3 colour modes should form clusters, got k={k}"
+    assert hd.output["centers"].shape == (k + 1, 3), "centers = k real clusters + 1 noise centre"
+    assert hd.output["noise_index"] == k
+    assert list(hd.output["centers"][k]) == [200.0, 0.0, 200.0], "noise centre is the magenta flag"
+    labels = hd.output["labels"]
+    assert labels.min() >= 0 and labels.max() <= k, "labels map onto centers (noise -> k)"
+    assert red.output is not None and red.output.shape == img.shape
+    uniq = np.unique(red.output.reshape(-1, 3), axis=0)
+    assert uniq.shape[0] <= k + 1, f"recoloured image uses <= k+1 colours, got {uniq.shape[0]}"
+    print(f"OK  hdbscan cluster: {k} density clusters + noise flag; reduce_colors round-trips")
+
+
 def test_contours():
     img = np.zeros((80, 80, 3), np.uint8)
     cv2.rectangle(img, (5, 5), (24, 24), (255, 255, 255), -1)    # small (~361 px area)
@@ -1104,6 +1141,7 @@ def main():
     test_error_capture()
     test_persistence_roundtrip()
     test_color_pipeline()
+    test_hdbscan_cluster()
     test_contours()
     test_contour_nesting_colors()
     test_label_regions()
@@ -1143,7 +1181,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 46 backend tests passed")
+    print("\nENGINE OK: 47 backend tests passed")
 
 
 if __name__ == "__main__":

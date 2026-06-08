@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from core import datatypes
+from core import optics_backend
 from core.batch import Batch
 
 # cv2.setRNGSeed sets *global* state, so k-means must be atomic with respect to
@@ -1021,6 +1022,132 @@ def _band_elbow(kdiag, width=_PREVIEW_W, height=None):
     cv2.putText(band, "inertia vs k", (_px(4), _px(12)), _FONT, _fs(0.34),
                 (150, 150, 150), _tk(1), cv2.LINE_AA)
     return band
+
+
+# --- HDBSCAN* (density clustering via the optional OPTICS-Clustering binding) -----
+# Feature space the distance is measured in. Each channel is scaled to ~[0, 255] so
+# Euclidean distance is balanced across channels. HLS/LCh carry a hue-wrap caveat (a
+# colour whose hue straddles 0/max can be split) — documented, accepted for now.
+_HDBSCAN_SPACES = [
+    ("Lab (perceptual)", "lab"),
+    ("BGR (as-is)", "bgr"),
+    ("HLS", "hls"),
+    ("LCh (cylindrical Lab)", "lch"),
+]
+_HDBSCAN_METHODS = [("Excess of Mass", "eom"), ("Leaf (finest)", "leaf")]
+_NOISE_BGR = (200, 0, 200)   # magenta: the flag colour painted onto noise (-1) pixels
+
+
+def _hdbscan_features(bgr, space):
+    """Per-pixel clustering features (N×3 float, each channel ~[0, 255]) for ``space``."""
+    if space == "bgr":
+        return bgr.reshape(-1, 3).astype(np.float32)
+    if space == "lab":
+        return cv2.cvtColor(bgr, cv2.COLOR_BGR2Lab).reshape(-1, 3).astype(np.float32)
+    if space == "hls":
+        hls = cv2.cvtColor(bgr, cv2.COLOR_BGR2HLS).reshape(-1, 3).astype(np.float32)
+        hls[:, 0] *= 255.0 / 179.0           # H 0..179 -> 0..255
+        return hls
+    if space == "lch":
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2Lab).reshape(-1, 3).astype(np.float32)
+        a = lab[:, 1] - 128.0
+        b = lab[:, 2] - 128.0
+        chroma = np.hypot(a, b)              # 0..~181
+        hue = np.degrees(np.arctan2(b, a)) % 360.0
+        return np.stack([lab[:, 0], chroma * 255.0 / 181.0, hue * 255.0 / 360.0],
+                        axis=1).astype(np.float32)
+    return bgr.reshape(-1, 3).astype(np.float32)
+
+
+def _finalize_hdbscan(bgr, labels, in_space):
+    """Build a CLUSTERS payload from HDBSCAN per-pixel labels (-1 = noise): real
+    clusters ordered dark→light with their mean BGR centre, plus a trailing NOISE
+    centre (flag colour) that the -1 pixels map onto — so ``centers[labels]`` paints
+    noise distinctly and Reduce Colors / the diagnostics consume it like K-Means."""
+    labels = labels.astype(np.int32)
+    real = labels[labels >= 0]
+    k = int(real.max()) + 1 if real.size else 0
+    flat = bgr.reshape(-1, 3).astype(np.float32)
+    centers = np.zeros((k, 3), np.float32)
+    counts = np.zeros(k, np.int64)
+    for c in range(k):
+        m = labels == c
+        if m.any():
+            centers[c] = flat[m].mean(axis=0)
+            counts[c] = int(m.sum())
+    if k:
+        order = np.argsort(_center_luminance(centers, "bgr"))   # centres are BGR
+        remap = np.empty(k, np.int32)
+        remap[order] = np.arange(k)
+        nonneg = labels >= 0
+        labels[nonneg] = remap[labels[nonneg]]
+        centers, counts = centers[order], counts[order]
+    noise_n = int((labels < 0).sum())
+    centers = np.vstack([centers, np.array([list(_NOISE_BGR)], np.float32)])
+    labels[labels < 0] = k                  # -1 -> the noise centre, always in range
+    counts = np.append(counts, noise_n)
+    return {"centers": centers, "labels": labels, "shape": bgr.shape, "k": k,
+            "diag": {"counts": counts}, "n_noise": noise_n, "noise_index": k}
+
+
+def _compute_hdbscan(inputs, p, in_space="bgr"):
+    """Density-based colour clustering via OPTICS-Clustering's HDBSCAN* binding. No k —
+    just ``min_cluster_size``; sparse 'bridge' colours fall out as NOISE. Returns a
+    CLUSTERS payload. Errors (binding missing, too many colours) propagate to the engine,
+    which shows the node's red error border."""
+    img = inputs[0]
+    if img is None:
+        return None
+    hd = optics_backend.load()              # RuntimeError (clear msg) if unavailable
+    bgr = _as_bgr(img, in_space)
+    feat = _hdbscan_features(bgr, p.get("color_space", "lab"))
+    # Voxel-quantize for speed/quality, then pass the FULL pixel cloud: the binding dedups
+    # bit-identical pixels internally *with weights*, so min_cluster_size stays in PIXEL
+    # units (a flat-colour region of N identical pixels still counts as N) while the O(n²)
+    # work shrinks to the unique-colour count. We cap on that unique count — the real cost
+    # driver — to refuse a pathological continuous-tone run before it starts.
+    bin_ = int(p.get("voxel_bin", 6))
+    q = feat if bin_ <= 0 else (np.floor(feat / bin_) * bin_ + bin_ / 2.0).astype(np.float32)
+    n_unique = len(np.unique(q, axis=0))
+    max_colors = int(p.get("max_colors", 20000))
+    if n_unique > max_colors:
+        raise ValueError(
+            f"HDBSCAN: {n_unique} unique colours exceed the cap ({max_colors}). "
+            "Raise 'Voxel bin' or add an upstream Resize to shrink the image.")
+    res = hd.hdbscan(np.ascontiguousarray(q, np.float64),
+                     min_cluster_size=max(2, int(p.get("min_cluster_size", 50))),
+                     min_samples=int(p.get("min_samples", 0)),
+                     method=p.get("method", "eom"))
+    labels = res["labels"].astype(np.int32)    # per-pixel (binding expands dedup), -1 = noise
+    frac = float(p.get("min_cluster_frac", 0.0))
+    if frac > 0 and labels.size and (labels >= 0).any():
+        counts = np.bincount(labels[labels >= 0])
+        small = np.flatnonzero(counts < frac * labels.size)
+        if small.size:
+            labels[np.isin(labels, small)] = -1
+    return _finalize_hdbscan(bgr, labels, in_space)
+
+
+def _render_hdbscan(inputs, output, p):
+    """Inspector preview: the image recoloured by cluster mean (noise pixels flagged) —
+    exactly what a downstream Reduce Colors would output."""
+    if not isinstance(output, dict):
+        return None
+    centers = np.clip(output["centers"], 0, 255).astype(np.uint8)
+    labels = output.get("labels")
+    if labels is None or len(centers) == 0:
+        return None
+    return centers[labels].reshape(output["shape"])
+
+
+def _summary_hdbscan(output, p):
+    if not isinstance(output, dict):
+        return {}
+    info = {"clusters": int(output.get("k", 0))}
+    labels = output.get("labels")
+    if labels is not None and len(labels):
+        info["noise"] = f"{100 * int(output.get('n_noise', 0)) // len(labels)}%"
+    return info
 
 
 def _render_kmeans(inputs, output, p):
@@ -2341,6 +2468,42 @@ OPS: list = [
         compute=_compute_auto_cluster, color=(0, 150, 136), out_space="passthrough",
         space_aware=True, in_label="Mat (any)", out_label="Clusters (auto k)",
         render_preview=_render_auto_cluster, summary=_summary_kmeans, preview_is_chart=True,
+    ),
+    Operation(
+        id="hdbscan_cluster", label="HDBSCAN Cluster", category="Color Quantization",
+        inputs=[Port("in", datatypes.IMAGE)],
+        outputs=[Port("out", datatypes.CLUSTERS)],
+        params=[
+            ParamSpec("min_cluster_size", 50, kind="int", min=2, max=5000, log=True,
+                      label="Min cluster size",
+                      help="Smallest group of pixels HDBSCAN* calls a colour cluster — the one "
+                           "knob you must set. Larger = fewer, bigger clusters and more pixels "
+                           "left as noise (no k needed)."),
+            ParamSpec("min_samples", 0, kind="int", min=0, max=200,
+                      label="Min samples (density)",
+                      help="Density smoother (k for the core distance). 0 = use Min cluster size; "
+                           "higher = more conservative, more pixels treated as noise."),
+            ParamSpec("method", "eom", kind="enum", choices=_HDBSCAN_METHODS,
+                      label="Selection",
+                      help="Excess of Mass keeps the most persistent clusters; Leaf takes the "
+                           "finest partition (more, smaller clusters)."),
+            ParamSpec("color_space", "lab", kind="enum", choices=_HDBSCAN_SPACES,
+                      label="Colour space",
+                      help="Distance space: Lab (perceptual, recommended), BGR, HLS, or LCh. "
+                           "HLS/LCh carry a hue-wrap caveat (a hue near 0/max may split)."),
+            ParamSpec("voxel_bin", 6, kind="int", min=0, max=32, label="Voxel bin",
+                      help="Snap colours to a grid before clustering (speed/quality knob). 0 = off; "
+                           "larger merges near-identical colours, leaving far fewer unique points "
+                           "to cluster (the big win on photos/JPEG)."),
+            ParamSpec("min_cluster_frac", 0.0, kind="float", min=0.0, max=0.2, step=0.005,
+                      label="Min cluster frac",
+                      help="Also drop clusters smaller than this fraction of the image to noise "
+                           "(0 = off; scales the size floor with the image)."),
+            ParamSpec("max_colors", 20000, kind="int", min=1000, max=200000, show=False),
+        ],
+        compute=_compute_hdbscan, color=(0, 150, 136), out_space="passthrough",
+        space_aware=True, in_label="Mat (any)", out_label="Clusters (HDBSCAN)",
+        render_preview=_render_hdbscan, summary=_summary_hdbscan,
     ),
     Operation(
         id="reduce_colors", label="Reduce Colors", category="Color Quantization",

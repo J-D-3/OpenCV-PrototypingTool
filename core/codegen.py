@@ -212,6 +212,27 @@ def _emit_auto_cluster(o, i, p):
     return out
 
 
+def _emit_hdbscan(o, i, p):
+    space = p.get("color_space", "lab")
+    conv = {
+        "lab": "cv::cvtColor(bgr, COLOR_BGR2Lab).reshape(-1, 3)        # cluster in Lab",
+        "hls": "cv::cvtColor(bgr, COLOR_BGR2HLS).reshape(-1, 3)        # cluster in HLS",
+        "lch": "cv::cvtColor(bgr, COLOR_BGR2Lab) -> (L, chroma, hue)   # cluster in LCh",
+        "bgr": "bgr.reshape(-1, 3).astype(float32)                     # cluster in BGR",
+    }.get(space, "bgr.reshape(-1, 3)")
+    bin_ = p.get("voxel_bin")
+    return [
+        f"# HDBSCAN* density colour clustering (no k): min_cluster_size={p.get('min_cluster_size')}, "
+        f"min_samples={p.get('min_samples')}, method={p.get('method')!r}, space={space!r}",
+        f"bgr  = as_bgr({i[0]})                                # cv::cvtColor from the tracked colour space",
+        f"feat = {conv}",
+        f"feat = floor(feat / {bin_}) * {bin_} + {bin_}/2            # voxel quantize (0 = off)",
+        "labels = optics::hdbscan(feat, min_cluster_size, min_samples, method).labels   # -1 = noise; dedups internally",
+        "centers[c] = mean BGR of pixels labelled c; reorder dark->light; append a NOISE centre (flag colour)",
+        f"{o} = {{centers, labels (-1 -> noise idx), shape, k}}   # CLUSTERS payload",
+    ]
+
+
 def _emit_reduce_colors(o, i, p):
     return [f"{o} = centers[labels].reshape(shape)   # rebuild image from {i[0]} (CLUSTERS)"]
 
@@ -351,6 +372,7 @@ def _emit_crop_to_contour(o, i, p):
 _CODE.update({
     "kmeans": _emit_kmeans,
     "auto_cluster": _emit_auto_cluster,
+    "hdbscan_cluster": _emit_hdbscan,
     "reduce_colors": _emit_reduce_colors,
     "label_regions": _emit_label_regions,
     "mser": _emit_mser,
