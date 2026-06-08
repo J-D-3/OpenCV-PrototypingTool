@@ -185,6 +185,13 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-08** — **Density Cluster: reachability-plot preview.** A "Show reachability
+  plot" toggle computes the OPTICS **reachability** of the colour cloud and stacks the
+  classic plot under the node preview — ordered points as bars (height = reachability),
+  coloured by cluster, so **valleys are clusters** and tall peaks are the gaps/noise
+  between them. It's the density landscape behind the clustering, useful for tuning the
+  minimum size / threshold by eye. Precomputed in `compute()` (cheap pure-draw preview);
+  off by default (costs one extra OPTICS pass on the unique colours).
 - **2026-06-08** — **Density Cluster: sHDBSCAN + sOPTICS modes.** The density-clustering
   node (formerly "HDBSCAN Cluster"; op id unchanged) gained an **Algorithm** selector:
   exact **HDBSCAN\***, or the scalable approximate **sHDBSCAN** / **sOPTICS** (CEOs

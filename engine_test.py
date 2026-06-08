@@ -193,7 +193,16 @@ def test_hdbscan_cluster():
         assert hd2.output["labels"].max() <= k2, f"{algo}: labels map onto centers"
         assert red2.output is not None and red2.output.shape == img.shape, f"{algo}: reduce_colors round-trips"
 
-    print(f"OK  density cluster: HDBSCAN ({k} clusters) + sHDBSCAN + sOPTICS modes; reduce_colors round-trips")
+    # Reachability-plot diagnostic: stashed in diag, and render_preview stacks it.
+    hd3, _ = run(algorithm="hdbscan", min_cluster_size=120, color_space="lab",
+                 voxel_bin=4, show_reachability=True)
+    diag = hd3.output["diag"]
+    assert "reach" in diag and "reach_labels" in diag, "reachability diag should be precomputed"
+    assert len(diag["reach"]) == len(diag["reach_labels"]) > 0
+    prev = REGISTRY["hdbscan_cluster"].render_preview([img], hd3.output, {})
+    assert prev is not None and prev.shape[0] > img.shape[0], "preview should stack image + reachability"
+
+    print(f"OK  density cluster: HDBSCAN ({k} clusters) + sHDBSCAN + sOPTICS + reachability plot")
 
 
 def test_contours():

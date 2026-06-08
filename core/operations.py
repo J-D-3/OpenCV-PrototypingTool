@@ -1124,11 +1124,12 @@ def _compute_hdbscan(inputs, p, in_space="bgr"):
     # unique count — the real cost driver — to refuse a pathological run before it starts.
     bin_ = int(p.get("voxel_bin", 6))
     q = feat if bin_ <= 0 else (np.floor(feat / bin_) * bin_ + bin_ / 2.0).astype(np.float32)
-    n_unique = len(np.unique(q, axis=0))
+    uniq, inverse = np.unique(q, axis=0, return_inverse=True)
+    inverse = inverse.reshape(-1)
     max_colors = int(p.get("max_colors", 20000))
-    if n_unique > max_colors:
+    if len(uniq) > max_colors:
         raise ValueError(
-            f"Density Cluster: {n_unique} unique colours exceed the cap ({max_colors}). "
+            f"Density Cluster: {len(uniq)} unique colours exceed the cap ({max_colors}). "
             "Raise 'Voxel bin' or add an upstream Resize to shrink the image.")
     qc = np.ascontiguousarray(q, np.float64)
     algo = p.get("algorithm", "hdbscan")
@@ -1152,19 +1153,75 @@ def _compute_hdbscan(inputs, p, in_space="bgr"):
         small = np.flatnonzero(counts < frac * labels.size)
         if small.size:
             labels[np.isin(labels, small)] = -1
-    return _finalize_hdbscan(bgr, labels, in_space)
+    out = _finalize_hdbscan(bgr, labels, in_space)
+    if p.get("show_reachability"):
+        # The OPTICS reachability plot (signature density diagnostic), precomputed here so
+        # render_preview stays a cheap pure-draw. Computed on the unique colours (cheap) and
+        # coloured by the FINAL cluster of each ordered point. A diagnostic only — never let
+        # it fail the clustering.
+        try:
+            reach = hd.compute_reachability(np.ascontiguousarray(uniq, np.float64), min_pts=mcs)
+            per_unique = np.empty(len(uniq), np.int32)
+            per_unique[inverse] = out["labels"]          # final per-pixel label -> per-unique
+            order = reach["point_index"].astype(np.int64)
+            out["diag"]["reach"] = reach["reachability"].astype(np.float32)
+            out["diag"]["reach_labels"] = per_unique[order]
+        except Exception:
+            pass
+    return out
+
+
+def _band_reachability(reach, labels, centers, height=None):
+    """The OPTICS reachability plot: ordered points as bars (height = reachability),
+    each coloured by the cluster it belongs to (noise = the flag colour). Valleys (runs
+    of low bars) are clusters; peaks are the gaps between them. UNDEFINED (-1) reach is
+    drawn full-height. Columns subsample the ordering, so it's O(width) to draw."""
+    width = _PREVIEW_W
+    height = height or _px(70)
+    band = np.full((height, width, 3), 30, np.uint8)
+    n = len(reach)
+    if n == 0:
+        return band
+    r = np.asarray(reach, np.float32).copy()
+    finite = r[r >= 0]
+    rmax = float(finite.max()) if finite.size else 1.0
+    rmax = rmax if rmax > 0 else 1.0
+    r[r < 0] = rmax                                      # UNDEFINED -> full-height peak
+    cen = np.clip(centers, 0, 255).astype(np.uint8)
+    lab = np.asarray(labels, np.int64)
+    col_idx = np.clip(np.arange(width) * n // width, 0, n - 1)
+    heights = (r[col_idx] / rmax * (height - 1)).astype(int)
+    col_lab = lab[col_idx]
+    for x in range(width):
+        l = int(col_lab[x])
+        c = cen[l] if 0 <= l < len(cen) else (160, 160, 160)
+        band[height - 1 - heights[x]:height - 1, x] = c
+    return band
 
 
 def _render_hdbscan(inputs, output, p):
     """Inspector preview: the image recoloured by cluster mean (noise pixels flagged) —
-    exactly what a downstream Reduce Colors would output."""
+    what a downstream Reduce Colors would output. When the reachability diagnostic was
+    computed (the 'Show reachability plot' toggle), stack the OPTICS reachability plot
+    below it so the density landscape behind the clusters is visible."""
     if not isinstance(output, dict):
         return None
     centers = np.clip(output["centers"], 0, 255).astype(np.uint8)
     labels = output.get("labels")
     if labels is None or len(centers) == 0:
         return None
-    return centers[labels].reshape(output["shape"])
+    recolored = centers[labels].reshape(output["shape"])
+    diag = output.get("diag") or {}
+    if "reach" not in diag:
+        return recolored
+    w = _PREVIEW_W
+    h = max(1, int(round(recolored.shape[0] * w / recolored.shape[1])))
+    img = cv2.resize(recolored, (w, h), interpolation=cv2.INTER_NEAREST)
+    band = _band_reachability(diag["reach"], diag["reach_labels"], centers)
+    return np.vstack([
+        _titled(img, "clustered image"),
+        _titled(band, "OPTICS reachability  (valleys = clusters)"),
+    ])
 
 
 def _summary_hdbscan(output, p):
@@ -2555,6 +2612,10 @@ OPS: list = [
                       label="Min cluster frac",
                       help="Also drop clusters smaller than this fraction of the image to noise "
                            "(0 = off; scales the size floor with the image)."),
+            ParamSpec("show_reachability", False, kind="bool", label="Show reachability plot",
+                      help="Compute the OPTICS reachability plot (the density landscape — valleys "
+                           "are clusters) and show it under the preview. Costs an extra OPTICS pass "
+                           "on the unique colours, so it's off by default."),
             ParamSpec("max_colors", 20000, kind="int", min=1000, max=200000, show=False),
         ],
         compute=_compute_hdbscan, color=(0, 150, 136), out_space="passthrough",
