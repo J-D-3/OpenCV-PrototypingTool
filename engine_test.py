@@ -387,7 +387,7 @@ def test_codegen_clustering_detail():
     ac = codegen.op_pseudocode(REGISTRY["auto_cluster"],
                                {"k_method": "peaks", "channel": 0, "smoothing": 3.0,
                                 "min_prominence": 0.15, "max_k": 5})
-    for tok in ("Hue channel", "weights=hls.Saturation", "circular", "sigma=3.0",
+    for tok in ("Hue channel", "weights=chroma", "circular", "sigma=3.0",
                 "prominence", "0.15 * peak_height", "clamp(K, 1, 5)"):
         assert tok in ac, f"Auto Cluster (peaks) pseudocode missing {tok!r}:\n{ac}"
     el = codegen.op_pseudocode(REGISTRY["auto_cluster"], {"k_method": "elbow", "max_k": 8})
@@ -869,6 +869,39 @@ def test_auto_cluster_elbow():
     print("OK  auto_cluster elbow: data-driven 3D k includes gray; k_bias nudges k")
 
 
+def test_auto_cluster_chroma_split():
+    from core.operations import (_pixel_chroma, _kmeans_clusters_chroma_split,
+                                  _detect_cluster_count as dc)
+    # chroma (max-min of BGR) is ~0 for white, gray AND black; high for colour.
+    px = np.uint8([[[255, 255, 255], [0, 0, 0], [128, 128, 128], [40, 40, 200]]])
+    ch = _pixel_chroma(px)
+    assert list(ch) == [0, 0, 0, 160], f"chroma: white/gray/black=0, red=160 (got {list(ch)})"
+
+    # A near-white tint reads as S=255 in HLS (a phantom hue), but its chroma is ~7.
+    # With the chroma gate, it is excluded from hue-peak detection -> no phantom k.
+    img = np.zeros((100, 100, 3), np.uint8)
+    img[:, :60] = (40, 40, 200)          # saturated red (hue 0)
+    img[:, 60:] = (248, 255, 248)        # near-white green tint (HLS S=255, chroma 7, hue 60)
+    assert dc(img, 3.0, 0.3, 8, channel=0, chroma_gate=0) == 2, \
+        "ungated, the coherent near-white tint forms a phantom hue peak"
+    assert dc(img, 3.0, 0.3, 8, channel=0, chroma_gate=20) == 1, \
+        "gated, the near-white tint is excluded -> only the real (red) hue cluster"
+
+    # The split: red + green blobs + white + near-black -> 2 colour clusters + 2
+    # achromatic (lightness) clusters = 4; white/black stay out of the colour ones.
+    seg = np.zeros((40, 40, 3), np.uint8)
+    seg[:20, :20] = (40, 40, 200); seg[:20, 20:] = (40, 200, 40)
+    seg[20:, :20] = (255, 255, 255); seg[20:, 20:] = (10, 10, 10)
+    out = _kmeans_clusters_chroma_split(seg, 2, 2, 20, "lab", 0.3, "bgr")
+    assert out["k"] == 4, f"2 colour + 2 gray-levels = 4 clusters (got {out['k']})"
+    lab = out["labels"].reshape(40, 40)
+    quads = {int(lab[10, 10]), int(lab[10, 30]), int(lab[30, 10]), int(lab[30, 30])}
+    assert len(quads) == 4, f"the 4 uniform regions get 4 distinct clusters (got {quads})"
+    centers = np.clip(out["centers"], 0, 255).astype(np.uint8).reshape(1, -1, 3)
+    assert int((_pixel_chroma(centers) < 25).sum()) == 2, "exactly 2 achromatic (white/black) clusters"
+    print("OK  auto_cluster: chroma gate kills phantom near-white peaks; split isolates gray/white/black")
+
+
 def test_cluster_preview_diag():
     # The clustering preview is data-driven: compute() must stash the diagnostics
     # (per-cluster counts/spread + a subsampled feature-space scatter, plus how k
@@ -1101,6 +1134,7 @@ def main():
     test_auto_cluster_small_feature()
     test_peak_subpeak_vs_step()
     test_auto_cluster_elbow()
+    test_auto_cluster_chroma_split()
     test_cluster_preview_diag()
     test_normalize_lighting()
     test_cluster_space()
@@ -1109,7 +1143,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 45 backend tests passed")
+    print("\nENGINE OK: 46 backend tests passed")
 
 
 if __name__ == "__main__":

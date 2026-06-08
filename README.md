@@ -184,6 +184,15 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-04** — **Auto Cluster: chroma-based achromatic handling.** Hue-peak
+  detection is now weighted by **chroma** (max−min of BGR), not HLS saturation —
+  because HLS S wrongly reads near-white/near-black pixels as fully saturated (the
+  double-cone narrows), whereas chroma is ~0 for white, gray AND black. New
+  **Separate gray/white/black** option pulls low-chroma pixels out and clusters them
+  by lightness (into `gray_levels` clusters), so desaturated regions stop falling
+  into the coloured clusters; while enabled, the hue histogram is hard-gated to
+  chromatic pixels so achromatic regions can't form phantom hue clusters. The
+  inspector histogram also now labels L/S as **%**. Suites: 35 smoke + 46 engine.
 - **2026-06-04** — **Resize: "longer edge → length" mode.** Resize gained a `mode`:
   the existing scale factor, or **fixed** — scale so the image's longer edge becomes
   a target `length` px (aspect preserved), to normalize varying input sizes. Works on

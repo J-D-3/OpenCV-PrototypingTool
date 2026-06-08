@@ -72,9 +72,13 @@ def _ch_vmax(name: str) -> int:
 
 
 def _ch_value_label(name: str, raw: int) -> str:
-    """Human value for a raw channel reading — Hue shown in degrees (0..358)."""
+    """Human value for a raw channel reading: Hue in degrees (0..358); Lightness and
+    Saturation as a percentage (the HLS L/S byte is 0..255 = 0..100%); raw byte for
+    intensity channels (B/G/R/Gray)."""
     if name == "H":
         return f"{int(round(raw * 2))}°"
+    if name in ("L", "S"):
+        return f"{int(round(raw / 255 * 100))}%"
     return str(int(raw))
 
 

@@ -191,7 +191,7 @@ def _emit_auto_cluster(o, i, p):
                 "hls = cv::cvtColor(bgr, COLOR_BGR2HLS)"]
         if p.get("channel") == 0:
             out += [
-                f"hist = histogram(hls.Hue, 180 bins, weights=hls.Saturation)   # ignore washed-out hues; (L/S use cv::calcHist)",
+                f"hist = histogram(hls.Hue, 180 bins, weights=chroma=max(bgr)-min(bgr))   # ignore washed-out hues (chroma ~0 for white/gray/black); (L/S use cv::calcHist)",
                 f"hist = circular cv::GaussianBlur(hist, sigma={p.get('smoothing')})   # wrap 0<->179 (hue is circular)",
                 f"K = count CIRCULAR local maxima whose prominence above the MEAN valley >= {p.get('min_prominence')} * peak_height, dipping on both sides   # keeps sub-peaks, drops flat steps",
             ]
@@ -202,6 +202,12 @@ def _emit_auto_cluster(o, i, p):
                 f"K = count local maxima whose prominence above the MEAN valley >= {p.get('min_prominence')} * peak_height, dipping on both sides   # keeps sub-peaks, drops flat steps",
             ]
         out += [f"K = clamp(K, 1, {p.get('max_k')})"]
+    if p.get("separate_achromatic"):
+        out += [
+            f"# split achromatic pixels out (chroma = max(bgr)-min(bgr) < {p.get('chroma_min')}):",
+            f"  achromatic -> cv::kmeans by lightness into {p.get('gray_levels')} clusters",
+            "  chromatic  -> cv::kmeans(feat, K, ...); concatenate the two label sets",
+        ]
     out += _emit_cluster_tail(o, p)
     return out
 

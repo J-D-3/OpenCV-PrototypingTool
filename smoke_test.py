@@ -1021,6 +1021,9 @@ def check_histogram_views(app) -> None:
     assert chans[0]["vmax"] == 179, "Hue spans its real 0..179 range, not 0..255"
     assert chans[1]["vmax"] == 255 and chans[2]["vmax"] == 255
     assert _ch_value_label("H", 90) == "180°", "Hue value shown in degrees"
+    assert _ch_value_label("S", 255) == "100%" and _ch_value_label("S", 128) == "50%", \
+        "Saturation shown as a percentage (0..255 -> 0..100%)"
+    assert _ch_value_label("L", 0) == "0%", "Lightness shown as a percentage"
 
     g = add_image(w, np.zeros((30, 30), np.uint8))
     w.inspector_pane.set_node(g)

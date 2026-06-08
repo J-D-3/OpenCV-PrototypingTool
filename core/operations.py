@@ -410,27 +410,37 @@ def _center_luminance(centers, in_space):
     return gray.reshape(-1).astype(np.float32)
 
 
-def _kmeans_clusters(img, k, attempts=5, space="bgr", lum_weight=1.0, in_space="bgr"):
-    """Run k-means on an image's pixels -> CLUSTERS payload. Clusters in the
-    chosen feature space (with optional luminance down-weighting), but reports
-    each center as the mean *input-space* color of its pixels — so reduce_colors
-    and the passthrough color space stay correct regardless of clustering space.
-    k-means++ init + a pinned RNG + ordering clusters by luminance (dark -> light)
-    make the labels, swatches, and summary reproducible run to run."""
-    k = max(1, int(k))
-    feat = _cluster_features(img, space, lum_weight, in_space)
+def _pixel_chroma(bgr):
+    """Per-pixel chroma = max(B,G,R) − min(B,G,R), 0..255. A colorfulness measure
+    that is ~0 for white, gray AND black alike — unlike HLS saturation, which blows
+    up near white/black as the double-cone narrows (a faintly-tinted near-white pixel
+    reads as fully 'saturated' in HLS). So chroma is the right gate for "does this
+    pixel have a real hue?"."""
+    flat = bgr.reshape(-1, 3).astype(np.float32)
+    return flat.max(axis=1) - flat.min(axis=1)
+
+
+def _run_kmeans(feat, k, attempts=5):
+    """Seeded, locked k-means partition (labels only), clamped to k<=len(feat). The
+    seed+kmeans pair is global state, so the lock keeps it deterministic under batch
+    fan-out; k=1 short-circuits (one cluster)."""
+    k = max(1, min(int(k), len(feat)))
+    if k == 1:
+        return np.zeros(len(feat), np.int32)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-    # Pin OpenCV's global RNG so the same image yields the same partition every
-    # run (cv2.kmeans exposes no per-call seed). Ordering alone only fixes the
-    # label permutation; this fixes the partition too — no swatch/summary jitter.
-    # The seed+kmeans pair is global state, so hold the lock across both when
-    # called concurrently (batch fan-out).
     with _KMEANS_LOCK:
         cv2.setRNGSeed(0)
-        _, labels, _ = cv2.kmeans(feat, k, None, criteria, int(attempts),
-                                  cv2.KMEANS_PP_CENTERS)
-    labels = labels.flatten()
-    # Centers = mean color in the ORIGINAL space (not the clustering space).
+        _, labels, _ = cv2.kmeans(np.ascontiguousarray(feat, np.float32), k, None,
+                                  criteria, int(attempts), cv2.KMEANS_PP_CENTERS)
+    return labels.flatten().astype(np.int32)
+
+
+def _finalize_clusters(img, labels, feat, space, in_space):
+    """Build the CLUSTERS payload from per-pixel labels: each center is the mean
+    *input-space* color of its cluster; clusters are ordered dark->light (stable
+    across runs, empty last); the preview diag is computed from ``feat``."""
+    labels = labels.astype(np.int32)
+    k = int(labels.max()) + 1 if labels.size else 1
     channels = img.shape[2] if img.ndim == 3 else 1
     orig = img.reshape(-1, channels).astype(np.float32)
     centers = np.zeros((k, channels), np.float32)
@@ -440,8 +450,6 @@ def _kmeans_clusters(img, k, attempts=5, space="bgr", lum_weight=1.0, in_space="
         if m.any():
             centers[c] = orig[m].mean(axis=0)
             nonempty[c] = True
-    # Canonical order: dark -> light (empty clusters sort last), then remap
-    # labels so the index is stable across runs.
     key = _center_luminance(centers, in_space)
     key[~nonempty] = np.inf
     order = np.argsort(key)
@@ -451,6 +459,40 @@ def _kmeans_clusters(img, k, attempts=5, space="bgr", lum_weight=1.0, in_space="
     centers = centers[order]
     return {"centers": centers, "labels": labels, "shape": img.shape, "k": k,
             "diag": _cluster_diag(feat, labels, k, space)}
+
+
+def _kmeans_clusters(img, k, attempts=5, space="bgr", lum_weight=1.0, in_space="bgr"):
+    """Run k-means on an image's pixels -> CLUSTERS payload. Clusters in the chosen
+    feature space (with optional luminance down-weighting), reporting each center as
+    the mean *input-space* color, with clusters ordered dark->light for stable
+    labels/swatches/summary across runs."""
+    feat = _cluster_features(img, space, lum_weight, in_space)
+    labels = _run_kmeans(feat, max(1, int(k)), attempts)
+    return _finalize_clusters(img, labels, feat, space, in_space)
+
+
+def _kmeans_clusters_chroma_split(img, k_chromatic, gray_levels, chroma_min,
+                                  space, lum_weight, in_space, attempts=5):
+    """Cluster achromatic and colorful pixels separately. Pixels whose chroma is
+    below ``chroma_min`` (white/gray/black) are clustered by LIGHTNESS into up to
+    ``gray_levels`` clusters; the rest cluster by the chosen feature space (hue/Lab).
+    This keeps desaturated pixels out of the coloured clusters — and, because chroma
+    is ~0 for near-white/near-black too, it handles the HLS double-cone problem."""
+    bgr = _as_bgr(img, in_space)
+    achromatic = _pixel_chroma(bgr) < float(chroma_min)
+    feat = _cluster_features(img, space, lum_weight, in_space)
+    labels = np.zeros(feat.shape[0], np.int32)
+    next_label = 0
+    if achromatic.any() and int(gray_levels) >= 1:
+        gray = _to_gray_u8(bgr).reshape(-1, 1).astype(np.float32)[achromatic]
+        al = _run_kmeans(gray, int(gray_levels), attempts)
+        labels[achromatic] = al + next_label
+        next_label += int(al.max()) + 1
+    chromatic = ~achromatic
+    if chromatic.any() and int(k_chromatic) >= 1:
+        cl = _run_kmeans(feat[chromatic], int(k_chromatic), attempts)
+        labels[chromatic] = cl + next_label
+    return _finalize_clusters(img, labels, feat, space, in_space)
 
 
 def _cluster_diag(feat, labels, k, space, max_points=4000):
@@ -583,7 +625,8 @@ def _find_prominent_peaks(hist, min_prominence, circular):
 
 
 def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
-                          in_space="bgr", return_diag=False, sat_weight=1.0):
+                          in_space="bgr", return_diag=False, sat_weight=1.0,
+                          chroma_gate=0.0):
     """Pick k by smoothing one channel's histogram (Gaussian) and counting its
     modes (``_find_prominent_peaks``): local maxima that rise above the **mean** of
     their two surrounding valleys by ``min_prominence`` of their height *and* dip on
@@ -595,14 +638,15 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
     space.
 
     Hue (channel 0) gets two extra treatments because raw hue is unreliable: the
-    histogram is **weighted by saturation** (so washed-out / gray pixels — whose
-    hue is essentially noise — don't create phantom peaks), and smoothing + peak
-    detection are **circular** (hue 0 and 179 are adjacent). ``sat_weight`` is the
-    exponent on that saturation weight: each hue-bin pixel contributes
-    ``(S/255) ** sat_weight``. 1.0 (default) = the original linear weighting; 0 =
-    ignore saturation entirely (every hue counts equally, so grays can form
-    phantom peaks); > 1 = favour vivid pixels more aggressively. It only applies
-    to the Hue channel.
+    histogram is **weighted by chroma** (max−min of BGR), so washed-out pixels —
+    whose hue is essentially noise — don't create phantom peaks, and smoothing + peak
+    detection are **circular** (hue 0 and 179 are adjacent). Chroma (not HLS
+    saturation) is used because HLS S blows up near white/black as the double-cone
+    narrows — a faintly-tinted near-white pixel reads as fully saturated — whereas
+    chroma is ~0 for white, gray AND black. ``sat_weight`` is the exponent on the
+    chroma weight: each hue-bin pixel contributes ``(chroma/255) ** sat_weight``. 1.0
+    (default) = linear; 0 = ignore chroma (every hue counts equally, so achromatic
+    pixels form phantom peaks); > 1 = favour vivid pixels more aggressively. Hue only.
 
     With ``return_diag`` the function also returns a dict describing the curves
     and peaks it found, so the preview can draw exactly what k-detection saw: the
@@ -612,16 +656,18 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
     hls = cv2.cvtColor(bgr, cv2.COLOR_BGR2HLS)   # H, L, S
     ch = int(channel)
     sig = max(0.5, float(sigma))
-    if ch == 0:                                   # Hue: saturation-weighted + circular
+    if ch == 0:                                   # Hue: chroma-weighted + circular
         # OpenCV's 8-bit BGR2HLS can emit hue 180 (documented 0..179) for some
         # pixels; hue is circular so 180 (=360°) wraps to 0. Without this the
         # histogram would gain a spurious 181st bin.
         h = (hls[:, :, 0].reshape(-1).astype(np.int64)) % 180  # 0..179
-        s = hls[:, :, 2].reshape(-1).astype(np.float32)      # weight by saturation
-        sw = np.power(s / 255.0, max(0.0, float(sat_weight)))  # exponent (1.0 = linear)
+        chroma = _pixel_chroma(bgr)                            # ~0 for white/gray/black
+        sw = np.power(chroma / 255.0, max(0.0, float(sat_weight)))  # exponent (1.0 = linear)
+        if chroma_gate > 0:                                   # hard-exclude achromatic pixels
+            sw = np.where(chroma >= float(chroma_gate), sw, 0.0)  # (when the split is on)
         # "original" = plain hue count; the damped curve weights each pixel by its
-        # saturation so washed-out pixels barely contribute — showing both makes
-        # the saturation damping visible in the preview.
+        # chroma so achromatic pixels barely contribute — showing both makes the
+        # chroma damping visible in the preview.
         raw = np.bincount(h, minlength=180).astype(np.float32)
         base = np.bincount(h, weights=sw, minlength=180).astype(np.float32)
         nbins, circular = 180, True
@@ -652,14 +698,14 @@ def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
 
 
 def _peak_mean_colors(bgr, hls, ch, nbins, circular, peak_idx, sig, sat_weight=1.0):
-    """The real color each detected peak stands for: the **saturation-weighted
-    mean BGR** of the pixels that fall in (a small ±window around) the peak's bin
-    of the detection channel — same weighting the peak detection uses, so vivid
-    pixels dominate the colour. Falls back to a synthetic swatch where there's no
-    saturated support (e.g. an all-gray bin)."""
+    """The real color each detected peak stands for: the **chroma-weighted mean BGR**
+    of the pixels that fall in (a small ±window around) the peak's bin of the
+    detection channel — same weighting the peak detection uses, so vivid pixels
+    dominate the colour. Falls back to a synthetic swatch where there's no chromatic
+    support (e.g. an all-gray bin)."""
     vals = hls[:, :, ch].reshape(-1).astype(np.int64) % nbins  # bin per pixel (hue wraps 180->0)
-    sat = hls[:, :, 2].reshape(-1).astype(np.float32) / 255.0
-    w = np.maximum(np.power(sat, max(0.0, float(sat_weight))), 1e-3)  # saturation weight
+    chroma = _pixel_chroma(bgr) / 255.0
+    w = np.maximum(np.power(chroma, max(0.0, float(sat_weight))), 1e-3)  # chroma weight
     flat = bgr.reshape(-1, 3).astype(np.float32)
     wsum = np.bincount(vals, weights=w, minlength=nbins)
     chan_sum = [np.bincount(vals, weights=w * flat[:, c], minlength=nbins) for c in range(3)]
@@ -733,7 +779,10 @@ def _compute_auto_cluster(inputs, p, in_space="bgr"):
     """K-means with an auto-detected cluster count. 'k_method' picks how k is
     found: 'peaks' counts modes in a chosen HLS channel histogram; 'elbow' runs
     k-means over a range and takes the inertia knee in the full feature space
-    (colour + gray, more stable). Clustering itself is the chosen 3D space."""
+    (colour + gray, more stable). With 'separate_achromatic', white/gray/black
+    pixels (chroma below the threshold) are pulled out and clustered by lightness so
+    they don't pollute the coloured clusters; the detected k then counts only the
+    colourful clusters."""
     try:
         img = inputs[0]
         space, lw = p.get("cluster_space", "bgr"), p.get("lum_weight", 1.0)
@@ -742,11 +791,17 @@ def _compute_auto_cluster(inputs, p, in_space="bgr"):
             k, kdiag = _detect_k_elbow(feat, p["max_k"], return_diag=True,
                                        k_bias=p.get("k_bias", 0))
         else:
+            gate = p.get("chroma_min", 20) if p.get("separate_achromatic", False) else 0
             k, kdiag = _detect_cluster_count(img, p["smoothing"], p["min_prominence"],
                                              p["max_k"], p.get("channel", 1), in_space,
                                              return_diag=True,
-                                             sat_weight=p.get("sat_weight", 1.0))
-        out = _kmeans_clusters(img, k, 5, space, lw, in_space)
+                                             sat_weight=p.get("sat_weight", 1.0),
+                                             chroma_gate=gate)
+        if p.get("separate_achromatic", False):
+            out = _kmeans_clusters_chroma_split(img, k, p.get("gray_levels", 2),
+                                                p.get("chroma_min", 20), space, lw, in_space)
+        else:
+            out = _kmeans_clusters(img, k, 5, space, lw, in_space)
         if isinstance(out, dict):
             out["kdiag"] = kdiag       # how k was chosen (peaks histogram / elbow curve)
         return out
@@ -2253,14 +2308,29 @@ OPS: list = [
                            "both sides, so a quasi-flat step isn't counted. Higher = "
                            "stricter; raise 'smoothing' to drop noise."),
             ParamSpec("sat_weight", 1.0, kind="float", min=0.0, max=4.0, step=0.1,
-                      label="Saturation weight",
+                      label="Chroma weight",
                       enabled_if=[("k_method", "peaks"), ("channel", 0)],
-                      help="Exponent on saturation in the hue histogram; >1 favours vivid pixels, 0 ignores it."),
+                      help="Exponent on chroma (max−min of BGR) in the hue histogram; "
+                           ">1 favours vivid pixels, 0 ignores chroma. Chroma is used "
+                           "instead of HLS saturation because HLS S wrongly reads "
+                           "near-white/near-black pixels as fully saturated."),
             ParamSpec("k_bias", 0, kind="int", min=-5, max=5, label="k nudge (elbow)",
                       enabled_if=("k_method", "elbow"),
                       help="Shift the auto-detected k by this many clusters relative to "
                            "the inertia knee: + for more clusters, − for fewer; 0 = the "
                            "plain knee. Clamped to [2, Max clusters]."),
+            ParamSpec("separate_achromatic", False, kind="bool", label="Separate gray/white/black",
+                      help="Cluster achromatic pixels (low chroma — white, gray AND black) "
+                           "separately by lightness, so they don't fall into the coloured "
+                           "clusters. The detected k then counts only the colourful clusters."),
+            ParamSpec("chroma_min", 20, kind="int", min=0, max=128, label="Chroma threshold",
+                      enabled_if=("separate_achromatic", True),
+                      help="Pixels with chroma (max−min of BGR) below this are treated as "
+                           "achromatic. ~20 ≈ 8%; raise it to pull more washed-out pixels out."),
+            ParamSpec("gray_levels", 2, kind="int", min=1, max=6, label="Gray levels",
+                      enabled_if=("separate_achromatic", True),
+                      help="How many achromatic clusters to split by lightness (e.g. 2 = "
+                           "dark/light, 3 = black/gray/white)."),
             ParamSpec("cluster_space", "bgr", kind="enum", choices=_CLUSTER_SPACES,
                       label="Cluster space",
                       help="Distance space for k-means: BGR, Lab, or HLS (Lab/HLS split chroma from luminance)."),
