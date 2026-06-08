@@ -185,6 +185,15 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-08** — **View-layer errors now surface in the UI.** Failures in the
+  view layer — `render_preview` / `summary` hooks, save-to-file, and export-code —
+  previously only printed to the console, so a failed save or preview looked like
+  success. They now travel through a new `ControllerSignals.notify(level, message)`
+  channel to a **status bar** (errors red and lingering; successful saves/exports
+  shown briefly as info), matching how backend compute errors already show a red
+  node border. Also fixed a **mojibake** bug (the Image inspector's size line showed
+  garbage instead of `W×H`) and removed some dead code in `ui/canvas.py`. Suites:
+  36 smoke + 46 engine.
 - **2026-06-04** — **Auto Cluster: chroma-based achromatic handling.** Hue-peak
   detection is now weighted by **chroma** (max−min of BGR), not HLS saturation —
   because HLS S wrongly reads near-white/near-black pixels as fully saturated (the

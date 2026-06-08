@@ -205,6 +205,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.drop_widget.view.controller.signals.nodeChanged.connect(self._on_pane_node_changed)
         self.drop_widget.view.controller.signals.previewIndexChanged.connect(
             lambda _i: self.inspector_pane.refresh())
+        # View-layer feedback (save/export results, preview/eval failures) -> status bar.
+        self.drop_widget.view.controller.signals.notify.connect(self._on_notify)
 
 
         def on_tree_selection_changed() -> None:
@@ -288,6 +290,18 @@ class MainWindow(QtWidgets.QMainWindow):
         """Refresh the live inspector pane when its node recomputes."""
         if qt_node is self.inspector_pane._node:
             self.inspector_pane.refresh()
+
+    def _on_notify(self, level: str, message: str) -> None:
+        """Show a view-layer message in the status bar. Errors are red and linger;
+        info (e.g. a successful save) is brief. Replaces the old stdout prints so
+        failures and results are actually visible to the user."""
+        bar = self.statusBar()
+        if level == "error":
+            bar.setStyleSheet("color: #c0392b;")   # red
+            bar.showMessage(message, 8000)
+        else:
+            bar.setStyleSheet("")
+            bar.showMessage(message, 4000)
 
     @staticmethod
     def _pipeline_dir() -> str:

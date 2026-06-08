@@ -24,6 +24,8 @@ class ControllerSignals(QtCore.QObject):
     nodeChanged = QtCore.pyqtSignal(object)        # the Qt node whose result changed
     previewIndexChanged = QtCore.pyqtSignal(int)   # the batch element being previewed
     evalDone = QtCore.pyqtSignal(object, bool)     # (recomputed gnodes, commit) — bg eval
+    notify = QtCore.pyqtSignal(str, str)           # (level, message): view-layer feedback
+                                                   # for the status bar; level in {error, info}
 
 
 class GraphController:
@@ -237,7 +239,8 @@ class GraphController:
         try:
             recomputed = self.engine.evaluate_all()
         except Exception as e:  # noqa: BLE001 — surface, never kill the worker silently
-            print(f"background eval error: {e}")
+            # Cross-thread emit auto-queues to the GUI-thread status-bar slot.
+            self.signals.notify.emit("error", f"Background evaluation failed: {e}")
             recomputed = []
         self.signals.evalDone.emit(recomputed, commit)   # -> _on_eval_done (GUI thread)
 

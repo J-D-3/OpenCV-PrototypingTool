@@ -19,6 +19,17 @@ if TYPE_CHECKING:
     from ui.arrow import ArrowItem
 
 
+def _notify(node, level: str, message: str) -> None:
+    """Surface a view-layer message (a save/export result, or a preview/summary
+    failure) to the UI status bar via the controller's ``notify`` signal. Falls
+    back to stdout only when the node has no controller yet (truly headless)."""
+    ctrl = getattr(node, "controller", None)
+    if ctrl is not None:
+        ctrl.signals.notify.emit(level, message)
+    else:
+        print(message)
+
+
 class Node(QtWidgets.QGraphicsPixmapItem):
     """Base class for all nodes in the visual programming interface."""
     
@@ -596,7 +607,7 @@ class FunctionNode(Node):
                 if preview is not None:
                     return preview
             except Exception as e:  # noqa: BLE001
-                print(f"render_preview failed for {self.op.id}: {e}")
+                _notify(self, "error", f"Preview failed for {self.op.label}: {e}")
         return out
 
     def _input_qt_nodes(self):
@@ -614,7 +625,7 @@ class FunctionNode(Node):
         try:
             return summarize(self.get_output_image(), dict(self.gnode.params)) or {}
         except Exception as e:  # noqa: BLE001
-            print(f"summary failed for {self.op.id}: {e}")
+            _notify(self, "error", f"Summary failed for {self.op.label}: {e}")
             return {}
 
     def can_accept_input(self, input_node: Node) -> bool:
@@ -670,7 +681,7 @@ class SaveToFileNode(FunctionNode):
         try:
             img = render([], element, params)
         except Exception as e:  # noqa: BLE001
-            print(f"save preview render failed: {e}")
+            _notify(self, "error", f"Save preview render failed: {e}")
             return None
         if not isinstance(img, np.ndarray):
             return None
@@ -720,11 +731,11 @@ class SaveToFileNode(FunctionNode):
 
             filepath = os.path.join(output_dir, filename)
             if cv2.imwrite(filepath, image):
-                print(f"Image saved to: {filepath}")
+                _notify(self, "info", f"Saved image to {filepath}")
             else:
-                print(f"Failed to save image to: {filepath}")
-        except Exception as e:
-            print(f"Error saving image: {e}")
+                _notify(self, "error", f"Failed to save image to {filepath}")
+        except Exception as e:  # noqa: BLE001
+            _notify(self, "error", f"Error saving image: {e}")
 
 
 class ExportCodeNode(FunctionNode):
@@ -763,6 +774,6 @@ class ExportCodeNode(FunctionNode):
             path = os.path.join(output_dir, f"pipeline_{self._node_index}.txt")
             with open(path, "w", encoding="utf-8") as f:
                 f.write(code)
-            print(f"Pipeline pseudocode written to: {path}")
+            _notify(self, "info", f"Wrote pipeline pseudocode to {path}")
         except Exception as e:  # noqa: BLE001
-            print(f"Error writing pseudocode: {e}")
+            _notify(self, "error", f"Error writing pseudocode: {e}")

@@ -1139,6 +1139,47 @@ def check_background_eval(app) -> None:
     print("OK  background eval: off-thread recompute (param + connect) + spinner + coalescing")
 
 
+def check_error_surfacing(app) -> None:
+    """View-layer results and failures reach the UI (controller.notify -> status
+    bar) instead of only printing to stdout."""
+    w = make_window(app)
+    ctrl = w.drop_widget.view.controller
+    events: list = []
+    ctrl.signals.notify.connect(lambda level, msg: events.append((level, msg)))
+
+    # A successful save surfaces an info message (was a stdout print).
+    src = add_image(w, gradient_bgr())
+    save = add_func(w, "Save to File")
+    fname = "smoke_notify_DELETEME.png"
+    out_path = os.path.join("output", fname)
+    if os.path.exists(out_path):
+        os.remove(out_path)
+    save.set_parameter("use_custom", True)
+    save.set_parameter("filename", fname)
+    connect(w, src, save)              # connecting triggers execution -> write -> notify
+    app.processEvents()
+    assert any(lvl == "info" and "Saved image" in m for lvl, m in events), \
+        "a successful save should surface an info notification"
+    if os.path.exists(out_path):
+        os.remove(out_path)
+
+    # A failing summary hook surfaces an error (was a stdout print). replace() makes
+    # a per-node op copy, so the registry singleton is untouched.
+    thresh = add_func(w, "Threshold")
+    connect(w, src, thresh)
+    app.processEvents()
+
+    def _boom(*_a, **_k):
+        raise ValueError("kaboom")
+
+    thresh.op = replace(thresh.op, summary=_boom)
+    thresh.get_summary()
+    assert any(lvl == "error" and "kaboom" in m for lvl, m in events), \
+        "a failing summary hook should surface an error notification"
+    w.close()
+    print("OK  view-layer results + failures surface as status-bar notifications")
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     checks = [
@@ -1177,6 +1218,7 @@ def main() -> int:
         check_canvas_zoom_scroll,
         check_flow_highlight,
         check_background_eval,
+        check_error_surfacing,
     ]
     for chk in checks:
         chk(app)
