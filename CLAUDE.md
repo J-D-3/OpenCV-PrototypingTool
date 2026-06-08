@@ -20,8 +20,9 @@ follow automatically. Add a corner glyph by keying the op id in
 
 ## Setup (first time / fresh clone)
 The `.venv` is git-ignored, so a fresh clone has none — create it before running
-anything. Use Python 3.13 (3.12 also works); a bare `python` on PATH may resolve
-to a bundled interpreter (e.g. Inkscape's) that lacks the packages — prefer the venv.
+anything. Use Python 3.13 (3.12 and 3.14 also work); a bare `python` on PATH may
+resolve to a bundled interpreter (e.g. Inkscape's) that lacks the packages — prefer
+the venv.
 ```powershell
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt

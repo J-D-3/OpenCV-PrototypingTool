@@ -11,7 +11,8 @@ view or save the result. Built with **PyQt6** + **OpenCV**.
 
 ### Prerequisites
 - **Python 3.13** (the project's `__pycache__` and venv were built against 3.13;
-  3.12 also works). On Windows the `py -3.13` launcher is the easiest way to pin it.
+  3.12 and 3.14 also work — 3.14 resolves wheels for all deps and both test suites
+  pass). On Windows the `py -3.13` launcher is the easiest way to pin it.
 - Note: a `python` on `PATH` may resolve to a bundled interpreter (e.g.
   Inkscape's), which lacks these packages. Prefer the venv below.
 
