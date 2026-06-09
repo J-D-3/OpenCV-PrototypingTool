@@ -962,6 +962,60 @@ def _compute_detect_centers(inputs, p, in_space="bgr"):
         return None
 
 
+def _nearest_labels(feat, seeds):
+    """Label each row of ``feat`` by the index of the nearest ``seed`` (squared L2),
+    looping over the few seeds so the (N, k) distance table never materializes the
+    big (N, k, 3) broadcast."""
+    d = np.empty((feat.shape[0], seeds.shape[0]), np.float32)
+    for j in range(seeds.shape[0]):
+        diff = feat - seeds[j]
+        d[:, j] = np.einsum("ij,ij->i", diff, diff)
+    return np.argmin(d, axis=1).astype(np.int32)
+
+
+def _assign_to_centers(img, centers_payload, in_space, algorithm="nearest", lum_weight=1.0):
+    """Label every pixel by a detected colour centre, in unified 3-D CIELAB. Both the
+    pixels and the seeds are placed in Lab with L* scaled by ``lum_weight`` (< 1 =
+    chroma-driven, more lighting-stable), so assignment happens in one space — the
+    detection-time chroma split never decides where a pixel goes. ``nearest`` is a
+    pure 1-NN (ΔE) assignment; ``kmeans`` then refines the centres with Lloyd
+    iterations seeded FROM the detected centres (``KMEANS_USE_INITIAL_LABELS``), so
+    the detection guides the result instead of a random init. Emits the standard
+    CLUSTERS payload (centres recomputed as mean input-space colour, dark→light)."""
+    seeds = np.asarray(centers_payload.get("lab"), np.float32)
+    if seeds.ndim != 2 or seeds.shape[0] == 0:
+        return None
+    lab, _, _, _ = _lab_lch(_as_bgr(img, in_space))         # (N, 3) pixel Lab
+    lw = float(lum_weight)
+    feat_w = lab.copy(); feat_w[:, 0] *= lw
+    seed_w = seeds.copy(); seed_w[:, 0] *= lw
+    feat_w = np.ascontiguousarray(feat_w, np.float32)
+    labels = _nearest_labels(feat_w, np.ascontiguousarray(seed_w, np.float32))
+    if algorithm == "kmeans" and seeds.shape[0] >= 2:
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        with _KMEANS_LOCK:
+            cv2.setRNGSeed(0)
+            _, refined, _ = cv2.kmeans(feat_w, seeds.shape[0], labels.reshape(-1, 1),
+                                       criteria, 1, cv2.KMEANS_USE_INITIAL_LABELS)
+        labels = refined.flatten().astype(np.int32)
+    return _finalize_clusters(img, labels, lab, "lab", in_space)   # unweighted Lab for the diag
+
+
+def _compute_assign_centers(inputs, p, in_space="bgr"):
+    """Assign every pixel of an image to the nearest detected colour centre (or
+    refine those centres with k-means). Two inputs: the image and a CENTERS payload
+    from Detect Color Centers. Output is the standard CLUSTERS payload."""
+    try:
+        img, centers = inputs[0], inputs[1]
+        if not isinstance(centers, dict) or "lab" not in centers:
+            return None
+        return _assign_to_centers(img, centers, in_space, p.get("algorithm", "nearest"),
+                                  p.get("lum_weight", 1.0))
+    except Exception as e:
+        print(f"Error executing assign_centers: {e}")
+        return None
+
+
 def _compute_mean_shift(inputs, p):
     """Mean-shift segmentation (mode-seeking, no k). Returns a segmented image."""
     try:
@@ -2471,6 +2525,11 @@ _KMETHODS = [
     ("Histogram peaks", "peaks"),
     ("Elbow (3D, data-driven)", "elbow"),
 ]
+# How Assign to Centers labels pixels against the detected seeds.
+_ASSIGN_ALGOS = [
+    ("Nearest centre (ΔE)", "nearest"),
+    ("K-Means (refine)", "kmeans"),
+]
 _MORPH_OPS = [
     ("Erode", cv2.MORPH_ERODE),
     ("Dilate", cv2.MORPH_DILATE),
@@ -2828,6 +2887,30 @@ OPS: list = [
                     "pixels by lightness (adaptive number of gray levels). Emits a CENTERS "
                     "payload for 'Assign to Centers' — split out from Auto Cluster so the "
                     "detected centres seed the clustering instead of being thrown away.",
+    ),
+    Operation(
+        id="assign_centers", label="Assign to Centers", category="Color Quantization",
+        inputs=[Port("image", datatypes.IMAGE), Port("centers", datatypes.CENTERS)],
+        outputs=[Port("out", datatypes.CLUSTERS)],
+        params=[
+            ParamSpec("algorithm", "nearest", kind="enum", choices=_ASSIGN_ALGOS,
+                      label="Assignment",
+                      help="How pixels are labelled against the detected centres. 'Nearest "
+                           "centre' is a pure ΔE 1-NN in CIELAB (centres stay put). 'K-Means' "
+                           "refines the centres with Lloyd iterations seeded FROM the detected "
+                           "centres — honours the detection instead of a random init."),
+            ParamSpec("lum_weight", 1.0, kind="float", min=0.0, max=2.0, step=0.1,
+                      label="Luminance weight",
+                      help="Scales L* in the CIELAB distance; <1 = chroma-driven, more "
+                           "lighting-stable (lightness differences matter less)."),
+        ],
+        compute=_compute_assign_centers, color=(0, 150, 136), out_space="passthrough",
+        space_aware=True, in_label="Mat + Centres", out_label="Clusters",
+        render_preview=_render_kmeans, summary=_summary_kmeans, preview_is_chart=True,
+        description="Assign every pixel to a detected colour centre (from Detect Color "
+                    "Centers), in unified CIELAB: nearest centre (ΔE) or k-means refined "
+                    "from those centres. Emits a CLUSTERS payload (use Reduce Colors to "
+                    "render). The detect→assign pair replaces Auto Cluster.",
     ),
     Operation(
         id="auto_cluster", label="Auto Cluster", category="Color Quantization",

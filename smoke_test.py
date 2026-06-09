@@ -947,8 +947,8 @@ def check_function_search(app) -> None:
     vis = visible_ops()
     assert "Gaussian Blur" in vis and "Auto Cluster" in vis, vis
 
-    search.setText("kmeans")                  # cv::kmeans -> both clustering ops
-    assert set(visible_ops()) == {"K-Means Cluster", "Auto Cluster"}, visible_ops()
+    search.setText("kmeans")                  # cv::kmeans -> every op that calls it
+    assert set(visible_ops()) == {"K-Means Cluster", "Auto Cluster", "Assign to Centers"}, visible_ops()
 
     search.setText("contours")                # by category -> the whole category
     vis = visible_ops()

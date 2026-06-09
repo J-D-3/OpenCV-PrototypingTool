@@ -245,6 +245,28 @@ def _emit_detect_centers(o, i, p):
     ]
 
 
+def _emit_assign_centers(o, i, p):
+    algo = p.get("algorithm", "nearest")
+    out = [
+        f"# Assign each pixel to a detected colour centre ({i[1]}), in CIELAB "
+        f"(L* scaled by lum_weight={p.get('lum_weight')})",
+        f"bgr = as_bgr({i[0]})                                 # cv::cvtColor from the tracked space",
+        f"lab = srgb_to_lab(bgr)                               # true CIELAB",
+        f"labels = argmin_c || lab_pixel - {i[1]}.seeds[c] ||²    # nearest centre (ΔE 1-NN)",
+    ]
+    if algo == "kmeans":
+        out += ["cv::setRNGSeed(0)                                   # deterministic refine",
+                f"labels = cv::kmeans(lab, K={i[1]}.k, bestLabels=labels, "
+                "KMEANS_USE_INITIAL_LABELS)   # refine the centres from the seeds"]
+    else:
+        out.append("# (algorithm='kmeans' would cv::setRNGSeed(0) + cv::kmeans to refine the centres from these labels)")
+    out += [
+        "centers[c] = mean INPUT-space colour of pixels labelled c; reorder dark->light",
+        f"{o} = {{centers, labels, shape, k}}   # CLUSTERS payload",
+    ]
+    return out
+
+
 def _emit_reduce_colors(o, i, p):
     return [f"{o} = centers[labels].reshape(shape)   # rebuild image from {i[0]} (CLUSTERS)"]
 
@@ -385,6 +407,7 @@ _CODE.update({
     "kmeans": _emit_kmeans,
     "auto_cluster": _emit_auto_cluster,
     "detect_centers": _emit_detect_centers,
+    "assign_centers": _emit_assign_centers,
     "hdbscan_cluster": _emit_hdbscan,
     "reduce_colors": _emit_reduce_colors,
     "label_regions": _emit_label_regions,

@@ -1030,6 +1030,47 @@ def test_detect_centers():
     print("OK  detect_centers: LCh hue + adaptive neutral L* seeds, capped by max_k")
 
 
+def test_assign_centers():
+    from core import datatypes, codegen
+    from core.operations import REGISTRY
+    # Detect -> Assign -> Reduce: four flat regions round-trip to ~themselves.
+    seg = np.zeros((40, 40, 3), np.uint8)
+    seg[:20, :20] = (40, 40, 200); seg[:20, 20:] = (40, 200, 40)
+    seg[20:, :20] = (255, 255, 255); seg[20:, 20:] = (10, 10, 10)
+
+    for algo in ("nearest", "kmeans"):
+        m = GraphModel()
+        s = _src(m, seg)
+        det = _op(m, "detect_centers", max_k=12, smoothing=2.0, min_prominence=0.3,
+                  chroma_threshold=10.0)
+        asg = _op(m, "assign_centers", algorithm=algo, lum_weight=1.0)
+        red = _op(m, "reduce_colors")
+        m.add_edge(s, det)
+        m.add_edge(s, asg, 0)            # image   -> port 0
+        m.add_edge(det, asg, 1)          # centers -> port 1
+        m.add_edge(asg, red)
+        Engine(m).evaluate_all()
+        out = asg.output
+        assert isinstance(out, dict) and "labels" in out, f"{algo}: CLUSTERS payload"
+        assert out["k"] == 4, f"{algo}: 4 centres -> 4 clusters (got {out['k']})"
+        lab = out["labels"].reshape(40, 40)
+        quads = {int(lab[10, 10]), int(lab[10, 30]), int(lab[30, 10]), int(lab[30, 30])}
+        assert len(quads) == 4, f"{algo}: the 4 regions get 4 distinct labels (got {quads})"
+        quant = red.output
+        assert quant is not None and quant.shape == seg.shape, f"{algo}: reduce rebuilds the image"
+        # each region recoloured close to its own mean (round-trip is near-lossless here)
+        assert np.allclose(quant[5, 5], seg[5, 5], atol=12), f"{algo}: red region preserved"
+
+    # CENTERS feeds an assign port but NOT a clusters port (Reduce Colors).
+    assert datatypes.compatible(datatypes.CENTERS, datatypes.CENTERS)
+    assert not datatypes.compatible(datatypes.CENTERS, datatypes.CLUSTERS), \
+        "CENTERS must not wire straight into a CLUSTERS input"
+    acode = codegen.op_pseudocode(REGISTRY["assign_centers"],
+                                  {"algorithm": "kmeans", "lum_weight": 1.0})
+    assert "KMEANS_USE_INITIAL_LABELS" in acode and "CLUSTERS" in acode, acode
+    print("OK  assign_centers: nearest + k-means-refine label every pixel; CENTERS type-gated")
+
+
 def test_cluster_preview_diag():
     # The clustering preview is data-driven: compute() must stash the diagnostics
     # (per-cluster counts/spread + a subsampled feature-space scatter, plus how k
@@ -1265,6 +1306,7 @@ def main():
     test_auto_cluster_elbow()
     test_auto_cluster_chroma_split()
     test_detect_centers()
+    test_assign_centers()
     test_cluster_preview_diag()
     test_normalize_lighting()
     test_cluster_space()
@@ -1273,7 +1315,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 48 backend tests passed")
+    print("\nENGINE OK: 49 backend tests passed")
 
 
 if __name__ == "__main__":
