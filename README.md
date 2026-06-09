@@ -190,10 +190,12 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
   **extracted-colours palette** (swatch width ∝ pixel share, like Auto Cluster), and — when
   enabled — the **reachability plot with a cluster ribbon** beneath it (each ordered point's
   cluster colour, aligned with the bars). The **3-D colour-space scatter** moved into the
-  **inspector pane** as an *interactive* widget (drag to rotate, scroll to zoom): the B/G/R
-  cube with each pixel painted its cluster mean. For clustering nodes the inspector now hides
-  the pixel-neighbourhood grid + histogram (meaningless for a palette) and shows the scatter in
-  their place. Also fixed the reachability plot using `min_cluster_size` as its `min_pts`
+  **inspector pane** as an *interactive* widget (drag to rotate, scroll to zoom): pixels
+  plotted in perceptual **CIELAB** space with **labelled L/a/b axes**, each painted its cluster
+  mean, plus **toggleable transparent enclosing spheres** per cluster (showing each cluster's
+  extent). For clustering nodes the inspector now hides the pixel-neighbourhood grid +
+  histogram (meaningless for a palette) and shows the scatter in their place. Also fixed the
+  reachability plot using `min_cluster_size` as its `min_pts`
   (which over-smoothed it into a featureless ramp) — it now uses a small `min_pts` so density
   peaks are visible.
 - **2026-06-09** — **Density Cluster: migrated to the new `optics` colour API.** The sibling

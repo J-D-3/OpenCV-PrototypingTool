@@ -1087,6 +1087,36 @@ def _attach_reachability(out, opt, bgr, space, voxel, min_pts):
         pass
 
 
+def _attach_scatter_lab(out, opt):
+    """Add CIELAB positions + per-cluster Lab centre/radius to the diag, for the inspector's
+    interactive 3-D scatter (perceptual Lab axes; optional enclosing spheres show each
+    cluster's extent). Uses the library's srgb_to_lab (pure NumPy, thread-safe). The point
+    colours stay the cluster mean BGR (``out['centers']``). Diagnostic only — never fails."""
+    try:
+        diag = out["diag"]
+        samp = diag.get("scatter3d")                       # BGR subsample (M, 3)
+        if samp is None or len(samp) == 0:
+            return
+        rgb = np.ascontiguousarray(samp[:, ::-1].astype(np.float64))   # BGR -> RGB
+        lab = np.asarray(opt.srgb_to_lab(rgb), np.float32)             # (M, 3) = L, a, b
+        diag["scatter_lab"] = lab
+        labs = np.asarray(diag.get("scatter3d_labels"), np.int64)
+        kreal = int(out.get("k", 0))
+        centres = np.zeros((kreal, 3), np.float32)
+        radii = np.zeros(kreal, np.float32)
+        for c in range(kreal):
+            m = labs == c
+            if m.any():
+                cl = lab[m]
+                centres[c] = cl.mean(axis=0)
+                d = np.sqrt(((cl - centres[c]) ** 2).sum(axis=1))
+                radii[c] = float(np.percentile(d, 85))     # robust extent (ignore outliers)
+        diag["cluster_centers_lab"] = centres
+        diag["cluster_radii_lab"] = radii
+    except Exception:
+        pass
+
+
 def _finalize_hdbscan(bgr, labels, in_space, noise_mode="nearest"):
     """Build a CLUSTERS payload from density labels (-1 = noise): real clusters ordered
     dark→light with their mean BGR centre. Noise handling: ``nearest`` reassigns each
@@ -1178,6 +1208,7 @@ def _compute_hdbscan(inputs, p, in_space="bgr"):
             metric=p.get("metric", "l2"), seed=int(p.get("seed", 42)), max_dim=None)
         labels = np.asarray(res.labels).reshape(-1).astype(np.int32)   # per-pixel, -1 = noise
     out = _finalize_hdbscan(bgr, labels, in_space, noise_mode=p.get("noise_handling", "nearest"))
+    _attach_scatter_lab(out, opt)           # CIELAB positions + cluster spheres for the inspector
     if p.get("show_reachability"):
         with _OPTICS_LOCK:
             _attach_reachability(out, opt, bgr, space, voxel, mcs)

@@ -655,34 +655,65 @@ class ImagePanel(QtWidgets.QWidget):
 
 
 class ClusterScatter3D(QtWidgets.QWidget):
-    """Interactive 3-D scatter of clustered colours: the B/G/R colour cube with each pixel
-    painted its cluster's mean colour. **Drag to rotate, scroll to zoom.** For clustering
-    nodes the inspector shows this in place of the pixel grid + histogram (which a palette
-    has no use for). Points are a precomputed subsample stored in the clusters payload."""
+    """Interactive 3-D scatter of clustered colours in **CIELAB** space: each pixel placed at
+    its (L, a, b) and painted its cluster's mean colour, with labelled axes and (toggleable)
+    transparent enclosing spheres per cluster. **Drag to rotate, scroll to zoom.** For
+    clustering nodes the inspector shows this in place of the pixel grid + histogram. Points
+    and sphere centres/radii are a precomputed subsample in the clusters payload."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(170)
-        self.setToolTip("Drag to rotate · scroll to zoom — the colour cube of the clustered pixels")
-        self._pts = None            # (N, 3) float, centred: BGR/255 - 0.5
+        self.setToolTip("Drag to rotate · scroll to zoom — the CIELAB colour space of the clusters")
+        self._pts = None            # (N, 3) display coords (x, y, z), centred & uniformly scaled
         self._qcols = []            # QColor per point (its cluster's mean colour)
+        self._spheres = []          # [(centre3 (x,y,z), radius, QColor), ...] per cluster
+        self._axes = ("L", "a", "b")
         self._yaw, self._pitch, self._zoom = 0.7, 0.45, 1.0
         self._last = None
+        # Toggle for the per-cluster enclosing spheres (floats over the top-left corner).
+        self._spheres_cb = QtWidgets.QCheckBox("spheres", self)
+        self._spheres_cb.move(6, 6)
+        self._spheres_cb.setStyleSheet(
+            "QCheckBox{color:#ddd; background:rgba(20,20,20,170); padding:2px 5px; border-radius:3px;}")
+        self._spheres_cb.toggled.connect(self.update)
 
-    def set_data(self, pts, labels, centers):
+    def set_data(self, pts, labels, centers, sphere_centers=None, sphere_radii=None,
+                 axis_names=("L", "a", "b")):
         if pts is None or len(pts) == 0 or centers is None or len(centers) == 0:
-            self._pts, self._qcols = None, []
+            self._pts, self._qcols, self._spheres = None, [], []
             self.update()
             return
-        self._pts = (np.asarray(pts, np.float32) / 255.0) - 0.5
+        p = np.asarray(pts, np.float32)
+        lo, hi = p.min(axis=0), p.max(axis=0)
+        self._origin = (lo + hi) / 2.0
+        self._scale = float((hi - lo).max()) or 1.0   # UNIFORM scale: spheres stay spheres
+        self._axes = tuple(axis_names)
+
+        def to_disp(arr):
+            # Centre + uniform-scale to ~[-0.5, 0.5], then map columns to display axes:
+            # col0 -> y (up), col1 -> x (right), col2 -> z (depth).
+            a = (np.asarray(arr, np.float32) - self._origin) / self._scale
+            return a[..., [1, 0, 2]]
+
+        self._pts = to_disp(p)
         cen = np.clip(np.asarray(centers), 0, 255).astype(int)
         lab = np.clip(np.asarray(labels, np.int64), 0, len(cen) - 1)
-        cols = cen[lab]             # (N, 3) BGR
+        cols = cen[lab]
         self._qcols = [QtGui.QColor(int(r), int(g), int(b)) for b, g, r in cols]
+
+        self._spheres = []
+        if sphere_centers is not None and sphere_radii is not None and len(sphere_centers):
+            sc = to_disp(np.asarray(sphere_centers, np.float32))
+            sr = np.asarray(sphere_radii, np.float32) / self._scale
+            for c in range(len(sc)):
+                if sr[c] > 0 and c < len(cen):
+                    b, g, r = cen[c]
+                    self._spheres.append((sc[c], float(sr[c]), QtGui.QColor(int(r), int(g), int(b))))
         self.update()
 
     def _rot(self, p):
-        """Rotate points by the current yaw/pitch; return screen-x, screen-y, depth."""
+        """Rotate display coords by the current yaw/pitch; return screen-x, screen-y, depth."""
         ca, sa = np.cos(self._yaw), np.sin(self._yaw)
         cb, sb = np.cos(self._pitch), np.sin(self._pitch)
         x, y, z = p[..., 0], p[..., 1], p[..., 2]
@@ -701,18 +732,28 @@ class ClusterScatter3D(QtWidgets.QWidget):
             return
         qp.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
         w, h = self.width(), self.height()
-        s = self._zoom * min(w, h) * 0.62
+        s = self._zoom * min(w, h) * 0.60
         cx, cy = w / 2.0, h / 2.0
+
+        def screen(p3):                       # display coords -> screen points
+            xr, yr, zd = self._rot(np.atleast_2d(p3))
+            return cx + xr * s, cy - yr * s, zd
 
         # Faint wireframe cube for orientation.
         corners = np.array([[i, j, k] for i in (-.5, .5) for j in (-.5, .5) for k in (-.5, .5)],
                            np.float32)
-        ex, ey, _ = self._rot(corners)
-        epx, epy = cx + ex * s, cy - ey * s
+        epx, epy, _ = screen(corners)
         qp.setPen(QtGui.QPen(QtGui.QColor(70, 70, 70), 1))
         for a, b in [(0, 1), (0, 2), (0, 4), (1, 3), (1, 5), (2, 3),
                      (2, 6), (3, 7), (4, 5), (4, 6), (5, 7), (6, 7)]:
             qp.drawLine(QtCore.QPointF(epx[a], epy[a]), QtCore.QPointF(epx[b], epy[b]))
+
+        # Axis labels at the cube's axis tips: y(up)=axes[0], x(right)=axes[1], z(depth)=axes[2].
+        tips = np.array([[0, 0.62, 0], [0.62, 0, 0], [0, 0, 0.62]], np.float32)
+        tpx, tpy, _ = screen(tips)
+        qp.setPen(QtGui.QColor(190, 190, 190))
+        for name, tx, ty in zip(self._axes, tpx, tpy):
+            qp.drawText(QtCore.QPointF(tx - 3, ty + 4), name)
 
         # Points, painter's-algorithm depth sort (far first).
         xr, yr, zd = self._rot(self._pts)
@@ -722,6 +763,16 @@ class ClusterScatter3D(QtWidgets.QWidget):
         for i in order:
             qp.setBrush(self._qcols[i])
             qp.drawEllipse(QtCore.QPointF(float(px[i]), float(py[i])), 2.2, 2.2)
+
+        # Transparent enclosing spheres (a sphere projects to a circle under orthographic).
+        if self._spheres_cb.isChecked():
+            for centre3, rad, qcol in self._spheres:
+                sx, sy, _ = screen(centre3)
+                fill = QtGui.QColor(qcol); fill.setAlpha(40)
+                edge = QtGui.QColor(qcol); edge.setAlpha(170)
+                qp.setBrush(fill)
+                qp.setPen(QtGui.QPen(edge, 1))
+                qp.drawEllipse(QtCore.QPointF(float(sx[0]), float(sy[0])), rad * s, rad * s)
 
     def mousePressEvent(self, e):
         self._last = e.position()
@@ -922,8 +973,13 @@ class InspectorPane(QtWidgets.QWidget):
                 and "scatter3d" in payload["diag"] else None)
         self._scatter.setVisible(scat is not None)
         if scat is not None:
-            self._scatter.set_data(scat.get("scatter3d"), scat.get("scatter3d_labels"),
-                                   payload.get("centers"))
+            if "scatter_lab" in scat:        # perceptual CIELAB positions + cluster spheres
+                self._scatter.set_data(scat["scatter_lab"], scat.get("scatter3d_labels"),
+                                       payload.get("centers"), scat.get("cluster_centers_lab"),
+                                       scat.get("cluster_radii_lab"), axis_names=("L", "a", "b"))
+            else:                             # fallback: raw BGR cube
+                self._scatter.set_data(scat.get("scatter3d"), scat.get("scatter3d_labels"),
+                                       payload.get("centers"), axis_names=("B", "G", "R"))
 
         if chart:
             self._hist.clear()
