@@ -174,6 +174,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Main drop/view pane
         self.drop_widget = ImageDropWidget()
+        # Let the pipeline pane shrink to ~2/3 of its content-driven minimum (word-wrap the
+        # hint label, which otherwise forces the pane wide).
+        _pw_min = self.drop_widget.minimumSizeHint().width()
+        self.drop_widget.instruction.setWordWrap(True)
+        self.drop_widget.setMinimumWidth(int(_pw_min * 2 / 3))
 
         # Live inspector for the currently selected node (right side).
         self.inspector_pane = InspectorPane()
@@ -184,12 +189,30 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
+        splitter.setChildrenCollapsible(True)   # panes may also be dragged shut
         splitter.setSizes([240, 900, 380])   # give the inspector pane a bit more width
 
+        # Collapse toggles: hide/show each pane; the remaining panes take its width.
+        toggles = QtWidgets.QHBoxLayout()
+        toggles.setSpacing(4)
+        toggles.addWidget(QtWidgets.QLabel("Panes:"))
+        for _name, _pane in (("Menu", sidebar), ("Pipeline", self.drop_widget),
+                             ("Inspector", self.inspector_pane)):
+            _btn = QtWidgets.QToolButton()
+            _btn.setText(_name)
+            _btn.setCheckable(True)
+            _btn.setChecked(True)
+            _btn.setToolTip(f"Show/hide the {_name} pane")
+            _btn.toggled.connect(_pane.setVisible)
+            toggles.addWidget(_btn)
+        toggles.addStretch()
+
         container = QtWidgets.QWidget()
-        container.setLayout(QtWidgets.QHBoxLayout())
-        container.layout().setContentsMargins(8, 8, 8, 8)
-        container.layout().addWidget(splitter)
+        vbox = QtWidgets.QVBoxLayout(container)
+        vbox.setContentsMargins(8, 8, 8, 8)
+        vbox.setSpacing(4)
+        vbox.addLayout(toggles)
+        vbox.addWidget(splitter, 1)
         self.setCentralWidget(container)
 
         open_btn.clicked.connect(self.drop_widget.browse_for_image)

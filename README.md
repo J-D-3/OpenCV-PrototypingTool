@@ -185,6 +185,14 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-09** — **Cluster scatter: CIELAB axes; collapsible inspector layout.** The 3-D
+  colour scatter now draws the full CIELAB solid: the **L axis** as a black→white gradient up
+  the middle, an **a axis** (green→red) and **b axis** (blue→yellow) crossing at neutral
+  (gradient lines, labelled), and the background gradient **inverted** (light top, dark bottom)
+  to match the L axis. Layout: the three panes (menu / pipeline / inspector) are in a splitter
+  with **Show: Menu | Pipeline | Inspector** toggle buttons — collapse any pane and the rest
+  take its width; the **pipeline pane's minimum width dropped to ~2/3** (the hint label now
+  word-wraps), and the inspector can grow wider for the scatter.
 - **2026-06-09** — **Density Cluster: richer preview + interactive 3-D colour scatter.** The
   node preview stacks (1) the recoloured image titled with the **cluster count**, (2) an
   **extracted-colours palette** (swatch width ∝ pixel share, like Auto Cluster), and — when

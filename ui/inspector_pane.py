@@ -756,11 +756,11 @@ class ClusterScatter3D(QtWidgets.QWidget):
     def paintEvent(self, _e):
         qp = QtGui.QPainter(self)
         w, h = self.width(), self.height()
-        # Gray gradient backdrop (dark top, light bottom): dark clusters sit low in L and
-        # show against the light bottom; light clusters sit high and show against the dark top.
+        # Gray gradient backdrop matching the L axis: light at the top (high L), dark at the
+        # bottom (low L) — so the scene reads as "lightness increases upward".
         grad = QtGui.QLinearGradient(0, 0, 0, h)
-        grad.setColorAt(0.0, QtGui.QColor(38, 38, 38))
-        grad.setColorAt(1.0, QtGui.QColor(112, 112, 112))
+        grad.setColorAt(0.0, QtGui.QColor(120, 120, 120))   # light top  (high L / white)
+        grad.setColorAt(1.0, QtGui.QColor(30, 30, 30))      # dark bottom (low L / black)
         qp.fillRect(self.rect(), QtGui.QBrush(grad))
         if self._pts is None:
             qp.setPen(QtGui.QColor(150, 150, 150))
@@ -775,26 +775,40 @@ class ClusterScatter3D(QtWidgets.QWidget):
             return cx + xr * s, cy - yr * s, zd
 
         # Very light transparent reference sphere (its orthographic silhouette is a circle).
-        qp.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 36), 1))
-        qp.setBrush(QtGui.QColor(255, 255, 255, 10))
+        qp.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 30), 1))
+        qp.setBrush(QtGui.QColor(255, 255, 255, 8))
         qp.drawEllipse(QtCore.QPointF(cx, cy), self._R * s, self._R * s)
 
-        # Neutral (gray / L) axis up the middle, labelled.
-        ax, ay, _ = screen(np.array([[0, -self._R, 0], [0, self._R, 0]], np.float32))
-        qp.setPen(QtGui.QPen(QtGui.QColor(210, 210, 210, 90), 1))
-        qp.drawLine(QtCore.QPointF(ax[0], ay[0]), QtCore.QPointF(ax[1], ay[1]))
-        qp.setPen(QtGui.QColor(235, 235, 235))
-        qp.drawText(QtCore.QPointF(ax[1] - 3, ay[1] - 4), "L")
+        # The CIELAB axes as gradient lines: L black->white up the middle, a green->red,
+        # b blue->yellow across the equatorial plane (a QPen with a gradient brush).
+        def grad_axis(p0, p1, c0, c1, width):
+            (x0, y0, _), (x1, y1, _) = screen(p0), screen(p1)
+            x0, y0, x1, y1 = float(x0[0]), float(y0[0]), float(x1[0]), float(y1[0])
+            g = QtGui.QLinearGradient(x0, y0, x1, y1)
+            g.setColorAt(0.0, c0); g.setColorAt(1.0, c1)
+            qp.setPen(QtGui.QPen(QtGui.QBrush(g), width))
+            qp.drawLine(QtCore.QPointF(x0, y0), QtCore.QPointF(x1, y1))
+            return x1, y1                                    # the +tip, for the label
+
+        R, Rq = self._R, self._Req
+        l_tip = grad_axis([0, -R, 0], [0, R, 0], QtGui.QColor(0, 0, 0), QtGui.QColor(255, 255, 255), 3)
+        a_tip = grad_axis([-Rq, 0, 0], [Rq, 0, 0], QtGui.QColor(0, 170, 70), QtGui.QColor(225, 45, 45), 2)
+        b_tip = grad_axis([0, 0, -Rq], [0, 0, Rq], QtGui.QColor(45, 70, 225), QtGui.QColor(220, 200, 0), 2)
 
         # Hue-rainbow equator in the a–b plane (true colour at each hue).
         n = len(_HUE_RING)
         ang = np.linspace(0, 2 * np.pi, n, endpoint=False)
-        ring = np.stack([self._Req * np.cos(ang), np.zeros(n), self._Req * np.sin(ang)], axis=1)
+        ring = np.stack([Rq * np.cos(ang), np.zeros(n), Rq * np.sin(ang)], axis=1)
         rx, ry, _ = screen(ring.astype(np.float32))
         for i in range(n):
             j = (i + 1) % n
             qp.setPen(QtGui.QPen(_HUE_RING[i], 2))
             qp.drawLine(QtCore.QPointF(rx[i], ry[i]), QtCore.QPointF(rx[j], ry[j]))
+
+        # Axis labels at the +tips.
+        qp.setPen(QtGui.QColor(245, 245, 245))
+        for name, (tx, ty) in (("L", l_tip), ("a", a_tip), ("b", b_tip)):
+            qp.drawText(QtCore.QPointF(tx + 3, ty + 4), name)
 
         # Points, depth-sorted; cluster-mean colour or the pixel's own colour.
         cols = self._qtrue if self._true_cb.isChecked() else self._qmean
@@ -842,7 +856,7 @@ class InspectorPane(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(340)
-        self.setMaximumWidth(580)
+        self.setMaximumWidth(900)   # generous: the 3-D scatter benefits; fills when a pane collapses
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
