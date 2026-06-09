@@ -1230,41 +1230,6 @@ def _band_cluster_ribbon(labels, centers, height=None):
     return band
 
 
-def _band_scatter3d(diag, centers, width=_PREVIEW_W, height=None):
-    """A 3-D scatter of the image's colours (the B/G/R cube under a fixed isometric view),
-    each pixel painted its CLUSTER's mean colour — so you see how the colour space was
-    partitioned. Points are a precomputed subsample, so it's a cheap pure-draw."""
-    height = height or _px(160)
-    band = np.full((height, width, 3), 30, np.uint8)
-    pts = diag.get("scatter3d")
-    if pts is None or len(pts) == 0:
-        return band
-    labs = np.asarray(diag.get("scatter3d_labels"), np.int64)
-    c = pts.astype(np.float32) / 255.0
-    x, y, z = c[:, 0], c[:, 1], c[:, 2]
-    cos30, sin30 = 0.8660254, 0.5
-    u = (x - z) * cos30                  # isometric: x to the right, z to the left, y up
-    v = (x + z) * sin30 - y
-
-    def norm(a):
-        lo, hi = float(a.min()), float(a.max())
-        return (a - lo) / ((hi - lo) or 1.0)
-
-    m = _px(18)
-    sx = (m + norm(u) * (width - 2 * m)).astype(int)
-    sy = (m + (1.0 - norm(v)) * (height - 2 * m)).astype(int)
-    cen = np.clip(centers, 0, 255).astype(np.uint8)
-    r = _tk(1)
-    for i in range(len(pts)):
-        l = int(labs[i])
-        col = cen[l] if 0 <= l < len(cen) else (160, 160, 160)
-        cv2.circle(band, (int(sx[i]), int(sy[i])), r, (int(col[0]), int(col[1]), int(col[2])),
-                   -1, cv2.LINE_AA)
-    cv2.putText(band, "B / G / R colour cube", (_px(4), _px(12)), _FONT, _fs(0.34),
-                (150, 150, 150), _tk(1), cv2.LINE_AA)
-    return band
-
-
 def _render_hdbscan(inputs, output, p):
     """Inspector preview: the image recoloured by cluster mean (noise pixels flagged) —
     what a downstream Reduce Colors would output. When the reachability diagnostic was
@@ -1294,10 +1259,11 @@ def _render_hdbscan(inputs, output, p):
     if n_noise:
         pct = 100 * n_noise // max(1, len(labels))
         title += "  (+ noise)" if flagged else f"  ({pct}% noise -> nearest)"
+    # (The 3-D colour-space scatter lives in the inspector pane now — interactive there,
+    #  driven by diag['scatter3d'] — so it's not baked into this static preview.)
     bands = [
         _titled(img, title),
         _titled(_band_palette(centers, counts), "extracted colours  (bar width = pixel share)"),
-        _titled(_band_scatter3d(diag, centers), "colour space  (points = pixels, colour = cluster)"),
     ]
     if "reach" in diag:
         reach = np.vstack([

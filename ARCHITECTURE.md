@@ -39,7 +39,8 @@ ui/                   frontend — PyQt6 view layer
   viewer.py           ImageViewerWindow (pinned, per-node output inspector)
   inspector_pane.py   InspectorPane: docked live inspector that follows the
                       selection (image + pixel-neighbourhood + histogram filter;
-                      shows pseudocode text for the Export Code node)
+                      pseudocode for Export Code; an interactive 3-D colour scatter
+                      that replaces the grid+histogram for clustering nodes)
   parameters.py       ParameterPanel auto-generated from a node's ParamSpec schema
   widgets.py          shared small Qt widgets (e.g. LineSplitter — thin-line handle)
   main_window.py      MainWindow (sidebar + canvas + parameter panel)

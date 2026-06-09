@@ -654,6 +654,95 @@ class ImagePanel(QtWidgets.QWidget):
             self.pixelReleased.emit(*xy)
 
 
+class ClusterScatter3D(QtWidgets.QWidget):
+    """Interactive 3-D scatter of clustered colours: the B/G/R colour cube with each pixel
+    painted its cluster's mean colour. **Drag to rotate, scroll to zoom.** For clustering
+    nodes the inspector shows this in place of the pixel grid + histogram (which a palette
+    has no use for). Points are a precomputed subsample stored in the clusters payload."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(170)
+        self.setToolTip("Drag to rotate · scroll to zoom — the colour cube of the clustered pixels")
+        self._pts = None            # (N, 3) float, centred: BGR/255 - 0.5
+        self._qcols = []            # QColor per point (its cluster's mean colour)
+        self._yaw, self._pitch, self._zoom = 0.7, 0.45, 1.0
+        self._last = None
+
+    def set_data(self, pts, labels, centers):
+        if pts is None or len(pts) == 0 or centers is None or len(centers) == 0:
+            self._pts, self._qcols = None, []
+            self.update()
+            return
+        self._pts = (np.asarray(pts, np.float32) / 255.0) - 0.5
+        cen = np.clip(np.asarray(centers), 0, 255).astype(int)
+        lab = np.clip(np.asarray(labels, np.int64), 0, len(cen) - 1)
+        cols = cen[lab]             # (N, 3) BGR
+        self._qcols = [QtGui.QColor(int(r), int(g), int(b)) for b, g, r in cols]
+        self.update()
+
+    def _rot(self, p):
+        """Rotate points by the current yaw/pitch; return screen-x, screen-y, depth."""
+        ca, sa = np.cos(self._yaw), np.sin(self._yaw)
+        cb, sb = np.cos(self._pitch), np.sin(self._pitch)
+        x, y, z = p[..., 0], p[..., 1], p[..., 2]
+        xr = x * ca + z * sa
+        zr = -x * sa + z * ca
+        yr = y * cb - zr * sb
+        zd = y * sb + zr * cb
+        return xr, yr, zd
+
+    def paintEvent(self, _e):
+        qp = QtGui.QPainter(self)
+        qp.fillRect(self.rect(), QtGui.QColor(26, 26, 26))
+        if self._pts is None:
+            qp.setPen(QtGui.QColor(120, 120, 120))
+            qp.drawText(self.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, "no cluster data")
+            return
+        qp.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        w, h = self.width(), self.height()
+        s = self._zoom * min(w, h) * 0.62
+        cx, cy = w / 2.0, h / 2.0
+
+        # Faint wireframe cube for orientation.
+        corners = np.array([[i, j, k] for i in (-.5, .5) for j in (-.5, .5) for k in (-.5, .5)],
+                           np.float32)
+        ex, ey, _ = self._rot(corners)
+        epx, epy = cx + ex * s, cy - ey * s
+        qp.setPen(QtGui.QPen(QtGui.QColor(70, 70, 70), 1))
+        for a, b in [(0, 1), (0, 2), (0, 4), (1, 3), (1, 5), (2, 3),
+                     (2, 6), (3, 7), (4, 5), (4, 6), (5, 7), (6, 7)]:
+            qp.drawLine(QtCore.QPointF(epx[a], epy[a]), QtCore.QPointF(epx[b], epy[b]))
+
+        # Points, painter's-algorithm depth sort (far first).
+        xr, yr, zd = self._rot(self._pts)
+        px, py = cx + xr * s, cy - yr * s
+        order = np.argsort(zd)
+        qp.setPen(QtCore.Qt.PenStyle.NoPen)
+        for i in order:
+            qp.setBrush(self._qcols[i])
+            qp.drawEllipse(QtCore.QPointF(float(px[i]), float(py[i])), 2.2, 2.2)
+
+    def mousePressEvent(self, e):
+        self._last = e.position()
+
+    def mouseReleaseEvent(self, _e):
+        self._last = None
+
+    def mouseMoveEvent(self, e):
+        if self._last is None:
+            return
+        d = e.position() - self._last
+        self._yaw += d.x() * 0.01
+        self._pitch = max(-1.4, min(1.4, self._pitch + d.y() * 0.01))
+        self._last = e.position()
+        self.update()
+
+    def wheelEvent(self, e):
+        self._zoom = max(0.4, min(4.0, self._zoom * (1.0 + e.angleDelta().y() / 1200.0)))
+        self.update()
+
+
 # ---------------------------------------------------------------------------
 # The pane
 # ---------------------------------------------------------------------------
@@ -707,15 +796,18 @@ class InspectorPane(QtWidgets.QWidget):
         self._code.setVisible(False)
         layout.addWidget(self._code, 1)
 
-        # Three views, ~1/3 each, with a thin 1px handle (wide grab area) between.
+        # Image + (pixel grid, histogram) | OR the interactive 3-D cluster scatter, which
+        # replaces the grid+histogram for clustering nodes. Thin 1px handles between.
         splitter = LineSplitter(QtCore.Qt.Orientation.Vertical)
         self._image = ImagePanel()
         self._neigh = NeighborhoodPanel()
         self._hist = HistogramPanel()
-        for i, panel in enumerate((self._image, self._neigh, self._hist)):
+        self._scatter = ClusterScatter3D()
+        for i, panel in enumerate((self._image, self._neigh, self._hist, self._scatter)):
             splitter.addWidget(panel)
             splitter.setStretchFactor(i, 1)
-        splitter.setSizes([1000, 1000, 1000])  # start as equal thirds
+        self._scatter.setVisible(False)            # only for clustering nodes
+        splitter.setSizes([1100, 950, 950, 1100])
         layout.addWidget(splitter, 1)
 
         self._node = None
@@ -816,22 +908,38 @@ class InspectorPane(QtWidgets.QWidget):
         h, w = disp.shape[:2]
         self._meta.setText(f"{w}×{h}   {self._type_text(self._node, channels)}   {channels} ch")
 
-        # The histogram + filter operate on the chosen BGR/HSL view of the image.
-        self._chan_img, view_names, self._vmaxes = self._channel_view(disp, channels)
-        # For chart previews (cluster diagnostics, the Histogram node) the "image"
-        # is a plotted graph, so a per-channel histogram of it is meaningless —
-        # hide the histogram panel for those nodes.
+        # Chart previews (cluster palettes, the Histogram node, …) are plotted graphs: a
+        # pixel-neighbourhood grid and a per-channel histogram of them are meaningless, so
+        # hide both. A clustering payload additionally carries a 3-D colour scatter to show
+        # in their place (drag-rotate / zoom).
         chart = getattr(getattr(self._node, "op", None), "preview_is_chart", False)
+        self._neigh.setVisible(not chart)
         self._hist.setVisible(not chart)
+
+        payload = self._node.get_output_image()
+        scat = (payload["diag"] if isinstance(payload, dict)
+                and isinstance(payload.get("diag"), dict)
+                and "scatter3d" in payload["diag"] else None)
+        self._scatter.setVisible(scat is not None)
+        if scat is not None:
+            self._scatter.set_data(scat.get("scatter3d"), scat.get("scatter3d_labels"),
+                                   payload.get("centers"))
+
         if chart:
             self._hist.clear()
             self._channels = 0
-        else:
-            nch = len(view_names)
-            if reset or nch != self._channels:
-                self._hist.configure(nch, view_names)
-                self._channels = nch
-            self._hist.set_hists(self._compute_hists(self._chan_img, self._vmaxes))
+            self._image.set_image(disp)        # the rendered chart preview, unfiltered
+            if reset:
+                self._neigh.reset_center()
+            return
+
+        # Image node: the histogram + filter operate on the chosen BGR/HSL view.
+        self._chan_img, view_names, self._vmaxes = self._channel_view(disp, channels)
+        nch = len(view_names)
+        if reset or nch != self._channels:
+            self._hist.configure(nch, view_names)
+            self._channels = nch
+        self._hist.set_hists(self._compute_hists(self._chan_img, self._vmaxes))
         if reset:
             self._neigh.reset_center()
         self._apply_filter()   # updates both the image and the neighbourhood
