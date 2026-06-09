@@ -678,15 +678,21 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
     win = max(1, int(round(sig)))
     chromatic = C >= float(chroma_threshold)
 
-    seeds_lab, seeds_bgr, support, kinds = [], [], [], []
+    # Per seed we keep its support, kind, AND which histogram + bin it came from
+    # (``src`` ∈ {"hue","lum"}, ``bin``), so the preview can mark *only the surviving*
+    # centres on the histograms — when min_area / max_k drops a centre, its indicator
+    # disappears too (mirroring how min_prominence already drops undetected peaks).
+    seeds_lab, seeds_bgr, support, kinds, src, sbin = [], [], [], [], [], []
 
-    def add(sel, kind):
+    def add(sel, kind, source, pk):
         if int(sel.sum()) == 0:
             return
         seeds_lab.append(lab[sel].mean(axis=0))
         seeds_bgr.append(flat_bgr[sel].mean(axis=0))
         support.append(int(sel.sum()))
         kinds.append(kind)
+        src.append(source)
+        sbin.append(int(pk))
 
     # --- chromatic modes: circular, chroma-weighted hue histogram ---
     hb = np.minimum((h / 360.0 * _HUE_BINS).astype(np.int64), _HUE_BINS - 1)
@@ -698,7 +704,7 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
     hue_peaks = _find_prominent_peaks(hue_smooth, min_prominence, circular=True)
     for pk in hue_peaks:
         idx = np.array([(pk + d) % _HUE_BINS for d in range(-win, win + 1)])
-        add(chromatic & np.isin(hb, idx), "chromatic")
+        add(chromatic & np.isin(hb, idx), "chromatic", "hue", pk)
 
     # --- neutral modes: lightness histogram of low-chroma pixels (adaptive count) ---
     neutral = ~chromatic
@@ -710,10 +716,10 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
     if neutral.any() and not lum_peaks:
         lum_peaks = [int(np.argmax(lum_smooth))]       # ≥1 neutral seed when neutrals exist
     for pk in lum_peaks:
-        add(neutral & (lbn >= pk - win) & (lbn <= pk + win), "neutral")
+        add(neutral & (lbn >= pk - win) & (lbn <= pk + win), "neutral", "lum", pk)
 
     if not seeds_lab:                                  # degenerate image: one overall mean
-        add(np.ones(len(lab), bool), "neutral")
+        add(np.ones(len(lab), bool), "neutral", "lum", int(np.argmax(lum_smooth)))
 
     # Size floor: drop centres backed by < min_area of the image, but never all of
     # them (keep at least the single best-supported one so the output is non-empty).
@@ -721,32 +727,26 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
     kept = [i for i in range(len(support)) if support[i] >= min_support] \
         or [int(np.argmax(support))]
     order = sorted(kept, key=lambda i: support[i], reverse=True)[:max(1, int(max_k))]
-    seeds_lab = np.asarray([seeds_lab[i] for i in order], np.float32)
-    seeds_bgr = np.asarray([seeds_bgr[i] for i in order], np.float32)
-    payload = {"lab": seeds_lab, "bgr": seeds_bgr,
+    sel_lab = np.asarray([seeds_lab[i] for i in order], np.float32)
+    sel_bgr = np.asarray([seeds_bgr[i] for i in order], np.float32)
+    payload = {"lab": sel_lab, "bgr": sel_bgr,
                "support": np.asarray([support[i] for i in order], np.int64),
                "kinds": [kinds[i] for i in order],
                "shape": img.shape, "k": len(order)}
     if return_diag:
-        def peak_cols(peaks, binof, mask, circular):     # real mean colour per peak
-            cols = []
-            for pk in peaks:
-                if circular:
-                    idx = np.array([(pk + d) % _HUE_BINS for d in range(-win, win + 1)])
-                    sel = mask & np.isin(binof, idx)
-                else:
-                    sel = mask & (binof >= pk - win) & (binof <= pk + win)
-                cols.append(tuple(int(v) for v in flat_bgr[sel].mean(axis=0))
-                            if int(sel.sum()) else _peak_color(pk, 0 if circular else 1))
-            return cols
+        def band(source, raw, smooth, ch, name, nbins):
+            # Mark only the SURVIVING centres of this histogram, each in its own
+            # mean colour — so the indicators track min_area / max_k, not just
+            # min_prominence.
+            keep = [i for i in order if src[i] == source]
+            return {"raw": raw, "smooth": smooth,
+                    "peaks": [sbin[i] for i in keep], "channel": ch, "nbins": nbins,
+                    "chname": name,
+                    "peak_colors": [tuple(int(v) for v in seeds_bgr[i]) for i in keep]}
         payload["detdiag"] = {
-            "hue": {"raw": hue_raw, "smooth": hue_smooth, "peaks": hue_peaks,
-                    "channel": 0, "nbins": _HUE_BINS, "chname": "Hue (C*-weighted)",
-                    "peak_colors": peak_cols(hue_peaks, hb, chromatic, True)},
-            "lum": {"raw": lum_raw, "smooth": lum_smooth, "peaks": lum_peaks,
-                    "channel": 1, "nbins": _L_BINS, "chname": "Neutral L*",
-                    "peak_colors": peak_cols(lum_peaks, lbn, neutral, False)},
-            "seed_bgr": seeds_bgr}
+            "hue": band("hue", hue_raw, hue_smooth, 0, "Hue (C*-weighted)", _HUE_BINS),
+            "lum": band("lum", lum_raw, lum_smooth, 1, "Neutral L*", _L_BINS),
+            "seed_bgr": sel_bgr}
     return payload
 
 

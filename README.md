@@ -202,7 +202,9 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
   number of gray levels (no more fixed `gray_levels`). A **Min cluster area** knob discards
   centres backed by less than a set fraction of the image — a size floor that complements
   prominence (which only asks "is this a distinct mode?"), filtering tiny-but-locally-prominent
-  specks without a unit-dependent height threshold. **Assign to Centers**
+  specks without a unit-dependent height threshold. The preview's histogram markers track the
+  *surviving* centres, so a peak dropped by Min cluster area (or Max centres) loses its indicator
+  too — just like one dropped by Min peak prominence. **Assign to Centers**
   (`image + CENTERS → CLUSTERS`) labels every pixel against those seeds in unified 3-D
   CIELAB — **nearest centre (ΔE)** or **k-means refined *from* the detected centres**
   (`KMEANS_USE_INITIAL_LABELS`, so the detection guides the result instead of a random

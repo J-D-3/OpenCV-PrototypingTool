@@ -920,6 +920,13 @@ def test_detect_centers():
     floored = _detect_centers(speck, "bgr", 8, 2.0, 0.1, 8.0, min_area=0.01)  # 1% = 25px
     assert floored["kinds"].count("chromatic") == 1, "min_area drops the 9px (<1%) speck"
     assert floored["k"] >= 1, "the biggest centre is always kept (never empty)"
+    # The preview's hue-histogram markers track min_area too: the dropped speck loses
+    # its indicator (like min_prominence drops an undetected peak), not just the seed.
+    nf_d = _detect_centers(speck, "bgr", 8, 2.0, 0.1, 8.0, min_area=0.0, return_diag=True)
+    fl_d = _detect_centers(speck, "bgr", 8, 2.0, 0.1, 8.0, min_area=0.01, return_diag=True)
+    assert len(nf_d["detdiag"]["hue"]["peaks"]) == 2, "no floor: both hue peaks marked"
+    assert len(fl_d["detdiag"]["hue"]["peaks"]) == 1, "min_area removes the speck's histogram marker"
+    assert len(fl_d["detdiag"]["hue"]["peak_colors"]) == 1, "marker colours stay aligned with kept peaks"
 
     # End-to-end through the registered op: it emits a CENTERS payload with a
     # detection diagnostic for the preview.
