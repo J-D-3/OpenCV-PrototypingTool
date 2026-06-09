@@ -1074,7 +1074,10 @@ def _attach_reachability(out, opt, bgr, space, voxel, min_pts):
             coords = opt.quantize(np.ascontiguousarray(coords), float(voxel))
         coords = np.ascontiguousarray(coords)
         uniq, inverse = np.unique(coords, axis=0, return_inverse=True)
-        reach = opt.compute_reachability(np.ascontiguousarray(uniq), min_pts=int(min_pts))
+        # A SMALL min_pts gives a crisp plot (visible peaks). min_cluster_size (often
+        # hundreds) over-smooths the reachability into a featureless ramp.
+        rmp = int(min(25, max(5, len(uniq) // 80)))
+        reach = opt.compute_reachability(np.ascontiguousarray(uniq), min_pts=rmp)
         per_unique = np.empty(len(uniq), np.int32)
         per_unique[inverse.reshape(-1)] = out["labels"]
         order = np.asarray(reach["point_index"]).astype(np.int64)
@@ -1133,8 +1136,16 @@ def _finalize_hdbscan(bgr, labels, in_space, noise_mode="nearest"):
         labels[labels < 0] = k              # -1 -> the noise centre, always in range
         counts = np.append(counts, noise_n)
         noise_index = k
+    # Subsample (colour, final-cluster) pairs for the 3-D colour-space scatter — done
+    # here so render_preview stays a cheap pure-draw.
+    nlab = labels.shape[0]
+    sel = (np.random.default_rng(0).choice(nlab, 4000, replace=False)
+           if nlab > 4000 else np.arange(nlab))
+    diag = {"counts": counts,
+            "scatter3d": flat[sel].astype(np.float32),       # original BGR colours
+            "scatter3d_labels": labels[sel].astype(np.int32)}
     return {"centers": centers, "labels": labels, "shape": bgr.shape, "k": k,
-            "diag": {"counts": counts}, "n_noise": noise_n, "noise_index": noise_index}
+            "diag": diag, "n_noise": noise_n, "noise_index": noise_index}
 
 
 def _compute_hdbscan(inputs, p, in_space="bgr"):
@@ -1201,6 +1212,59 @@ def _band_reachability(reach, labels, centers, height=None):
     return band
 
 
+def _band_cluster_ribbon(labels, centers, height=None):
+    """A thin strip aligned with the reachability plot's x-axis: each ordered point painted
+    its CLUSTER's mean colour. Read it as 'where does each cluster start/end in the ordering'
+    — the colours match the bars directly above it."""
+    width = _PREVIEW_W
+    height = height or _px(13)
+    band = np.full((height, width, 3), 30, np.uint8)
+    n = len(labels)
+    if n == 0:
+        return band
+    cen = np.clip(centers, 0, 255).astype(np.uint8)
+    lab = np.asarray(labels, np.int64)[np.clip(np.arange(width) * n // width, 0, n - 1)]
+    for x in range(width):
+        l = int(lab[x])
+        band[:, x] = cen[l] if 0 <= l < len(cen) else (160, 160, 160)
+    return band
+
+
+def _band_scatter3d(diag, centers, width=_PREVIEW_W, height=None):
+    """A 3-D scatter of the image's colours (the B/G/R cube under a fixed isometric view),
+    each pixel painted its CLUSTER's mean colour — so you see how the colour space was
+    partitioned. Points are a precomputed subsample, so it's a cheap pure-draw."""
+    height = height or _px(160)
+    band = np.full((height, width, 3), 30, np.uint8)
+    pts = diag.get("scatter3d")
+    if pts is None or len(pts) == 0:
+        return band
+    labs = np.asarray(diag.get("scatter3d_labels"), np.int64)
+    c = pts.astype(np.float32) / 255.0
+    x, y, z = c[:, 0], c[:, 1], c[:, 2]
+    cos30, sin30 = 0.8660254, 0.5
+    u = (x - z) * cos30                  # isometric: x to the right, z to the left, y up
+    v = (x + z) * sin30 - y
+
+    def norm(a):
+        lo, hi = float(a.min()), float(a.max())
+        return (a - lo) / ((hi - lo) or 1.0)
+
+    m = _px(18)
+    sx = (m + norm(u) * (width - 2 * m)).astype(int)
+    sy = (m + (1.0 - norm(v)) * (height - 2 * m)).astype(int)
+    cen = np.clip(centers, 0, 255).astype(np.uint8)
+    r = _tk(1)
+    for i in range(len(pts)):
+        l = int(labs[i])
+        col = cen[l] if 0 <= l < len(cen) else (160, 160, 160)
+        cv2.circle(band, (int(sx[i]), int(sy[i])), r, (int(col[0]), int(col[1]), int(col[2])),
+                   -1, cv2.LINE_AA)
+    cv2.putText(band, "B / G / R colour cube", (_px(4), _px(12)), _FONT, _fs(0.34),
+                (150, 150, 150), _tk(1), cv2.LINE_AA)
+    return band
+
+
 def _render_hdbscan(inputs, output, p):
     """Inspector preview: the image recoloured by cluster mean (noise pixels flagged) —
     what a downstream Reduce Colors would output. When the reachability diagnostic was
@@ -1212,18 +1276,36 @@ def _render_hdbscan(inputs, output, p):
     labels = output.get("labels")
     if labels is None or len(centers) == 0:
         return None
-    recolored = centers[labels].reshape(output["shape"])
+    k = int(output.get("k", 0))
+    n_noise = int(output.get("n_noise", 0))
+    flagged = int(output.get("noise_index", -1)) >= 0
     diag = output.get("diag") or {}
-    if "reach" not in diag:
-        return recolored
+    counts = diag.get("counts")
+    if counts is None:
+        counts = np.bincount(labels, minlength=len(centers)).astype(np.int64)
+
+    recolored = centers[labels].reshape(output["shape"])
     w = _PREVIEW_W
     h = max(1, int(round(recolored.shape[0] * w / recolored.shape[1])))
     img = cv2.resize(recolored, (w, h), interpolation=cv2.INTER_NEAREST)
-    band = _band_reachability(diag["reach"], diag["reach_labels"], centers)
-    return np.vstack([
-        _titled(img, "clustered image"),
-        _titled(band, "OPTICS reachability  (valleys = clusters)"),
-    ])
+
+    # cv2's Hershey font is ASCII-only — keep titles plain (no em-dash etc.).
+    title = f"clustered image:  {k} cluster{'' if k == 1 else 's'}"
+    if n_noise:
+        pct = 100 * n_noise // max(1, len(labels))
+        title += "  (+ noise)" if flagged else f"  ({pct}% noise -> nearest)"
+    bands = [
+        _titled(img, title),
+        _titled(_band_palette(centers, counts), "extracted colours  (bar width = pixel share)"),
+        _titled(_band_scatter3d(diag, centers), "colour space  (points = pixels, colour = cluster)"),
+    ]
+    if "reach" in diag:
+        reach = np.vstack([
+            _band_reachability(diag["reach"], diag["reach_labels"], centers),
+            _band_cluster_ribbon(diag["reach_labels"], centers),
+        ])
+        bands.append(_titled(reach, "OPTICS reachability  (height = density; strip = cluster)"))
+    return np.vstack(bands)
 
 
 def _summary_hdbscan(output, p):
@@ -2605,7 +2687,7 @@ OPS: list = [
         ],
         compute=_compute_hdbscan, color=(0, 150, 136), out_space="passthrough",
         space_aware=True, in_label="Mat (any)", out_label="Clusters (density)",
-        render_preview=_render_hdbscan, summary=_summary_hdbscan,
+        render_preview=_render_hdbscan, summary=_summary_hdbscan, preview_is_chart=True,
         description="Density-based colour clustering (no k) via the OPTICS-Clustering library — "
                     "algorithms OPTICS, HDBSCAN, sOPTICS and sHDBSCAN. Finds colour modes at "
                     "differing densities and labels sparse 'bridge' colours as noise. Best when "

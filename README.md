@@ -185,6 +185,15 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-09** — **Density Cluster: richer preview.** The node preview now always stacks
+  (1) the recoloured image titled with the **cluster count**, (2) an **extracted-colours
+  palette** (swatch width ∝ pixel share, like Auto Cluster), and (3) a **3-D colour-space
+  scatter** (the B/G/R cube under an isometric view, each pixel painted its cluster mean) —
+  plus, when enabled, the **reachability plot with a cluster ribbon** beneath it (each ordered
+  point's cluster colour, aligned with the bars). Also fixed the reachability plot using
+  `min_cluster_size` as its `min_pts` (which over-smoothed it into a featureless ramp) — it now
+  uses a small `min_pts` so density peaks are visible. `preview_is_chart=True` (hides the
+  inspector histogram, like the other clustering nodes).
 - **2026-06-09** — **Density Cluster: migrated to the new `optics` colour API.** The sibling
   OPTICS-Clustering library replaced its raw `optics_py` binding with a pip-installable
   **`optics`** package (`pip install <repo>/python`) whose high-level `optics.cluster_image`
