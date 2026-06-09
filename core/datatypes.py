@@ -21,6 +21,7 @@ HISTOGRAM = "histogram"
 LABELS = "labels"
 SCALAR = "scalar"
 CLUSTERS = "clusters"   # k-means result: centers + per-pixel labels + shape
+CENTERS = "centers"     # detected colour-cluster seeds (Lab + display BGR), no labels
 SPECTRUM = "spectrum"   # complex DFT result (carried between DFT and inverse DFT)
 
 IMAGE_TYPES = frozenset({IMAGE, IMAGE_BGR, IMAGE_GRAY, IMAGE_BINARY, IMAGE_FLOAT})

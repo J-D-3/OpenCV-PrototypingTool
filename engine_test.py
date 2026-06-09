@@ -982,6 +982,37 @@ def test_auto_cluster_chroma_split():
     print("OK  auto_cluster: chroma gate kills phantom near-white peaks; split isolates gray/white/black")
 
 
+def test_detect_centers():
+    from core.operations import _detect_centers, _pixel_chroma
+    # Red + green blobs (two hues) + white + black (two neutral levels).
+    # LCh detection: 2 chromatic hue seeds + 2 neutral L* seeds = 4.
+    seg = np.zeros((40, 40, 3), np.uint8)
+    seg[:20, :20] = (40, 40, 200); seg[:20, 20:] = (40, 200, 40)
+    seg[20:, :20] = (255, 255, 255); seg[20:, 20:] = (10, 10, 10)
+    out = _detect_centers(seg, "bgr", max_k=12, smoothing=2.0,
+                          min_prominence=0.3, chroma_threshold=10.0)
+    assert out["k"] == 4, f"2 hues + 2 neutral levels = 4 seeds (got {out['k']})"
+    assert out["lab"].shape == (4, 3) and out["bgr"].shape == (4, 3)
+    assert out["kinds"].count("chromatic") == 2 and out["kinds"].count("neutral") == 2
+    chrom = _pixel_chroma(np.clip(out["bgr"], 0, 255).astype(np.uint8).reshape(1, -1, 3))
+    assert int((chrom < 25).sum()) == 2, "the two neutral seeds are achromatic (white/black)"
+
+    # The neutral count is ADAPTIVE, not a fixed gray_levels: add a mid-gray band
+    # and a third neutral L* seed appears on its own (the old node always gave 2).
+    g3 = np.zeros((30, 30, 3), np.uint8)
+    g3[:10] = 10; g3[10:20] = 128; g3[20:] = 245      # black / mid / white, no hue
+    o3 = _detect_centers(g3, "bgr", max_k=12, smoothing=2.0,
+                         min_prominence=0.3, chroma_threshold=10.0)
+    assert o3["kinds"].count("neutral") == 3, \
+        f"neutral levels adapt to the image (got {o3['kinds'].count('neutral')}, want 3)"
+
+    # max_k caps the seed count (best-supported kept).
+    capped = _detect_centers(seg, "bgr", max_k=2, smoothing=2.0,
+                             min_prominence=0.3, chroma_threshold=10.0)
+    assert capped["k"] == 2, f"max_k caps the seeds (got {capped['k']})"
+    print("OK  detect_centers: LCh hue + adaptive neutral L* seeds, capped by max_k")
+
+
 def test_cluster_preview_diag():
     # The clustering preview is data-driven: compute() must stash the diagnostics
     # (per-cluster counts/spread + a subsampled feature-space scatter, plus how k
@@ -1216,6 +1247,7 @@ def main():
     test_peak_subpeak_vs_step()
     test_auto_cluster_elbow()
     test_auto_cluster_chroma_split()
+    test_detect_centers()
     test_cluster_preview_diag()
     test_normalize_lighting()
     test_cluster_space()
@@ -1224,7 +1256,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 47 backend tests passed")
+    print("\nENGINE OK: 48 backend tests passed")
 
 
 if __name__ == "__main__":

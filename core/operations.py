@@ -784,6 +784,122 @@ def _detect_k_elbow(feat, max_k, attempts=3, return_diag=False, k_bias=0):
     return chosen, {"mode": "elbow", "ks": ks, "inertias": inertias, "chosen": chosen}
 
 
+def _circular_smooth(base, sig):
+    """Gaussian-blur a circular histogram (e.g. hue) seamlessly: wrap-pad both
+    ends by 3σ, blur, then crop back. A plain blur would leak the 0/end bins into
+    a flat ramp; wrapping keeps red (hue ~0 and ~360) a single mode."""
+    n = len(base)
+    pad = int(np.ceil(max(0.5, float(sig)) * 3)) + 1
+    ext = np.concatenate([base[-pad:], base, base[:pad]])
+    ext = cv2.GaussianBlur(ext.reshape(-1, 1), (0, 0), max(0.5, float(sig))).flatten()
+    return ext[pad:pad + n]
+
+
+def _lab_lch(bgr):
+    """True CIELAB + its cylindrical LCh form for a BGR image. Returns
+    ``(lab, L, C, h)`` where ``lab`` is (N, 3) float (L 0..100, a/b ~[-128,127])
+    and L/C/h are flat per-pixel arrays: lightness, chroma C*=√(a²+b²), and hue
+    angle h° in [0, 360). Uses the pure-NumPy sRGB→CIELAB (``_srgb_to_lab``), the
+    SAME convention the Density Cluster node and the inspector scatter use — so
+    all colour reasoning in the tool shares one perceptual space. LCh is just
+    CIELAB in cylinder coordinates: C* is the principled 'colourfulness' the old
+    ``max−min(BGR)`` chroma hack approximated, and h° is a real hue angle, so the
+    neutral axis is exactly C*≈0 (no HLS double-cone distortion)."""
+    rgb = bgr.reshape(-1, 3)[:, ::-1]                 # BGR -> RGB
+    lab = _srgb_to_lab(rgb).astype(np.float32)        # (N, 3): L, a, b
+    a, b = lab[:, 1], lab[:, 2]
+    C = np.sqrt(a * a + b * b)
+    h = np.degrees(np.arctan2(b, a)) % 360.0
+    return lab, lab[:, 0], C, h
+
+
+# Hue histogram resolution for centre detection: 2° per bin (circular).
+_HUE_BINS = 180
+# Lightness histogram resolution for the neutral axis: ~0.4 L* per bin.
+_L_BINS = 256
+
+
+def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
+                    chroma_threshold, sat_weight=1.0, return_diag=False):
+    """Detect colour-cluster *seeds* in CIELAB/LCh — the count AND each centre's
+    colour, not just k. Two structural cases replace the old 'pick a channel':
+
+    * **Chromatic** pixels (C* ≥ ``chroma_threshold``) are histogrammed by **hue**
+      (circular, weighted by C*^``sat_weight`` so washed-out pixels barely vote);
+      each prominent peak (``_find_prominent_peaks``) becomes a seed = the mean Lab
+      of its supporting pixels.
+    * **Neutral** pixels (C* < threshold) are histogrammed by **lightness L***; each
+      prominent L* peak becomes a neutral seed. So the gray axis gets an *adaptive*
+      number of levels — not a fixed ``gray_levels`` — and never needs a hue (which
+      is meaningless at C*≈0).
+
+    Because the seeds are emitted (with both Lab and display BGR), a downstream
+    'Assign' step can label every pixel by nearest seed in unified 3-D Lab: the
+    chroma threshold then only shapes *where seeds come from*, never *which pixel
+    goes where*, so a pastel straddling the cut lands on whichever seed is truly
+    closest. Returns a CENTERS payload (``return_diag`` adds the histograms +
+    peaks for the inspector preview)."""
+    bgr = _as_bgr(img, in_space)
+    lab, L, C, h = _lab_lch(bgr)
+    flat_bgr = bgr.reshape(-1, 3).astype(np.float32)
+    sig = max(0.5, float(smoothing))
+    win = max(1, int(round(sig)))
+    chromatic = C >= float(chroma_threshold)
+
+    seeds_lab, seeds_bgr, support, kinds = [], [], [], []
+
+    def add(sel, kind):
+        if int(sel.sum()) == 0:
+            return
+        seeds_lab.append(lab[sel].mean(axis=0))
+        seeds_bgr.append(flat_bgr[sel].mean(axis=0))
+        support.append(int(sel.sum()))
+        kinds.append(kind)
+
+    # --- chromatic modes: circular, chroma-weighted hue histogram ---
+    hb = np.minimum((h / 360.0 * _HUE_BINS).astype(np.int64), _HUE_BINS - 1)
+    cw = np.power(np.clip(C / 100.0, 0.0, None), max(0.0, float(sat_weight)))
+    cw = np.where(chromatic, cw, 0.0)
+    hue_raw = np.bincount(hb, minlength=_HUE_BINS).astype(np.float32)
+    hue_smooth = _circular_smooth(np.bincount(hb, weights=cw, minlength=_HUE_BINS)
+                                  .astype(np.float32), sig)
+    hue_peaks = _find_prominent_peaks(hue_smooth, min_prominence, circular=True)
+    for pk in hue_peaks:
+        idx = np.array([(pk + d) % _HUE_BINS for d in range(-win, win + 1)])
+        add(chromatic & np.isin(hb, idx), "chromatic")
+
+    # --- neutral modes: lightness histogram of low-chroma pixels (adaptive count) ---
+    neutral = ~chromatic
+    lbn = np.clip((L / 100.0 * _L_BINS).astype(np.int64), 0, _L_BINS - 1)
+    lum_raw = np.bincount(lbn[neutral], minlength=_L_BINS).astype(np.float32) \
+        if neutral.any() else np.zeros(_L_BINS, np.float32)
+    lum_smooth = cv2.GaussianBlur(lum_raw.reshape(-1, 1), (0, 0), sig).flatten()
+    lum_peaks = _find_prominent_peaks(lum_smooth, min_prominence, circular=False)
+    if neutral.any() and not lum_peaks:
+        lum_peaks = [int(np.argmax(lum_smooth))]       # ≥1 neutral seed when neutrals exist
+    for pk in lum_peaks:
+        add(neutral & (lbn >= pk - win) & (lbn <= pk + win), "neutral")
+
+    if not seeds_lab:                                  # degenerate image: one overall mean
+        add(np.ones(len(lab), bool), "neutral")
+
+    order = np.argsort(support)[::-1][:max(1, int(max_k))]   # keep the best-supported k
+    seeds_lab = np.asarray([seeds_lab[i] for i in order], np.float32)
+    seeds_bgr = np.asarray([seeds_bgr[i] for i in order], np.float32)
+    payload = {"lab": seeds_lab, "bgr": seeds_bgr,
+               "support": np.asarray([support[i] for i in order], np.int64),
+               "kinds": [kinds[i] for i in order],
+               "shape": img.shape, "k": len(order)}
+    if return_diag:
+        payload["detdiag"] = {
+            "hue": {"raw": hue_raw, "smooth": hue_smooth, "peaks": hue_peaks,
+                    "channel": 0, "nbins": _HUE_BINS, "chname": "Hue (C*-weighted)"},
+            "lum": {"raw": lum_raw, "smooth": lum_smooth, "peaks": lum_peaks,
+                    "channel": 1, "nbins": _L_BINS, "chname": "Neutral L*"},
+            "seed_bgr": seeds_bgr}
+    return payload
+
+
 def _compute_auto_cluster(inputs, p, in_space="bgr"):
     """K-means with an auto-detected cluster count. 'k_method' picks how k is
     found: 'peaks' counts modes in a chosen HLS channel histogram; 'elbow' runs
