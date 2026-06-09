@@ -262,42 +262,37 @@ def check_parameter_panel(app) -> None:
 
 
 def check_param_enable_conditions(app) -> None:
-    # Auto Cluster's peak-detection params (channel/smoothing/min_prominence) carry
-    # enabled_if=("k_method","peaks"); they gray out in 'elbow' mode. sat_weight
-    # carries a two-condition AND (peaks mode AND Hue channel). Switching either
-    # controlling combo flips the enabled state reactively.
+    # Density Cluster's metric/seed params carry
+    # enabled_if=("algorithm", ("shdbscan","soptics")) — a tuple of accepted values:
+    # they gray out for the exact algorithms (hdbscan/optics) and light up for the
+    # approximate ones. Switching the algorithm combo flips the state reactively.
     from ui.parameters import ParameterPanel
     w = make_window(app)
     src = add_image(w, gradient_bgr())
-    ac = add_func(w, "Auto Cluster")
-    connect(w, src, ac)
+    dc = add_func(w, "Density Cluster")
+    connect(w, src, dc)
     app.processEvents()
 
     panel = ParameterPanel()
-    panel.set_node(ac)
-    peak_only = ("channel", "smoothing", "min_prominence")
-    shared = ("max_k", "cluster_space", "lum_weight")
-    assert all(panel._rows[p].isEnabled() for p in peak_only), "peaks mode: peak params active"
-    # sat_weight needs peaks AND Hue; the default channel is Luminance, so it's off
-    assert not panel._rows["sat_weight"].isEnabled(), "sat_weight off unless channel is Hue"
-    ch_combo = panel._rows["channel"].findChild(QtWidgets.QComboBox)
-    hue_i = next(i for i in range(ch_combo.count()) if ch_combo.itemData(i) == 0)
-    ch_combo.setCurrentIndex(hue_i)
-    ac.controller.wait_idle(); app.processEvents()
-    assert panel._rows["sat_weight"].isEnabled(), "sat_weight on in peaks mode + Hue channel"
+    panel.set_node(dc)
+    approx_only = ("metric", "seed")
+    always = ("min_cluster_size", "min_cluster_frac", "color_space")
+    # default algorithm = exact 'hdbscan' -> the approximate-only params are off
+    assert not any(panel._rows[p].isEnabled() for p in approx_only), "exact mode: approx params gray out"
+    assert all(panel._rows[a].isEnabled() for a in always), "always-on params stay active"
 
-    combo = panel._rows["k_method"].findChild(QtWidgets.QComboBox)
-    elbow_i = next(i for i in range(combo.count()) if combo.itemData(i) == "elbow")
-    combo.setCurrentIndex(elbow_i)            # fires the reactive enable refresh
-    ac.controller.wait_idle()
+    combo = panel._rows["algorithm"].findChild(QtWidgets.QComboBox)
+    sopt_i = next(i for i in range(combo.count()) if combo.itemData(i) == "soptics")
+    combo.setCurrentIndex(sopt_i)             # fires the reactive enable refresh
+    dc.controller.wait_idle()
     app.processEvents()
-    assert not any(panel._rows[p].isEnabled() for p in peak_only), "elbow mode: peak params gray out"
-    assert not panel._rows["sat_weight"].isEnabled(), "elbow mode: sat_weight off (AND condition)"
-    assert all(panel._rows[s].isEnabled() for s in shared), "shared params stay active in elbow mode"
+    assert all(panel._rows[p].isEnabled() for p in approx_only), \
+        "approximate mode: metric + seed activate"
+    assert all(panel._rows[a].isEnabled() for a in always), "always-on params still active"
 
     panel.deleteLater()
     w.close()
-    print("OK  param panel: mode-specific params gray out (single + AND conditions)")
+    print("OK  param panel: mode-specific params gray out (tuple-of-values condition)")
 
 
 def check_display_conversion(app) -> None:
@@ -649,13 +644,13 @@ def check_inspector_pane(app) -> None:
     # Chart-preview nodes (cluster diagnostics) hide the histogram — a per-channel
     # histogram of a plotted graph is meaningless. A normal image node shows it.
     assert not pane._hist.isHidden(), "normal image node should show the histogram"
-    ac = add_func(w, "Auto Cluster")
+    ac = add_func(w, "Detect Color Centers")
     connect(w, img_node, ac)
     w.drop_widget.view._scene.clearSelection()
     ac.setSelected(True)
     app.processEvents()
     assert pane._node is ac and pane._hist.isHidden(), \
-        "chart-preview node (Auto Cluster) should hide the histogram panel"
+        "chart-preview node (Detect Color Centers) should hide the histogram panel"
 
     w.close()
     print("OK  inspector pane: colors, channel-clear, log toggle, zoom; chart hides histogram")
@@ -942,13 +937,13 @@ def check_function_search(app) -> None:
     assert total > 10, "tree should list many ops"
 
     # By a cv:: call: matches Gaussian Blur *and* every op that calls it
-    # internally (Auto Cluster smooths the histogram; Local HDR's low-pass).
+    # internally (Detect Color Centers smooths the histogram; Local HDR's low-pass).
     search.setText("gaussianblur")
     vis = visible_ops()
-    assert "Gaussian Blur" in vis and "Auto Cluster" in vis, vis
+    assert "Gaussian Blur" in vis and "Detect Color Centers" in vis, vis
 
     search.setText("kmeans")                  # cv::kmeans -> every op that calls it
-    assert set(visible_ops()) == {"K-Means Cluster", "Auto Cluster", "Assign to Centers"}, visible_ops()
+    assert set(visible_ops()) == {"K-Means Cluster", "Assign to Centers"}, visible_ops()
 
     search.setText("contours")                # by category -> the whole category
     vis = visible_ops()

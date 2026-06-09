@@ -185,6 +185,23 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-09** — **Auto Cluster split into Detect Color Centers → Assign to Centers
+  (CIELAB/LCh).** Auto Cluster's 12 parameters and tangled HLS+chroma+Lab logic were
+  replaced by two composable nodes that work in one perceptual space — true CIELAB / LCh
+  (via the existing pure-NumPy `_srgb_to_lab`, the same space as Density Cluster and the
+  inspector scatter). **Detect Color Centers** (`image → CENTERS`) finds cluster *seeds* —
+  count **and** colour: chromatic pixels by a chroma-weighted circular **hue** histogram,
+  neutral pixels (C\* below a threshold) by a **lightness L\*** histogram with an *adaptive*
+  number of gray levels (no more fixed `gray_levels`). **Assign to Centers**
+  (`image + CENTERS → CLUSTERS`) labels every pixel against those seeds in unified 3-D
+  CIELAB — **nearest centre (ΔE)** or **k-means refined *from* the detected centres**
+  (`KMEANS_USE_INITIAL_LABELS`, so the detection guides the result instead of a random
+  init). Because assignment is unified, the detection-time chroma split only shapes *where
+  seeds come from*, never *where a pixel lands* — a pastel straddling the cut goes to
+  whichever centre is truly closest, so the old "sharp cylinder slices a real cluster"
+  problem dissolves. Each detected centre's colour is now *used*, not thrown away. The old
+  `auto_cluster` op (and its elbow mode) was removed — re-wire saved pipelines to the new
+  pair. Suites: 36 smoke + 46 engine.
 - **2026-06-09** — **Cluster scatter: CIELAB axes; collapsible inspector layout.** The 3-D
   colour scatter now draws the full CIELAB solid: the **L axis** as a black→white gradient up
   the middle, an **a axis** (green→red) and **b axis** (blue→yellow) crossing at neutral

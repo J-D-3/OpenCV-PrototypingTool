@@ -77,7 +77,7 @@ _VAR_BASE = {
     "gaussian_blur": "blur", "adaptive_threshold": "thr", "threshold": "thr",
     "find_contours": "contours", "contour_filter": "contours",
     "label_regions": "regions", "connected_components": "regions",
-    "kmeans": "clusters", "auto_cluster": "clusters", "reduce_colors": "quant",
+    "kmeans": "clusters", "reduce_colors": "quant",
     "detect_centers": "centres", "assign_centers": "clusters",
     "mean_shift": "seg", "morphology": "morph", "local_hdr": "hdr",
     "create_batch": "batch", "normalize": "norm",
@@ -133,9 +133,6 @@ _CODE = {
 }
 
 
-_HLS_CHAN = {0: "Hue", 1: "Luminance(L)", 2: "Saturation"}
-
-
 def _emit_feature_block(src, space, lum_weight):
     """The exact feature-space construction shared by K-Means and Auto Cluster."""
     lines = [f"bgr = as_bgr({src})                                  # cv::cvtColor from the tracked colour space"]
@@ -170,45 +167,6 @@ def _emit_kmeans(o, i, p):
     out = [f"# K-Means colour clustering: k={p.get('k')}, space={space!r}, lum_weight={lw}, attempts={p.get('attempts')}"]
     out += _emit_feature_block(i[0], space, lw)
     out += [f"K = {p.get('k')}"]
-    out += _emit_cluster_tail(o, p)
-    return out
-
-
-def _emit_auto_cluster(o, i, p):
-    space, lw = p.get("cluster_space"), p.get("lum_weight")
-    method = p.get("k_method", "peaks")
-    out = [f"# Auto Cluster = detect K, then K-Means. k_method={method!r}, max_k={p.get('max_k')}, "
-           f"space={space!r}, lum_weight={lw}"]
-    out += _emit_feature_block(i[0], space, lw)
-    if method == "elbow":
-        out += [
-            "# --- K via the elbow of the inertia curve (full feature space) ---",
-            f"for k in 2..{p.get('max_k')}:  inertia[k] = cv::kmeans(feat, k, ..., KMEANS_PP_CENTERS).compactness",
-            f"K = the knee (greatest perpendicular distance below the first->last chord), nudged by k_bias={p.get('k_bias', 0)} clusters",
-        ]
-    else:
-        ch = _HLS_CHAN.get(p.get("channel"), str(p.get("channel")))
-        out += [f"# --- K via histogram peak count on the {ch} channel ---",
-                "hls = cv::cvtColor(bgr, COLOR_BGR2HLS)"]
-        if p.get("channel") == 0:
-            out += [
-                f"hist = histogram(hls.Hue, 180 bins, weights=chroma=max(bgr)-min(bgr))   # ignore washed-out hues (chroma ~0 for white/gray/black); (L/S use cv::calcHist)",
-                f"hist = circular cv::GaussianBlur(hist, sigma={p.get('smoothing')})   # wrap 0<->179 (hue is circular)",
-                f"K = count CIRCULAR local maxima whose prominence above the MEAN valley >= {p.get('min_prominence')} * peak_height, dipping on both sides   # keeps sub-peaks, drops flat steps",
-            ]
-        else:
-            out += [
-                f"hist = cv::calcHist(hls.{ch}, 256 bins)",
-                f"hist = cv::GaussianBlur(hist, sigma={p.get('smoothing')})",
-                f"K = count local maxima whose prominence above the MEAN valley >= {p.get('min_prominence')} * peak_height, dipping on both sides   # keeps sub-peaks, drops flat steps",
-            ]
-        out += [f"K = clamp(K, 1, {p.get('max_k')})"]
-    if p.get("separate_achromatic"):
-        out += [
-            f"# split achromatic pixels out (chroma = max(bgr)-min(bgr) < {p.get('chroma_min')}):",
-            f"  achromatic -> cv::kmeans by lightness into {p.get('gray_levels')} clusters",
-            "  chromatic  -> cv::kmeans(feat, K, ...); concatenate the two label sets",
-        ]
     out += _emit_cluster_tail(o, p)
     return out
 
@@ -405,7 +363,6 @@ def _emit_crop_to_contour(o, i, p):
 
 _CODE.update({
     "kmeans": _emit_kmeans,
-    "auto_cluster": _emit_auto_cluster,
     "detect_centers": _emit_detect_centers,
     "assign_centers": _emit_assign_centers,
     "hdbscan_cluster": _emit_hdbscan,

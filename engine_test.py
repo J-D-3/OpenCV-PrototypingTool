@@ -463,15 +463,17 @@ def test_codegen_clustering_detail():
     for tok in ("k=6", "space='lab'", "lum_weight=0.3", "BGR2Lab", "cv::kmeans",
                 "mean INPUT-space", "dark->light"):
         assert tok in km, f"K-Means pseudocode missing {tok!r}:\n{km}"
-    # Auto Cluster shows the ACTUAL k-detection used (saturation-weighted circular hue).
-    ac = codegen.op_pseudocode(REGISTRY["auto_cluster"],
-                               {"k_method": "peaks", "channel": 0, "smoothing": 3.0,
-                                "min_prominence": 0.15, "max_k": 5})
-    for tok in ("Hue channel", "weights=chroma", "circular", "sigma=3.0",
-                "prominence", "0.15 * peak_height", "clamp(K, 1, 5)"):
-        assert tok in ac, f"Auto Cluster (peaks) pseudocode missing {tok!r}:\n{ac}"
-    el = codegen.op_pseudocode(REGISTRY["auto_cluster"], {"k_method": "elbow", "max_k": 8})
-    assert "inertia" in el and "elbow" in el.lower() and "for k in 2..8" in el, el
+    # Detect Color Centers shows the LCh detection (CIELAB, hue + neutral L*).
+    dc = codegen.op_pseudocode(REGISTRY["detect_centers"],
+                               {"max_k": 5, "smoothing": 3.0, "min_prominence": 0.15,
+                                "chroma_threshold": 8.0, "sat_weight": 1.0})
+    for tok in ("CIELAB", "LCh", "hue histogram", "lightness L*", "sigma=3.0", "CENTERS"):
+        assert tok in dc, f"Detect Color Centers pseudocode missing {tok!r}:\n{dc}"
+    # Assign to Centers spells out the nearest/refine assignment + CLUSTERS output.
+    asg = codegen.op_pseudocode(REGISTRY["assign_centers"],
+                                {"algorithm": "kmeans", "lum_weight": 0.3})
+    for tok in ("nearest centre", "lum_weight=0.3", "KMEANS_USE_INITIAL_LABELS", "CLUSTERS"):
+        assert tok in asg, f"Assign to Centers pseudocode missing {tok!r}:\n{asg}"
     print("OK  codegen: clustering pseudocode spells out every step + parameter")
 
 
@@ -805,105 +807,64 @@ def test_local_hdr():
     print("OK  local_hdr: smooth local contrast normalization (gray + color)")
 
 
-def test_auto_cluster():
-    # Three flat intensity bands -> ~3 histogram peaks -> auto k ~= 3.
-    img = np.zeros((30, 30, 3), np.uint8)
-    img[:10] = 20
-    img[10:20] = 128
-    img[20:] = 240
-    m = GraphModel()
-    s = _src(m, img)
-    a = _op(m, "auto_cluster", max_k=12, smoothing=2.0, min_prominence=0.05)
-    m.add_edge(s, a)
-    Engine(m).evaluate_all()
-    assert isinstance(a.output, dict), "auto_cluster should output a clusters payload"
-    assert 2 <= a.output["k"] <= 4, f"expected ~3 auto-detected clusters, got {a.output['k']}"
+def test_detect_hue_robust():
+    from core.operations import _detect_centers as dcz
+    def chrom(out):
+        return out["kinds"].count("chromatic")
 
-    # Channel choice: three bands of distinct hue but matched lightness. The
-    # Luminance (L) channel is ~flat (few peaks) while Hue (H) sees three modes.
-    hls = np.zeros((30, 30, 3), np.uint8)
-    hls[..., 1] = 128                    # L flat across all bands
-    hls[..., 2] = 200                    # S high so hue is meaningful
-    hls[:10, :, 0], hls[10:20, :, 0], hls[20:, :, 0] = 10, 70, 130  # H bands
-    bands = cv2.cvtColor(hls, cv2.COLOR_HLS2BGR)
-    m2 = GraphModel()
-    s2 = _src(m2, bands)
-    by_l = _op(m2, "auto_cluster", max_k=12, smoothing=2.0, min_prominence=0.05, channel=1)
-    by_h = _op(m2, "auto_cluster", max_k=12, smoothing=2.0, min_prominence=0.05, channel=0)
-    m2.add_edge(s2, by_l)
-    m2.add_edge(s2, by_h)
-    Engine(m2).evaluate_all()
-    assert by_h.output["k"] > by_l.output["k"], (
-        f"Hue channel should see more modes than flat Luminance "
-        f"(H={by_h.output['k']}, L={by_l.output['k']})")
-    print("OK  auto_cluster: detects cluster count from histogram peaks (per channel)")
+    # One saturated hue -> exactly one chromatic centre.
+    red = np.zeros((100, 100, 3), np.uint8); red[:] = (0, 0, 200)          # saturated red
+    assert chrom(dcz(red, "bgr", 8, 3.0, 0.3, 8.0)) == 1, "one saturated hue -> one chromatic centre"
 
+    # Neutral (gray) pixels carry no hue: a gray-noise region (R=G=B, so C*≈0) must
+    # NOT create a phantom hue centre — the C* gate routes it to neutral L* instead.
+    mixed = red.copy()
+    g = np.random.RandomState(0).randint(80, 180, (100, 40, 1)).astype(np.uint8)
+    mixed[:, 60:] = np.repeat(g, 3, axis=2)                                # chroma 0
+    assert chrom(dcz(mixed, "bgr", 8, 3.0, 0.3, 8.0)) == 1, \
+        "neutral (gray) pixels must not add a phantom hue centre"
 
-def test_auto_cluster_hue_robust():
-    from core.operations import _detect_cluster_count as dc
-    rng = np.random.RandomState(0)
-    base = np.zeros((100, 100, 3), np.uint8); base[:] = (0, 0, 200)        # saturated red
-    noisy = base.copy()
-    noisy[:, 60:] = rng.randint(115, 141, (100, 40, 3), np.uint8)          # desaturated noise
-    # saturation-weighted: washed-out pixels don't add phantom hue peaks (at a
-    # normal prominence; a residual ~0.18-prominence noise bump only survives a very
-    # lenient threshold, well below the 0.3 default).
-    assert dc(base, 3.0, 0.3, 8, channel=0) == dc(noisy, 3.0, 0.3, 8, channel=0), \
-        "desaturated pixels must not change the hue cluster count"
-    # circular: hues straddling the 0/179 wrap are a single peak
-    hls = np.zeros((100, 100, 3), np.uint8); hls[:, :, 1] = 128; hls[:, :, 2] = 255
-    hls[:, :50, 0] = 178; hls[:, 50:, 0] = 2
-    assert dc(cv2.cvtColor(hls, cv2.COLOR_HLS2BGR), 2.0, 0.1, 8, channel=0) == 1, \
-        "hue wraps: 178 and 2 are adjacent, one peak"
-    # but two genuinely different hues stay two peaks
-    hls[:, :50, 0] = 20; hls[:, 50:, 0] = 120
-    assert dc(cv2.cvtColor(hls, cv2.COLOR_HLS2BGR), 2.0, 0.1, 8, channel=0) == 2
+    # Circular hue: two reds either side of the 0°/360° wrap are ONE centre, not two.
+    import colorsys
+    wrap = np.zeros((100, 100, 3), np.uint8)
+    for col, deg in ((slice(None, 50), 4), (slice(50, None), 356)):
+        r, gg, b = colorsys.hsv_to_rgb(deg / 360.0, 1.0, 0.8)
+        wrap[:, col] = (int(b * 255), int(gg * 255), int(r * 255))
+    assert chrom(dcz(wrap, "bgr", 8, 2.0, 0.1, 8.0)) == 1, \
+        "hue wraps: ~4° and ~356° are adjacent, one centre"
 
-    # sat_weight is an exponent on the saturation weight. The default (1.0) is the
-    # original linear weighting; changing it reshapes the saturation-damped
-    # histogram (more aggressive damping of washed-out pixels at higher values).
-    assert dc(noisy, 3.0, 0.3, 8, channel=0) == \
-        dc(noisy, 3.0, 0.3, 8, channel=0, sat_weight=1.0), "default must equal sat_weight=1.0"
-    _, d0 = dc(noisy, 3.0, 0.3, 8, channel=0, sat_weight=0.0, return_diag=True)
-    _, d2 = dc(noisy, 3.0, 0.3, 8, channel=0, sat_weight=2.0, return_diag=True)
-    assert not np.allclose(d0["smooth"], d2["smooth"]), \
-        "sat_weight reshapes the saturation-damped histogram"
-
-    # OpenCV's 8-bit BGR2HLS can emit hue 180 (e.g. BGR (53,51,174)); it must wrap
-    # to 0 (hue is circular) so the histogram stays 180 bins, not a spurious 181.
-    h180 = np.full((20, 20, 3), (53, 51, 174), np.uint8)
-    assert int(cv2.cvtColor(h180, cv2.COLOR_BGR2HLS)[0, 0, 0]) == 180, "fixture should hit hue 180"
-    _, hd = dc(h180, 2.0, 0.1, 8, channel=0, return_diag=True)
-    assert len(hd["raw"]) == 180 and len(hd["smooth"]) == 180, "hue 180 must wrap, not add a 181st bin"
-    print("OK  auto_cluster hue: saturation-weighted (sat_weight exponent) + circular + 180-wrap")
+    # sat_weight reshapes the chroma-weighted hue histogram: a vivid hue and a paler
+    # hue of a different colour weight differently as the exponent changes.
+    tinted = np.zeros((100, 100, 3), np.uint8)
+    tinted[:, :50] = (0, 0, 200)              # vivid red (high C*)
+    tinted[:, 50:] = (200, 150, 150)          # pale blue tint (lower C*)
+    d0 = dcz(tinted, "bgr", 8, 3.0, 0.3, 8.0, sat_weight=0.0, return_diag=True)
+    d3 = dcz(tinted, "bgr", 8, 3.0, 0.3, 8.0, sat_weight=3.0, return_diag=True)
+    assert not np.allclose(d0["detdiag"]["hue"]["smooth"], d3["detdiag"]["hue"]["smooth"]), \
+        "sat_weight reshapes the chroma-weighted hue histogram"
+    print("OK  detect_centers hue: C*-gated + chroma-weighted + circular (no phantom/duplicate centres)")
 
 
-def test_auto_cluster_small_feature():
-    from core.operations import _detect_cluster_count as dc, _topographic_prominence as tp
-    # A tiny saturated-red feature (~0.6% of pixels) on a large saturated-blue
-    # background. min_prominence is now TOPOGRAPHIC: a peak is judged against its
-    # own surrounding valley, not the global max — so the small but isolated
-    # feature peak (which rises from ~0) is kept even though it is dwarfed by the
-    # background peak. The old global-max rule dropped it.
+def test_peak_prominence():
+    from core.operations import _detect_centers as dcz, _topographic_prominence as tp
+    # A tiny saturated-red feature (~0.6%) on a large saturated-blue background: the
+    # small but isolated hue peak is kept as its own chromatic centre (topographic
+    # prominence judges it against its own valley, not the dominant background peak).
     img = np.full((100, 100, 3), (200, 60, 60), np.uint8)   # blue-ish background
     img[2:10, 2:10] = (60, 60, 200)                          # small red feature
-    assert dc(img, 2.0, 0.2, 8, channel=0) >= 2, \
-        "a small colored feature on a uniform background must be its own cluster"
+    assert dcz(img, "bgr", 8, 2.0, 0.2, 8.0)["kinds"].count("chromatic") >= 2, \
+        "a small colored feature on a uniform background must be its own centre"
 
-    # Topographic prominence in detail: an isolated peak rising from an empty
-    # valley has ~full prominence; a bump on the shoulder of a taller peak has low
-    # prominence (its key col sits just below it) and is rejected as noise.
+    # Topographic prominence in detail (the shared peak helper): an isolated peak
+    # rising from an empty valley has ~full prominence; a bump on the shoulder of a
+    # taller peak has low prominence and is rejected as noise.
     hist = np.array([0, 2, 0, 0, 10, 6, 6.5, 6, 0], np.float32)  # peaks at 1, 4, shoulder at 6
     assert tp(hist, 1, False) == 2.0, "isolated small peak: prominence == its height"
     assert tp(hist, 4, False) == 10.0, "the tall peak rises the full way from the valley"
     assert tp(hist, 6, False) == 0.5, "the shoulder bump beside the tall peak has tiny prominence"
-    # Flat-topped plateau is one peak (its left edge), with full prominence.
     assert tp(np.array([0, 0, 5, 5, 5, 0, 0], np.float32), 2, False) == 5.0, "plateau keeps full prominence"
-    # A peak on a non-circular boundary (L/S channel, e.g. a black L=0 background)
-    # descends to the implicit 0 beyond the edge, so it keeps full prominence
-    # instead of being flattened to 0.
     assert tp(np.array([10, 8, 2, 0], np.float32), 0, False) == 10.0, "boundary peak keeps full prominence"
-    print("OK  auto_cluster: topographic prominence keeps small features + boundaries, rejects shoulders")
+    print("OK  detect_centers: topographic prominence keeps small features + boundaries, rejects shoulders")
 
 
 def test_peak_subpeak_vs_step():
@@ -918,68 +879,6 @@ def test_peak_subpeak_vs_step():
     step = fp([0, 0, 5, 5, 5, 5, 9, 0], 0.3, False)
     assert 6 in step and 2 not in step, f"flat-step shoulder rejected, only idx 6 kept, got {step}"
     print("OK  peak detection: mean-valley prominence keeps sub-peaks; both-sides-dip rejects flat steps")
-
-
-def test_auto_cluster_elbow():
-    # 3 colour blobs + 1 GRAY blob. Hue-peak k ignores the (hueless) gray; the
-    # data-driven elbow in 3D Lab includes it.
-    img = np.full((90, 90, 3), 110, np.uint8)
-    img[5:40, 5:40] = (40, 40, 200); img[5:40, 50:85] = (40, 200, 40)
-    img[50:85, 5:40] = (200, 120, 40); img[50:85, 50:85] = (90, 90, 90)
-
-    def k_of(method):
-        m = GraphModel(); s = _src(m, img)
-        n = _op(m, "auto_cluster", max_k=8, k_method=method, channel=0,
-                cluster_space="lab", lum_weight=0.3)
-        m.add_edge(s, n); Engine(m).evaluate_all()
-        return n.output["k"]
-
-    assert k_of("elbow") > k_of("peaks"), \
-        "the 3D elbow should add a cluster for the gray blob that hue-peaks miss"
-
-    # k_bias nudges the elbow result by N clusters (relative to the knee), clamped.
-    from core.operations import _elbow_k
-    ks = list(range(2, 13))
-    inertias = [100, 72, 50, 33, 22, 18, 15.5, 14, 13, 12.4, 12]   # knee ~k=6
-    base = _elbow_k(ks, inertias, 0)
-    assert _elbow_k(ks, inertias, 1) == base + 1, "k_bias=+1 -> one more cluster"
-    assert _elbow_k(ks, inertias, -2) == base - 2, "k_bias=-2 -> two fewer clusters"
-    assert _elbow_k(ks, inertias, 99) == ks[-1] and _elbow_k(ks, inertias, -99) == ks[0], \
-        "k_bias is clamped to the available k range"
-    print("OK  auto_cluster elbow: data-driven 3D k includes gray; k_bias nudges k")
-
-
-def test_auto_cluster_chroma_split():
-    from core.operations import (_pixel_chroma, _kmeans_clusters_chroma_split,
-                                  _detect_cluster_count as dc)
-    # chroma (max-min of BGR) is ~0 for white, gray AND black; high for colour.
-    px = np.uint8([[[255, 255, 255], [0, 0, 0], [128, 128, 128], [40, 40, 200]]])
-    ch = _pixel_chroma(px)
-    assert list(ch) == [0, 0, 0, 160], f"chroma: white/gray/black=0, red=160 (got {list(ch)})"
-
-    # A near-white tint reads as S=255 in HLS (a phantom hue), but its chroma is ~7.
-    # With the chroma gate, it is excluded from hue-peak detection -> no phantom k.
-    img = np.zeros((100, 100, 3), np.uint8)
-    img[:, :60] = (40, 40, 200)          # saturated red (hue 0)
-    img[:, 60:] = (248, 255, 248)        # near-white green tint (HLS S=255, chroma 7, hue 60)
-    assert dc(img, 3.0, 0.3, 8, channel=0, chroma_gate=0) == 2, \
-        "ungated, the coherent near-white tint forms a phantom hue peak"
-    assert dc(img, 3.0, 0.3, 8, channel=0, chroma_gate=20) == 1, \
-        "gated, the near-white tint is excluded -> only the real (red) hue cluster"
-
-    # The split: red + green blobs + white + near-black -> 2 colour clusters + 2
-    # achromatic (lightness) clusters = 4; white/black stay out of the colour ones.
-    seg = np.zeros((40, 40, 3), np.uint8)
-    seg[:20, :20] = (40, 40, 200); seg[:20, 20:] = (40, 200, 40)
-    seg[20:, :20] = (255, 255, 255); seg[20:, 20:] = (10, 10, 10)
-    out = _kmeans_clusters_chroma_split(seg, 2, 2, 20, "lab", 0.3, "bgr")
-    assert out["k"] == 4, f"2 colour + 2 gray-levels = 4 clusters (got {out['k']})"
-    lab = out["labels"].reshape(40, 40)
-    quads = {int(lab[10, 10]), int(lab[10, 30]), int(lab[30, 10]), int(lab[30, 30])}
-    assert len(quads) == 4, f"the 4 uniform regions get 4 distinct clusters (got {quads})"
-    centers = np.clip(out["centers"], 0, 255).astype(np.uint8).reshape(1, -1, 3)
-    assert int((_pixel_chroma(centers) < 25).sum()) == 2, "exactly 2 achromatic (white/black) clusters"
-    print("OK  auto_cluster: chroma gate kills phantom near-white peaks; split isolates gray/white/black")
 
 
 def test_detect_centers():
@@ -1073,8 +972,8 @@ def test_assign_centers():
 
 def test_cluster_preview_diag():
     # The clustering preview is data-driven: compute() must stash the diagnostics
-    # (per-cluster counts/spread + a subsampled feature-space scatter, plus how k
-    # was chosen for Auto Cluster) so render_preview stays a cheap pure draw.
+    # (per-cluster counts/spread + a subsampled feature-space scatter for K-Means /
+    # Assign; the detection histograms for Detect) so render_preview is a cheap draw.
     img = np.full((90, 90, 3), 110, np.uint8)
     img[5:40, 5:40] = (40, 40, 200); img[5:40, 50:85] = (40, 200, 40)
     img[50:85, 5:40] = (200, 120, 40); img[50:85, 50:85] = (90, 90, 90)
@@ -1091,18 +990,26 @@ def test_cluster_preview_diag():
     assert len(d["scatter"]) == len(d["scatter_labels"]) and d["scatter_labels"].max() < 5
     assert prev is not None and prev.ndim == 3 and prev.shape[2] == 3, "kmeans preview is a BGR image"
 
-    pk, prev = run("auto_cluster", k_method="peaks", channel=0,
-                   cluster_space="lab", lum_weight=0.4)
-    assert pk["kdiag"]["mode"] == "peaks" and len(pk["kdiag"]["peaks"]) >= 1
-    assert len(pk["kdiag"]["raw"]) == len(pk["kdiag"]["smooth"]), "both hist curves same length"
-    assert prev is not None and prev.ndim == 3, "auto(peaks) preview renders"
+    # Detect Color Centers stashes the two detection histograms for its preview.
+    det, prev = run("detect_centers", max_k=8, smoothing=2.0, min_prominence=0.3,
+                    chroma_threshold=8.0)
+    dd = det["detdiag"]
+    assert "hue" in dd and "lum" in dd, "detection diagnostic carries both histograms"
+    assert len(dd["hue"]["raw"]) == len(dd["hue"]["smooth"]), "hue curves same length"
+    assert prev is not None and prev.ndim == 3, "detect_centers preview renders"
 
-    el, prev = run("auto_cluster", k_method="elbow", max_k=8,
-                   cluster_space="lab", lum_weight=0.4)
-    kd = el["kdiag"]
-    assert kd["mode"] == "elbow" and kd["chosen"] in kd["ks"] and len(kd["inertias"]) == len(kd["ks"])
-    assert prev is not None and prev.ndim == 3, "auto(elbow) preview renders"
-    print("OK  cluster preview: compute() stashes palette/scatter/spread + k-detection diag")
+    # Assign to Centers (detect -> assign) produces the standard K-Means-style diag.
+    m = GraphModel(); s = _src(m, img)
+    de = _op(m, "detect_centers", max_k=8, smoothing=2.0, min_prominence=0.3,
+             chroma_threshold=8.0)
+    asg = _op(m, "assign_centers", algorithm="nearest", lum_weight=0.4)
+    m.add_edge(s, de); m.add_edge(s, asg, 0); m.add_edge(de, asg, 1)
+    Engine(m).evaluate_all()
+    ad = asg.output["diag"]
+    assert ad["counts"].sum() == 90 * 90, "assign palette counts cover every pixel"
+    aprev = REGISTRY["assign_centers"].render_preview([img], asg.output, {})
+    assert aprev is not None and aprev.ndim == 3, "assign_centers preview renders"
+    print("OK  cluster preview: compute() stashes palette/scatter/spread + detection histograms")
 
 
 def test_normalize_lighting():
@@ -1299,12 +1206,9 @@ def main():
     test_normalize()
     test_invert()
     test_local_hdr()
-    test_auto_cluster()
-    test_auto_cluster_hue_robust()
-    test_auto_cluster_small_feature()
+    test_detect_hue_robust()
+    test_peak_prominence()
     test_peak_subpeak_vs_step()
-    test_auto_cluster_elbow()
-    test_auto_cluster_chroma_split()
     test_detect_centers()
     test_assign_centers()
     test_cluster_preview_diag()
@@ -1315,7 +1219,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 49 backend tests passed")
+    print("\nENGINE OK: 46 backend tests passed")
 
 
 if __name__ == "__main__":

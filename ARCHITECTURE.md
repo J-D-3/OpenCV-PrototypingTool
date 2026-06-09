@@ -117,7 +117,7 @@ does not cycle at runtime.
 | Make an int slider non-linear | `ParamSpec(kind="int", log=True)` → logarithmic slider (`ui/parameters._add_log_int`). |
 | Make a slider evaluate while dragging | `ParamSpec(..., live=True)` (cheap params only) → commits every step, not just on release. |
 | Document what a parameter does | `ParamSpec(..., help="…")` → a one-line "how it affects the result" blurb shown under the name in the control's tooltip. Every shown param must have one (enforced by `engine_test.test_param_help_present`). |
-| Gray out a param unless a mode is set | `ParamSpec(..., enabled_if=("other_param", value))` (or a tuple of accepted values, or a **list of conditions** that must all hold — e.g. `[("k_method","peaks"),("channel",0)]`) → the control disables when unmet (`ui/parameters._refresh_enabled`, re-run on every committed change). |
+| Gray out a param unless a mode is set | `ParamSpec(..., enabled_if=("other_param", value))` (or a tuple of accepted values — e.g. `("algorithm", ("shdbscan","soptics"))` — or a **list of conditions** that must all hold) → the control disables when unmet (`ui/parameters._refresh_enabled`, re-run on every committed change). |
 | Add a non-image payload op (clusters, contours, regions) | Declare the port `datatypes` type; ops with the same payload type compose (e.g. Label Regions → Filter Contours). |
 | Change how a parameter control looks | `ui/parameters.py`; the widget is derived from the `ParamSpec.kind`. |
 | Change batch parallelism / worker count | `core/engine.py` (`_max_workers`, `_run_batched`). Hold `operations._KMEANS_LOCK` around any new global cv2 state used inside a parallelised op. |
@@ -135,8 +135,9 @@ does not cycle at runtime.
 Prefer **one node + conditional params** over splitting into a node per mode.
 Give the mode-specific params `ParamSpec(enabled_if=("mode_param", value))` so they
 **gray out** when they don't apply (`ui/parameters._refresh_enabled`). Example:
-Auto Cluster's `k_method` (peaks | elbow) — the peak-detection params
-(`channel`, `smoothing`, `min_prominence`) are `enabled_if=("k_method", "peaks")`.
+Density Cluster's `algorithm` — the approximate-only params (`metric`, `seed`) are
+`enabled_if=("algorithm", ("shdbscan", "soptics"))` (a *tuple of accepted values*),
+so they activate only for the approximate algorithms.
 
 Rationale (apply the same reasoning to future mode-bearing ops):
 - The modes share one **role and output payload** and feed the same downstream —

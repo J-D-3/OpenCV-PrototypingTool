@@ -36,7 +36,7 @@ $env:QT_QPA_PLATFORM='offscreen'; .\.venv\Scripts\python.exe smoke_test.py   # G
 ```
 Both suites must stay green before committing. Each is a single script that runs
 all its checks (no test framework / per-test selection — narrow by commenting out
-calls if needed). Counts as of 2026-06-08: **36 smoke checks + 47 engine tests.**
+calls if needed). Counts as of 2026-06-09: **36 smoke checks + 46 engine tests.**
 
 ## Optional OPTICS backend (Density Cluster node)
 `core/optics_backend.py` lazily loads the **`optics`** package — a pip-installable pybind11

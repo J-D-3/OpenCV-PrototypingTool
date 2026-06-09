@@ -32,7 +32,6 @@ ICON_BY_OP = {
     "diff": "minus",
     "histogram": "histogram",
     "kmeans": "cluster",
-    "auto_cluster": "cluster",
     "detect_centers": "cluster",
     "assign_centers": "palette",
     "mean_shift": "cluster",

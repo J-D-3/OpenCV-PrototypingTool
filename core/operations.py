@@ -480,30 +480,6 @@ def _kmeans_clusters(img, k, attempts=5, space="bgr", lum_weight=1.0, in_space="
     return _finalize_clusters(img, labels, feat, space, in_space)
 
 
-def _kmeans_clusters_chroma_split(img, k_chromatic, gray_levels, chroma_min,
-                                  space, lum_weight, in_space, attempts=5):
-    """Cluster achromatic and colorful pixels separately. Pixels whose chroma is
-    below ``chroma_min`` (white/gray/black) are clustered by LIGHTNESS into up to
-    ``gray_levels`` clusters; the rest cluster by the chosen feature space (hue/Lab).
-    This keeps desaturated pixels out of the coloured clusters — and, because chroma
-    is ~0 for near-white/near-black too, it handles the HLS double-cone problem."""
-    bgr = _as_bgr(img, in_space)
-    achromatic = _pixel_chroma(bgr) < float(chroma_min)
-    feat = _cluster_features(img, space, lum_weight, in_space)
-    labels = np.zeros(feat.shape[0], np.int32)
-    next_label = 0
-    if achromatic.any() and int(gray_levels) >= 1:
-        gray = _to_gray_u8(bgr).reshape(-1, 1).astype(np.float32)[achromatic]
-        al = _run_kmeans(gray, int(gray_levels), attempts)
-        labels[achromatic] = al + next_label
-        next_label += int(al.max()) + 1
-    chromatic = ~achromatic
-    if chromatic.any() and int(k_chromatic) >= 1:
-        cl = _run_kmeans(feat[chromatic], int(k_chromatic), attempts)
-        labels[chromatic] = cl + next_label
-    return _finalize_clusters(img, labels, feat, space, in_space)
-
-
 def _cluster_diag(feat, labels, k, space, max_points=4000):
     """Precompute the data the cluster preview draws — done once here (in compute)
     so ``render_preview`` stays a cheap pure-drawing pass (it runs for every node
@@ -633,157 +609,6 @@ def _find_prominent_peaks(hist, min_prominence, circular):
     return peaks
 
 
-def _detect_cluster_count(img, sigma, min_prominence, max_k, channel=1,
-                          in_space="bgr", return_diag=False, sat_weight=1.0,
-                          chroma_gate=0.0):
-    """Pick k by smoothing one channel's histogram (Gaussian) and counting its
-    modes (``_find_prominent_peaks``): local maxima that rise above the **mean** of
-    their two surrounding valleys by ``min_prominence`` of their height *and* dip on
-    both sides. Judging by the mean valley (not the global maximum, nor only the
-    higher valley) keeps both a small colored feature on a big background and a
-    sub-peak nested in a 'mountain range', while the both-sides-dip test rejects the
-    shoulder of a quasi-flat step. The channel is an HLS index (1=Luminance/L,
-    0=Hue, 2=Saturation); the input is first mapped to BGR via its tracked color
-    space.
-
-    Hue (channel 0) gets two extra treatments because raw hue is unreliable: the
-    histogram is **weighted by chroma** (max−min of BGR), so washed-out pixels —
-    whose hue is essentially noise — don't create phantom peaks, and smoothing + peak
-    detection are **circular** (hue 0 and 179 are adjacent). Chroma (not HLS
-    saturation) is used because HLS S blows up near white/black as the double-cone
-    narrows — a faintly-tinted near-white pixel reads as fully saturated — whereas
-    chroma is ~0 for white, gray AND black. ``sat_weight`` is the exponent on the
-    chroma weight: each hue-bin pixel contributes ``(chroma/255) ** sat_weight``. 1.0
-    (default) = linear; 0 = ignore chroma (every hue counts equally, so achromatic
-    pixels form phantom peaks); > 1 = favour vivid pixels more aggressively. Hue only.
-
-    With ``return_diag`` the function also returns a dict describing the curves
-    and peaks it found, so the preview can draw exactly what k-detection saw: the
-    original (undamped) histogram, the smoothed/saturation-damped curve the peaks
-    were detected on, and the peak bin positions."""
-    bgr = _as_bgr(img, in_space)
-    hls = cv2.cvtColor(bgr, cv2.COLOR_BGR2HLS)   # H, L, S
-    ch = int(channel)
-    sig = max(0.5, float(sigma))
-    if ch == 0:                                   # Hue: chroma-weighted + circular
-        # OpenCV's 8-bit BGR2HLS can emit hue 180 (documented 0..179) for some
-        # pixels; hue is circular so 180 (=360°) wraps to 0. Without this the
-        # histogram would gain a spurious 181st bin.
-        h = (hls[:, :, 0].reshape(-1).astype(np.int64)) % 180  # 0..179
-        chroma = _pixel_chroma(bgr)                            # ~0 for white/gray/black
-        sw = np.power(chroma / 255.0, max(0.0, float(sat_weight)))  # exponent (1.0 = linear)
-        if chroma_gate > 0:                                   # hard-exclude achromatic pixels
-            sw = np.where(chroma >= float(chroma_gate), sw, 0.0)  # (when the split is on)
-        # "original" = plain hue count; the damped curve weights each pixel by its
-        # chroma so achromatic pixels barely contribute — showing both makes the
-        # chroma damping visible in the preview.
-        raw = np.bincount(h, minlength=180).astype(np.float32)
-        base = np.bincount(h, weights=sw, minlength=180).astype(np.float32)
-        nbins, circular = 180, True
-    else:
-        chan = hls[:, :, ch].astype(np.uint8)
-        raw = cv2.calcHist([chan], [0], None, [256], [0, 256]).flatten().astype(np.float32)
-        base = raw.copy()
-        nbins, circular = 256, False
-
-    if circular:                                  # wrap-pad so smoothing is seamless
-        pad = int(np.ceil(sig * 3)) + 1
-        ext = np.concatenate([base[-pad:], base, base[:pad]])
-        ext = cv2.GaussianBlur(ext.reshape(-1, 1), (0, 0), sig).flatten()
-        hist = ext[pad:pad + nbins]
-    else:
-        hist = cv2.GaussianBlur(base.reshape(-1, 1), (0, 0), sig).flatten()
-
-    peak_idx = _find_prominent_peaks(hist, min_prominence, circular)
-    k = max(1, min(len(peak_idx), int(max_k)))
-    if not return_diag:
-        return k
-    diag = {"mode": "peaks", "raw": raw, "smooth": hist, "peaks": peak_idx,
-            "channel": ch, "nbins": nbins, "circular": circular,
-            "chname": _CLUSTER_CHANNEL_NAMES.get(ch, "channel"),
-            "peak_colors": _peak_mean_colors(bgr, hls, ch, nbins, circular,
-                                             peak_idx, sig, sat_weight)}
-    return k, diag
-
-
-def _peak_mean_colors(bgr, hls, ch, nbins, circular, peak_idx, sig, sat_weight=1.0):
-    """The real color each detected peak stands for: the **chroma-weighted mean BGR**
-    of the pixels that fall in (a small ±window around) the peak's bin of the
-    detection channel — same weighting the peak detection uses, so vivid pixels
-    dominate the colour. Falls back to a synthetic swatch where there's no chromatic
-    support (e.g. an all-gray bin)."""
-    vals = hls[:, :, ch].reshape(-1).astype(np.int64) % nbins  # bin per pixel (hue wraps 180->0)
-    chroma = _pixel_chroma(bgr) / 255.0
-    w = np.maximum(np.power(chroma, max(0.0, float(sat_weight))), 1e-3)  # chroma weight
-    flat = bgr.reshape(-1, 3).astype(np.float32)
-    wsum = np.bincount(vals, weights=w, minlength=nbins)
-    chan_sum = [np.bincount(vals, weights=w * flat[:, c], minlength=nbins) for c in range(3)]
-    win = max(1, int(round(sig)))
-    colors = []
-    for pk in peak_idx:
-        if circular:
-            idx = [(pk + d) % nbins for d in range(-win, win + 1)]
-        else:
-            idx = list(range(max(0, pk - win), min(nbins, pk + win + 1)))
-        wtot = float(wsum[idx].sum())
-        if wtot > 1e-6:
-            col = tuple(int(np.clip(chan_sum[c][idx].sum() / wtot, 0, 255)) for c in range(3))
-        else:
-            col = _peak_color(pk, ch)
-        colors.append(col)
-    return colors
-
-
-def _elbow_k(ks, inertias, k_bias=0):
-    """The k at the inertia knee, nudged by ``k_bias`` clusters. The knee is the
-    point of greatest perpendicular distance below the first->last chord of the
-    *normalized* inertia curve (``dist = |x + y - 1|``); ``k_bias`` then offsets the
-    chosen index by that many steps (clamped to the available range) — a direct,
-    predictable nudge toward more (+) or fewer (−) clusters. A blind index offset is
-    used (rather than tilting the score) because past the knee the inertia curve is
-    flat, so a score tilt would jump straight to max_k instead of nudging."""
-    if not ks:
-        return 2
-    if len(ks) == 1:
-        return int(ks[0])
-    x = np.array(ks, np.float64)
-    y = np.array(inertias, np.float64)
-    x = (x - x[0]) / ((x[-1] - x[0]) or 1.0)
-    y = (y - y.min()) / ((y.max() - y.min()) or 1.0)   # decreasing -> y[0]~1, y[-1]~0
-    knee = int(np.argmax(np.abs(x + y - 1.0)))         # chord (0,1)->(1,0): x+y-1=0
-    idx = min(len(ks) - 1, max(0, knee + int(round(k_bias))))
-    return int(ks[idx])
-
-
-def _detect_k_elbow(feat, max_k, attempts=3, return_diag=False, k_bias=0):
-    """Data-driven k: run k-means for k=2..max_k on the *full feature space* and
-    pick the elbow (knee) of the inertia/compactness curve (``_elbow_k``), nudged
-    by ``k_bias`` toward more/fewer clusters. No colour-channel assumption, so it
-    treats colour and gray uniformly and is reproducible across lighting (the
-    channel/smoothing params don't apply in this mode).
-
-    With ``return_diag`` it also returns the (ks, inertias) curve and the chosen
-    knee, so the preview can draw the inertia curve the elbow was picked from."""
-    mk = max(2, int(max_k))
-    ks = list(range(2, mk + 1))
-    if len(ks) <= 1:
-        k = ks[0] if ks else 2
-        return (k, {"mode": "elbow", "ks": ks, "inertias": [], "chosen": k}) \
-            if return_diag else k
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-    inertias = []
-    for k in ks:
-        with _KMEANS_LOCK:
-            cv2.setRNGSeed(0)
-            compactness, _, _ = cv2.kmeans(feat, k, None, criteria, int(attempts),
-                                           cv2.KMEANS_PP_CENTERS)
-        inertias.append(float(compactness))
-    chosen = _elbow_k(ks, inertias, k_bias)
-    if not return_diag:
-        return chosen
-    return chosen, {"mode": "elbow", "ks": ks, "inertias": inertias, "chosen": chosen}
-
-
 def _circular_smooth(base, sig):
     """Gaussian-blur a circular histogram (e.g. hue) seamlessly: wrap-pad both
     ends by 3σ, blur, then crop back. A plain blur would leak the 0/end bins into
@@ -911,41 +736,6 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
                     "peak_colors": peak_cols(lum_peaks, lbn, neutral, False)},
             "seed_bgr": seeds_bgr}
     return payload
-
-
-def _compute_auto_cluster(inputs, p, in_space="bgr"):
-    """K-means with an auto-detected cluster count. 'k_method' picks how k is
-    found: 'peaks' counts modes in a chosen HLS channel histogram; 'elbow' runs
-    k-means over a range and takes the inertia knee in the full feature space
-    (colour + gray, more stable). With 'separate_achromatic', white/gray/black
-    pixels (chroma below the threshold) are pulled out and clustered by lightness so
-    they don't pollute the coloured clusters; the detected k then counts only the
-    colourful clusters."""
-    try:
-        img = inputs[0]
-        space, lw = p.get("cluster_space", "bgr"), p.get("lum_weight", 1.0)
-        if p.get("k_method", "peaks") == "elbow":
-            feat = _cluster_features(img, space, lw, in_space)
-            k, kdiag = _detect_k_elbow(feat, p["max_k"], return_diag=True,
-                                       k_bias=p.get("k_bias", 0))
-        else:
-            gate = p.get("chroma_min", 20) if p.get("separate_achromatic", False) else 0
-            k, kdiag = _detect_cluster_count(img, p["smoothing"], p["min_prominence"],
-                                             p["max_k"], p.get("channel", 1), in_space,
-                                             return_diag=True,
-                                             sat_weight=p.get("sat_weight", 1.0),
-                                             chroma_gate=gate)
-        if p.get("separate_achromatic", False):
-            out = _kmeans_clusters_chroma_split(img, k, p.get("gray_levels", 2),
-                                                p.get("chroma_min", 20), space, lw, in_space)
-        else:
-            out = _kmeans_clusters(img, k, 5, space, lw, in_space)
-        if isinstance(out, dict):
-            out["kdiag"] = kdiag       # how k was chosen (peaks histogram / elbow curve)
-        return out
-    except Exception as e:
-        print(f"Error executing auto_cluster: {e}")
-        return None
 
 
 def _compute_detect_centers(inputs, p, in_space="bgr"):
@@ -1196,36 +986,6 @@ def _band_hist(kdiag, width=_PREVIEW_W, height=None):
                 (_px(4), _px(12)), _FONT, _fs(0.34), (150, 150, 150), _tk(1), cv2.LINE_AA)
     cv2.putText(band, "damped+smoothed", (width - _px(118), _px(12)), _FONT, _fs(0.34),
                 (0, 200, 255), _tk(1), cv2.LINE_AA)
-    return band
-
-
-def _band_elbow(kdiag, width=_PREVIEW_W, height=None):
-    """The inertia-vs-k curve the elbow method chose from; chosen k marked green."""
-    height = height or _px(150)
-    band = np.full((height, width, 3), 30, np.uint8)
-    ks, ys = kdiag["ks"], np.array(kdiag["inertias"], np.float64)
-    if len(ks) < 1 or len(ys) != len(ks):
-        return band
-    mn, mx = float(ys.min()), float(ys.max())
-    rng = (mx - mn) or 1.0
-    m = _px(16)
-    def xof(i):
-        return int(m + (i / max(1, len(ks) - 1)) * (width - 2 * m))
-    def yof(v):
-        return int((height - m) - ((v - mn) / rng) * (height - 2 * m))
-    for i in range(len(ks) - 1):
-        cv2.line(band, (xof(i), yof(ys[i])), (xof(i + 1), yof(ys[i + 1])),
-                 (0, 200, 255), _tk(1), cv2.LINE_AA)
-    for i in range(len(ks)):
-        cv2.circle(band, (xof(i), yof(ys[i])), _tk(2), (200, 200, 200), -1, cv2.LINE_AA)
-    if kdiag.get("chosen") in ks:
-        ci = ks.index(kdiag["chosen"])
-        cv2.line(band, (xof(ci), m), (xof(ci), height - m), (0, 230, 0), _tk(1), cv2.LINE_AA)
-        cv2.circle(band, (xof(ci), yof(ys[ci])), _px(5), (0, 230, 0), _tk(1), cv2.LINE_AA)
-        cv2.putText(band, f"k={kdiag['chosen']}", (xof(ci) + _px(4), m + _px(12)),
-                    _FONT, _fs(0.36), (0, 230, 0), _tk(1), cv2.LINE_AA)
-    cv2.putText(band, "inertia vs k", (_px(4), _px(12)), _FONT, _fs(0.34),
-                (150, 150, 150), _tk(1), cv2.LINE_AA)
     return band
 
 
@@ -1570,29 +1330,6 @@ def _render_kmeans(inputs, output, p):
         _titled(_band_scatter(diag, centers), "feature space (clusters)"),
         _titled(_band_spread(centers, diag["spread"]), "cluster spread (tightness)"),
     ])
-
-
-def _render_auto_cluster(inputs, output, p):
-    """Inspector preview for Auto Cluster: how k was chosen (the peak-detection
-    histogram or the elbow curve), then the resulting proportional palette."""
-    if not isinstance(output, dict):
-        return None
-    centers = np.clip(output["centers"], 0, 255).astype(np.uint8)
-    if len(centers) == 0:
-        return None
-    diag = output.get("diag")
-    if diag is None:
-        return _simple_swatch(centers)
-    kdiag = output.get("kdiag") or {}
-    if kdiag.get("mode") == "elbow":
-        top = _titled(_band_elbow(kdiag), f"elbow: chose k={output.get('k', '?')}")
-    elif kdiag.get("mode") == "peaks":
-        top = _titled(_band_hist(kdiag),
-                      f"k from {kdiag.get('chname', '')} peaks  (k={output.get('k', '?')})")
-    else:
-        top = None
-    palette = _titled(_band_palette(centers, diag["counts"]), "palette after clustering")
-    return np.vstack([b for b in (top, palette) if b is not None])
 
 
 def _render_detect_centers(inputs, output, p):
@@ -2504,26 +2241,13 @@ _NORMALIZE_MODES = [
     ("Equalize", "equalize"),
     ("CLAHE", "clahe"),
 ]
-# Channel for Auto Cluster's peak detection. Values are HLS channel indices.
-_CLUSTER_CHANNELS = [
-    ("Luminance (L)", 1),
-    ("Hue (H)", 0),
-    ("Saturation (S)", 2),
-]
-# Short HLS channel names, keyed by index — used to caption the peak histogram.
-_CLUSTER_CHANNEL_NAMES = {0: "Hue", 1: "Luminance", 2: "Saturation"}
-# Feature space the clustering distance is measured in. Lab/HLS separate a
+# Feature space the K-Means clustering distance is measured in. Lab/HLS separate a
 # luminance channel that the "Luminance weight" param can down-weight for
 # lighting-stable, chroma-driven clusters. "bgr" = cluster on raw input pixels.
 _CLUSTER_SPACES = [
     ("BGR (as-is)", "bgr"),
     ("Lab", "lab"),
     ("HLS", "hls"),
-]
-# How Auto Cluster picks k.
-_KMETHODS = [
-    ("Histogram peaks", "peaks"),
-    ("Elbow (3D, data-driven)", "elbow"),
 ]
 # How Assign to Centers labels pixels against the detected seeds.
 _ASSIGN_ALGOS = [
@@ -2911,65 +2635,6 @@ OPS: list = [
                     "Centers), in unified CIELAB: nearest centre (ΔE) or k-means refined "
                     "from those centres. Emits a CLUSTERS payload (use Reduce Colors to "
                     "render). The detect→assign pair replaces Auto Cluster.",
-    ),
-    Operation(
-        id="auto_cluster", label="Auto Cluster", category="Color Quantization",
-        inputs=[Port("in", datatypes.IMAGE)],
-        outputs=[Port("out", datatypes.CLUSTERS)],
-        params=[
-            ParamSpec("max_k", 12, kind="int", min=2, max=24, label="Max clusters",
-                      help="Upper bound on the auto-detected cluster count k."),
-            ParamSpec("k_method", "peaks", kind="enum", choices=_KMETHODS,
-                      label="k detection",
-                      help="How k is chosen: count histogram peaks, or the k-means inertia elbow."),
-            ParamSpec("channel", 1, kind="enum", choices=_CLUSTER_CHANNELS,
-                      label="Peak channel", enabled_if=("k_method", "peaks"),
-                      help="HLS channel whose histogram peaks are counted (Hue / Luminance / Saturation)."),
-            ParamSpec("smoothing", 4.0, kind="float", min=0.5, max=15.0, step=0.5,
-                      label="Histogram smoothing", enabled_if=("k_method", "peaks"),
-                      help="Gaussian blur of the histogram before peak finding; higher = fewer peaks."),
-            ParamSpec("min_prominence", 0.3, kind="float", min=0.0, max=1.0, step=0.01,
-                      label="Min peak prominence", enabled_if=("k_method", "peaks"),
-                      help="How far a peak must rise above the MEAN of its two "
-                           "surrounding valleys (fraction of its own height) to count "
-                           "as a colour — lenient enough to catch a small feature or a "
-                           "sub-peak of a 'mountain range'. A peak must also dip on "
-                           "both sides, so a quasi-flat step isn't counted. Higher = "
-                           "stricter; raise 'smoothing' to drop noise."),
-            ParamSpec("sat_weight", 1.0, kind="float", min=0.0, max=4.0, step=0.1,
-                      label="Chroma weight",
-                      enabled_if=[("k_method", "peaks"), ("channel", 0)],
-                      help="Exponent on chroma (max−min of BGR) in the hue histogram; "
-                           ">1 favours vivid pixels, 0 ignores chroma. Chroma is used "
-                           "instead of HLS saturation because HLS S wrongly reads "
-                           "near-white/near-black pixels as fully saturated."),
-            ParamSpec("k_bias", 0, kind="int", min=-5, max=5, label="k nudge (elbow)",
-                      enabled_if=("k_method", "elbow"),
-                      help="Shift the auto-detected k by this many clusters relative to "
-                           "the inertia knee: + for more clusters, − for fewer; 0 = the "
-                           "plain knee. Clamped to [2, Max clusters]."),
-            ParamSpec("separate_achromatic", False, kind="bool", label="Separate gray/white/black",
-                      help="Cluster achromatic pixels (low chroma — white, gray AND black) "
-                           "separately by lightness, so they don't fall into the coloured "
-                           "clusters. The detected k then counts only the colourful clusters."),
-            ParamSpec("chroma_min", 20, kind="int", min=0, max=128, label="Chroma threshold",
-                      enabled_if=("separate_achromatic", True),
-                      help="Pixels with chroma (max−min of BGR) below this are treated as "
-                           "achromatic. ~20 ≈ 8%; raise it to pull more washed-out pixels out."),
-            ParamSpec("gray_levels", 2, kind="int", min=1, max=6, label="Gray levels",
-                      enabled_if=("separate_achromatic", True),
-                      help="How many achromatic clusters to split by lightness (e.g. 2 = "
-                           "dark/light, 3 = black/gray/white)."),
-            ParamSpec("cluster_space", "bgr", kind="enum", choices=_CLUSTER_SPACES,
-                      label="Cluster space",
-                      help="Distance space for k-means: BGR, Lab, or HLS (Lab/HLS split chroma from luminance)."),
-            ParamSpec("lum_weight", 1.0, kind="float", min=0.0, max=2.0, step=0.1,
-                      label="Luminance weight",
-                      help="Scales luminance in Lab/HLS; <1 = chroma-driven, more lighting-stable."),
-        ],
-        compute=_compute_auto_cluster, color=(0, 150, 136), out_space="passthrough",
-        space_aware=True, in_label="Mat (any)", out_label="Clusters (auto k)",
-        render_preview=_render_auto_cluster, summary=_summary_kmeans, preview_is_chart=True,
     ),
     Operation(
         id="hdbscan_cluster", label="Density Cluster", category="Color Quantization",
