@@ -185,6 +185,13 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-09** — **Density Cluster: reachability in true colours + cluster axis.** The
+  reachability bars are now painted each ordered point's **own original colour** (so the
+  within-cluster colour variation is visible — e.g. several distinct reds that all belong
+  to one cluster), with a **cluster axis** beneath them: each ordered point in its cluster's
+  **mean** colour (matching the "extracted colours" swatch) and **tick marks at every
+  cluster-run boundary**. Together they explain why many distinct-looking colour runs map to
+  few clusters — the bars vary, the axis stays one colour per cluster.
 - **2026-06-09** — **Auto Cluster split into Detect Color Centers → Assign to Centers
   (CIELAB/LCh).** Auto Cluster's 12 parameters and tangled HLS+chroma+Lab logic were
   replaced by two composable nodes that work in one perceptual space — true CIELAB / LCh

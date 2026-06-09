@@ -1042,6 +1042,13 @@ def _attach_reachability(out, opt, bgr, space, voxel, min_pts):
         order = np.asarray(reach["point_index"]).astype(np.int64)
         out["diag"]["reach"] = np.asarray(reach["reachability"], np.float32)
         out["diag"]["reach_labels"] = per_unique[order]
+        # The TRUE display colour of each ordered point (uniq is in the clustering space),
+        # so the bars can show real within-cluster colour variation, not the cluster mean.
+        if space == "lab":
+            disp = np.asarray(opt.lab_to_srgb(uniq))[:, ::-1]    # Lab -> sRGB -> BGR
+        else:
+            disp = np.clip(uniq[:, ::-1], 0, 255)                # RGB -> BGR
+        out["diag"]["reach_colors"] = disp.astype(np.uint8)[order]
     except Exception:
         pass
 
@@ -1214,11 +1221,12 @@ def _compute_hdbscan(inputs, p, in_space="bgr"):
     return out
 
 
-def _band_reachability(reach, labels, centers, height=None):
-    """The OPTICS reachability plot: ordered points as bars (height = reachability),
-    each coloured by the cluster it belongs to (noise = the flag colour). Valleys (runs
-    of low bars) are clusters; peaks are the gaps between them. UNDEFINED (-1) reach is
-    drawn full-height. Columns subsample the ordering, so it's O(width) to draw."""
+def _band_reachability(reach, colors, height=None):
+    """The OPTICS reachability plot: ordered points as bars (height = reachability), each
+    painted its OWN original colour — so within-cluster colour variation is visible (e.g.
+    several distinct reds that nonetheless belong to one cluster). Valleys (runs of low
+    bars) are clusters; peaks are the gaps. UNDEFINED (-1) reach -> full height. Columns
+    subsample the ordering, so it's O(width) to draw."""
     width = _PREVIEW_W
     height = height or _px(70)
     band = np.full((height, width, 3), 30, np.uint8)
@@ -1230,33 +1238,37 @@ def _band_reachability(reach, labels, centers, height=None):
     rmax = float(finite.max()) if finite.size else 1.0
     rmax = rmax if rmax > 0 else 1.0
     r[r < 0] = rmax                                      # UNDEFINED -> full-height peak
-    cen = np.clip(centers, 0, 255).astype(np.uint8)
-    lab = np.asarray(labels, np.int64)
+    cols = np.clip(np.asarray(colors), 0, 255).astype(np.uint8)
     col_idx = np.clip(np.arange(width) * n // width, 0, n - 1)
     heights = (r[col_idx] / rmax * (height - 1)).astype(int)
-    col_lab = lab[col_idx]
     for x in range(width):
-        l = int(col_lab[x])
-        c = cen[l] if 0 <= l < len(cen) else (160, 160, 160)
-        band[height - 1 - heights[x]:height - 1, x] = c
+        band[height - 1 - heights[x]:height - 1, x] = cols[col_idx[x]]
     return band
 
 
 def _band_cluster_ribbon(labels, centers, height=None):
-    """A thin strip aligned with the reachability plot's x-axis: each ordered point painted
-    its CLUSTER's mean colour. Read it as 'where does each cluster start/end in the ordering'
-    — the colours match the bars directly above it."""
+    """The cluster axis under the reachability plot: each ordered point painted its
+    CLUSTER's mean colour (so it matches the 'extracted colours' swatch), with tick marks
+    at every cluster-run boundary marking where each cluster starts/ends. Several
+    same-colour segments mean one cluster reappears at different points in the ordering —
+    which is why the bars above (true colours) can look more varied than the cluster count."""
     width = _PREVIEW_W
-    height = height or _px(13)
+    height = height or _px(15)
     band = np.full((height, width, 3), 30, np.uint8)
     n = len(labels)
     if n == 0:
         return band
     cen = np.clip(centers, 0, 255).astype(np.uint8)
-    lab = np.asarray(labels, np.int64)[np.clip(np.arange(width) * n // width, 0, n - 1)]
+    col_idx = np.clip(np.arange(width) * n // width, 0, n - 1)
+    lab = np.asarray(labels, np.int64)[col_idx]
     for x in range(width):
         l = int(lab[x])
         band[:, x] = cen[l] if 0 <= l < len(cen) else (160, 160, 160)
+    # Tick at every cluster-run boundary (a thin dark line + a bright cap on the top edge),
+    # so cluster start/end reads as an axis. Boundaries are at columns where the id changes.
+    for x in np.flatnonzero(np.diff(lab) != 0) + 1:
+        band[:, x] = (25, 25, 25)
+        band[:_px(4), x] = (240, 240, 240)
     return band
 
 
@@ -1295,12 +1307,12 @@ def _render_hdbscan(inputs, output, p):
         _titled(img, title),
         _titled(_band_palette(centers, counts), "extracted colours  (bar width = pixel share)"),
     ]
-    if "reach" in diag:
+    if "reach" in diag and "reach_colors" in diag:
         reach = np.vstack([
-            _band_reachability(diag["reach"], diag["reach_labels"], centers),
+            _band_reachability(diag["reach"], diag["reach_colors"]),
             _band_cluster_ribbon(diag["reach_labels"], centers),
         ])
-        bands.append(_titled(reach, "OPTICS reachability  (height = density; strip = cluster)"))
+        bands.append(_titled(reach, "OPTICS reachability  (bars = colour, axis = cluster)"))
     return np.vstack(bands)
 
 
