@@ -44,10 +44,13 @@ sibling **OPTICS-Clustering** repo (density clustering). It's optional and ABI-l
 the building Python/platform; `load()` searches `$OPTICS_PY_DIR` then
 `../OPTICS-Clustering/build-py/python/Release`, and raises a clear error (→ red node
 border) if absent. The **Density Cluster** op (`core/operations.py`, id `hdbscan_cluster`)
-has three `algorithm` modes — exact `hdbscan`, approximate `shdbscan` / `soptics` (CEOs
-random projections, deterministic in `seed`, cosine/L2/L1 metric). It feeds a quantized
+has four `algorithm` modes — exact `hdbscan` / `optics`, approximate `shdbscan` / `soptics`
+(CEOs random projections, deterministic in `seed`, cosine/L2/L1 metric). It feeds a quantized
 pixel cloud (the binding dedups internally, so `min_cluster_size` stays in *pixel* units)
-and emits the standard `CLUSTERS` payload; noise (`-1`) maps to a trailing magenta centre.
+and emits the standard `CLUSTERS` payload. Noise (`-1`) is either reassigned to the nearest
+cluster (`noise_handling="nearest"`, default — a usable quantization) or mapped to a trailing
+magenta centre (`"flag"`). Density clustering needs *separated* colour modes; on smooth
+photos it labels most pixels noise, so K-Means / Auto Cluster are the better quantizers there.
 The engine test skips cleanly when the binding is unavailable.
 
 ## Commit convention

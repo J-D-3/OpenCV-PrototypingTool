@@ -230,17 +230,22 @@ def _emit_hdbscan(o, i, p):
         call = (f"reach  = optics::compute_soptics_reachability_dists(feat, min_pts={mcs}, seed={p.get('seed')}, "
                 f"metric={p.get('metric')!r})\n"
                 f"labels = extract_{p.get('extract')}(reach, threshold={p.get('threshold')}, chi={p.get('chi')})   # approx OPTICS, -1=noise")
+    elif algo == "optics":
+        call = (f"reach  = optics::compute_reachability_dists(feat, min_pts={mcs})\n"
+                f"labels = extract_{p.get('extract')}(reach, threshold={p.get('threshold')}, chi={p.get('chi')})   # exact OPTICS, -1=noise")
     else:
         call = (f"labels = optics::hdbscan(feat, min_cluster_size={mcs}, min_samples={p.get('min_samples')}, "
                 f"method={p.get('method')!r}).labels   # exact, -1=noise; dedups internally")
+    noise = ("assign each noise pixel to its nearest cluster"
+             if p.get("noise_handling", "nearest") == "nearest" else "paint noise pixels the flag colour")
     return [
         f"# Density colour clustering (no k) via OPTICS-Clustering: algorithm={algo!r}, space={space!r}",
         f"bgr  = as_bgr({i[0]})                                # cv::cvtColor from the tracked colour space",
         f"feat = {conv}",
         f"feat = floor(feat / {bin_}) * {bin_} + {bin_}/2            # voxel quantize (0 = off)",
         call,
-        "centers[c] = mean BGR of pixels labelled c; reorder dark->light; append a NOISE centre (flag colour)",
-        f"{o} = {{centers, labels (-1 -> noise idx), shape, k}}   # CLUSTERS payload",
+        f"centers[c] = mean BGR of pixels labelled c; reorder dark->light; {noise}",
+        f"{o} = {{centers, labels, shape, k}}   # CLUSTERS payload",
     ]
 
 

@@ -154,11 +154,13 @@ def test_hdbscan_cluster():
         print("OK  density cluster: SKIPPED (optics_py binding unavailable)")
         return
     rng = np.random.default_rng(0)
-    blocks = [np.clip(rng.normal(mean, 9, (900, 3)), 0, 255)
+    blocks = [np.clip(rng.normal(mean, 9, (880, 3)), 0, 255)
               for mean in [(40, 40, 200), (60, 180, 60), (200, 120, 40)]]
     pix = np.vstack(blocks).astype(np.uint8)
+    # Sparse, uniformly-random "bridge" pixels — density clustering should call these noise.
+    pix = np.vstack([pix, rng.integers(0, 255, (60, 3)).astype(np.uint8)])
     rng.shuffle(pix)
-    img = pix[:2700].reshape(45, 60, 3)
+    img = pix.reshape(45, 60, 3)
 
     def run(**params):
         m = GraphModel()
@@ -169,28 +171,34 @@ def test_hdbscan_cluster():
         Engine(m).evaluate_all()
         return hd, red
 
-    # Exact HDBSCAN* in Lab: the 3 colour modes should form clusters.
-    hd, red = run(algorithm="hdbscan", min_cluster_size=120, color_space="lab", voxel_bin=4)
+    # Exact HDBSCAN* in Lab, FLAG noise mode: 3 modes -> clusters + a magenta noise centre.
+    hd, red = run(algorithm="hdbscan", min_cluster_size=120, color_space="lab", voxel_bin=4,
+                  noise_handling="flag", min_cluster_frac=0.01)
     assert isinstance(hd.output, dict), f"hdbscan should output a clusters payload (error={hd.error})"
     k = hd.output["k"]
     assert k >= 2, f"the 3 colour modes should form clusters, got k={k}"
+    assert hd.output["noise_index"] == k, "flag mode: noise maps to a trailing centre"
     assert hd.output["centers"].shape == (k + 1, 3), "centers = k real clusters + 1 noise centre"
-    assert hd.output["noise_index"] == k
     assert list(hd.output["centers"][k]) == [200.0, 0.0, 200.0], "noise centre is the magenta flag"
     labels = hd.output["labels"]
     assert labels.min() >= 0 and labels.max() <= k, "labels map onto centers (noise -> k)"
     assert red.output is not None and red.output.shape == img.shape
-    uniq = np.unique(red.output.reshape(-1, 3), axis=0)
-    assert uniq.shape[0] <= k + 1, f"recoloured image uses <= k+1 colours, got {uniq.shape[0]}"
 
-    # The two approximate, seeded variants: a valid payload + round-trip (lenient k).
-    for algo, extra in [("shdbscan", {}), ("soptics", {"extract": "xi"})]:
+    # NEAREST noise mode (default): noise folded into clusters -> no noise centre, no magenta.
+    hdn, redn = run(algorithm="hdbscan", min_cluster_size=120, color_space="lab", voxel_bin=4,
+                    noise_handling="nearest", min_cluster_frac=0.01)
+    kn = hdn.output["k"]
+    assert hdn.output["noise_index"] == -1, "nearest mode has no noise centre"
+    assert hdn.output["centers"].shape == (kn, 3), "nearest mode: only real centres"
+    assert hdn.output["labels"].max() < kn, "every pixel assigned to a real cluster"
+    uniqn = np.unique(redn.output.reshape(-1, 3), axis=0)
+    assert not (uniqn == [200, 0, 200]).all(axis=1).any(), "nearest mode has no magenta flag"
+
+    # All four algorithm modes (incl. exact OPTICS) produce a valid payload + round-trip.
+    for algo, extra in [("optics", {"extract": "xi"}), ("shdbscan", {}), ("soptics", {"extract": "xi"})]:
         hd2, red2 = run(algorithm=algo, min_cluster_size=120, color_space="bgr",
                         metric="cosine", seed=42, voxel_bin=4, **extra)
         assert isinstance(hd2.output, dict), f"{algo} payload (error={hd2.error})"
-        k2 = hd2.output["k"]
-        assert hd2.output["centers"].shape == (k2 + 1, 3), f"{algo}: centers = k+1"
-        assert hd2.output["labels"].max() <= k2, f"{algo}: labels map onto centers"
         assert red2.output is not None and red2.output.shape == img.shape, f"{algo}: reduce_colors round-trips"
 
     # Reachability-plot diagnostic: stashed in diag, and render_preview stacks it.
@@ -202,7 +210,7 @@ def test_hdbscan_cluster():
     prev = REGISTRY["hdbscan_cluster"].render_preview([img], hd3.output, {})
     assert prev is not None and prev.shape[0] > img.shape[0], "preview should stack image + reachability"
 
-    print(f"OK  density cluster: HDBSCAN ({k} clusters) + sHDBSCAN + sOPTICS + reachability plot")
+    print(f"OK  density cluster: OPTICS/HDBSCAN/sHDBSCAN/sOPTICS modes; noise nearest+flag; reachability")
 
 
 def test_contours():

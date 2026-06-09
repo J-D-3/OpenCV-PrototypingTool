@@ -74,9 +74,10 @@ class MainWindow(QtWidgets.QMainWindow):
             for op in ops_by_category.get(cat, []):
                 op_item = QtWidgets.QTreeWidgetItem([op.label])
                 # Precomputed haystack: display name + id + category + port labels +
-                # the cv:: calls the op makes (so e.g. "gaussianblur" finds Blur).
+                # the op's description (so e.g. "OPTICS" finds Density Cluster) + the cv::
+                # calls it makes (so e.g. "gaussianblur" finds Blur).
                 haystack = " ".join(
-                    [op.label, op.id, cat, op.in_label, op.out_label]
+                    [op.label, op.id, cat, op.in_label, op.out_label, op.description]
                     + codegen.op_cv_calls(op)).lower()
                 op_item.setData(0, QtCore.Qt.ItemDataRole.UserRole,
                                 {"name": op.id, "in": op.in_label, "out": op.out_label,

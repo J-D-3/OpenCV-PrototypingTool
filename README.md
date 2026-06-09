@@ -185,6 +185,17 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-08** — **Density Cluster: OPTICS-exact mode, noise handling, searchability.**
+  Three fixes prompted by a real-photo run. (1) Added the **OPTICS (exact)** algorithm
+  (the binding already exposed `cluster_threshold`/`extract_xi`; it just wasn't wired as a
+  mode) — so all four are selectable: OPTICS, HDBSCAN, sOPTICS, sHDBSCAN. (2) A **Noise
+  pixels** param: *Assign to nearest cluster* (default) folds sparse pixels into the closest
+  colour for a usable K-Means-like quantization, or *Flag colour* paints them magenta to
+  reveal what was sparse. This fixes the "whole image turns pink" surprise on smooth photos,
+  where density clustering correctly finds few separated modes and labels most pixels noise
+  (for such images K-Means / Auto Cluster remain the better quantizers). (3) The node is now
+  found by searching **"OPTICS" / "HDBSCAN" / "sOPTICS"** (op descriptions joined the search
+  haystack). Suites: 36 smoke + 47 engine.
 - **2026-06-08** — **Density Cluster: reachability-plot preview.** A "Show reachability
   plot" toggle computes the OPTICS **reachability** of the colour cloud and stacks the
   classic plot under the node preview — ordered points as bars (height = reachability),
