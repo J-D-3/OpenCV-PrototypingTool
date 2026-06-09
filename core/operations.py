@@ -645,7 +645,7 @@ _L_BINS = 256
 
 
 def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
-                    chroma_threshold, sat_weight=1.0, return_diag=False):
+                    chroma_threshold, sat_weight=1.0, min_area=0.0, return_diag=False):
     """Detect colour-cluster *seeds* in CIELAB/LCh — the count AND each centre's
     colour, not just k. Two structural cases replace the old 'pick a channel':
 
@@ -663,7 +663,14 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
     chroma threshold then only shapes *where seeds come from*, never *which pixel
     goes where*, so a pastel straddling the cut lands on whichever seed is truly
     closest. Returns a CENTERS payload (``return_diag`` adds the histograms +
-    peaks for the inspector preview)."""
+    peaks for the inspector preview).
+
+    ``min_area`` discards any detected centre backed by fewer than that fraction of
+    the image's pixels — a size floor that complements prominence: prominence asks
+    *is this a distinct mode?*, ``min_area`` asks *is it big enough to matter?*. It
+    filters tiny-but-locally-prominent peaks (a few stray colourful pixels rising
+    from a near-zero background) without a unit-dependent height threshold; the
+    single best-supported centre is always kept, so the result is never empty."""
     bgr = _as_bgr(img, in_space)
     lab, L, C, h = _lab_lch(bgr)
     flat_bgr = bgr.reshape(-1, 3).astype(np.float32)
@@ -708,7 +715,12 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
     if not seeds_lab:                                  # degenerate image: one overall mean
         add(np.ones(len(lab), bool), "neutral")
 
-    order = np.argsort(support)[::-1][:max(1, int(max_k))]   # keep the best-supported k
+    # Size floor: drop centres backed by < min_area of the image, but never all of
+    # them (keep at least the single best-supported one so the output is non-empty).
+    min_support = float(min_area) * max(1, len(lab))
+    kept = [i for i in range(len(support)) if support[i] >= min_support] \
+        or [int(np.argmax(support))]
+    order = sorted(kept, key=lambda i: support[i], reverse=True)[:max(1, int(max_k))]
     seeds_lab = np.asarray([seeds_lab[i] for i in order], np.float32)
     seeds_bgr = np.asarray([seeds_bgr[i] for i in order], np.float32)
     payload = {"lab": seeds_lab, "bgr": seeds_bgr,
@@ -746,7 +758,8 @@ def _compute_detect_centers(inputs, p, in_space="bgr"):
     try:
         return _detect_centers(inputs[0], in_space, p["max_k"], p["smoothing"],
                                p["min_prominence"], p["chroma_threshold"],
-                               sat_weight=p.get("sat_weight", 1.0), return_diag=True)
+                               sat_weight=p.get("sat_weight", 1.0),
+                               min_area=p.get("min_area", 0.0), return_diag=True)
     except Exception as e:
         print(f"Error executing detect_centers: {e}")
         return None
@@ -2613,6 +2626,13 @@ OPS: list = [
                       help="Exponent on C* in the hue histogram; >1 favours vivid pixels, "
                            "0 weights every chromatic pixel equally. Keeps washed-out pixels "
                            "from forming phantom hue centres."),
+            ParamSpec("min_area", 0.002, kind="float", min=0.0, max=0.2, step=0.001,
+                      label="Min cluster area",
+                      help="Discard a detected centre unless it covers at least this fraction "
+                           "of the image. A size floor that complements prominence: it drops "
+                           "tiny-but-locally-prominent peaks (a few stray colourful pixels on a "
+                           "near-zero background). 0 = keep every prominent peak; the single "
+                           "biggest centre is always kept."),
         ],
         compute=_compute_detect_centers, color=(0, 150, 136), out_space="passthrough",
         space_aware=True, in_label="Mat (any)", out_label="Centres (Lab seeds)",

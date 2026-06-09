@@ -910,6 +910,17 @@ def test_detect_centers():
                              min_prominence=0.3, chroma_threshold=10.0)
     assert capped["k"] == 2, f"max_k caps the seeds (got {capped['k']})"
 
+    # min_area drops a tiny-but-prominent speck: a big red field + a 9px blue speck
+    # (~0.36%). It's its own centre with no floor, but filtered at a 1% floor — while
+    # the single biggest centre is always kept (never an empty result).
+    speck = np.zeros((50, 50, 3), np.uint8); speck[:] = (0, 0, 200)      # red field
+    speck[0:3, 0:3] = (200, 0, 0)                                        # 9px blue speck
+    no_floor = _detect_centers(speck, "bgr", 8, 2.0, 0.1, 8.0, min_area=0.0)
+    assert no_floor["kinds"].count("chromatic") == 2, "no floor: the speck is its own centre"
+    floored = _detect_centers(speck, "bgr", 8, 2.0, 0.1, 8.0, min_area=0.01)  # 1% = 25px
+    assert floored["kinds"].count("chromatic") == 1, "min_area drops the 9px (<1%) speck"
+    assert floored["k"] >= 1, "the biggest centre is always kept (never empty)"
+
     # End-to-end through the registered op: it emits a CENTERS payload with a
     # detection diagnostic for the preview.
     m = GraphModel()

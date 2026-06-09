@@ -191,7 +191,7 @@ def _emit_hdbscan(o, i, p):
 def _emit_detect_centers(o, i, p):
     return [
         f"# Detect colour-cluster seeds in CIELAB/LCh: max_k={p.get('max_k')}, "
-        f"chroma_threshold(C*)={p.get('chroma_threshold')}",
+        f"chroma_threshold(C*)={p.get('chroma_threshold')}, min_area={p.get('min_area')}",
         f"bgr = as_bgr({i[0]})                                 # cv::cvtColor from the tracked colour space",
         "lab = srgb_to_lab(bgr)                               # true CIELAB (L 0..100), pure NumPy",
         "L, C, h = lab[:,0], hypot(lab[:,1], lab[:,2]), atan2(lab[:,2], lab[:,1])  # LCh",
@@ -199,6 +199,7 @@ def _emit_detect_centers(o, i, p):
         f"C*^{p.get('sat_weight')}, cv::GaussianBlur(sigma={p.get('smoothing')})",
         f"# neutral   (C* <  {p.get('chroma_threshold')}): lightness L* histogram (adaptive count)",
         f"peaks = local maxima with prominence >= {p.get('min_prominence')} * height (both-sides dip)",
+        f"drop peaks whose pixel support < min_area={p.get('min_area')} of the image (keep >=1)",
         f"{o} = {{lab seeds, bgr seeds}} = mean Lab/BGR of each peak's pixels   # CENTERS payload",
     ]
 

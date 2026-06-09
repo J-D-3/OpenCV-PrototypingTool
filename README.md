@@ -199,7 +199,10 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
   inspector scatter). **Detect Color Centers** (`image → CENTERS`) finds cluster *seeds* —
   count **and** colour: chromatic pixels by a chroma-weighted circular **hue** histogram,
   neutral pixels (C\* below a threshold) by a **lightness L\*** histogram with an *adaptive*
-  number of gray levels (no more fixed `gray_levels`). **Assign to Centers**
+  number of gray levels (no more fixed `gray_levels`). A **Min cluster area** knob discards
+  centres backed by less than a set fraction of the image — a size floor that complements
+  prominence (which only asks "is this a distinct mode?"), filtering tiny-but-locally-prominent
+  specks without a unit-dependent height threshold. **Assign to Centers**
   (`image + CENTERS → CLUSTERS`) labels every pixel against those seeds in unified 3-D
   CIELAB — **nearest centre (ΔE)** or **k-means refined *from* the detected centres**
   (`KMEANS_USE_INITIAL_LABELS`, so the detection guides the result instead of a random
