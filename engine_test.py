@@ -200,6 +200,18 @@ def test_hdbscan_cluster():
         assert isinstance(hd2.output, dict), f"{algo} payload (error={hd2.error})"
         assert red2.output is not None and red2.output.shape == img.shape, f"{algo}: reduce_colors round-trips"
 
+    # Thread-safety: a Batch fans out across the engine's thread pool, and the native
+    # optics extension is NOT thread-safe — without the serialization lock this crashes
+    # the process. Getting payloads back for every element proves the lock holds.
+    bm = GraphModel()
+    bs = _src(bm, Batch([img, img[::-1].copy(), img[:, ::-1].copy()]))
+    bhd = _op(bm, "hdbscan_cluster", algorithm="hdbscan", color_space="lab",
+              voxel_bin=2, min_cluster_size=80, min_cluster_frac=0.01)
+    bm.add_edge(bs, bhd)
+    Engine(bm).evaluate_all()
+    assert isinstance(bhd.output, Batch) and len(bhd.output.items) == 3, "batch -> 3 payloads"
+    assert all(isinstance(o, dict) for o in bhd.output.items), "batch fan-out survived (thread-safe)"
+
     # Reachability-plot diagnostic: stashed in diag, and render_preview stacks it.
     hd3, _ = run(algorithm="hdbscan", min_cluster_size=80, color_space="lab",
                  voxel_bin=2, show_reachability=True)

@@ -35,6 +35,12 @@ from core.batch import Batch
 # k-means calls from corrupting each other's seeded run (determinism).
 _KMEANS_LOCK = threading.Lock()
 
+# The native `_optics` extension (Density Cluster) is NOT thread-safe: running
+# cluster_image concurrently across batch elements crashes the process (access
+# violation). The engine fans batches across threads, so serialize every optics
+# call through this lock. (Verified: 4 concurrent cluster_image calls segfault.)
+_OPTICS_LOCK = threading.Lock()
+
 
 # --- Ports ------------------------------------------------------------------
 # A richer type system (ImageBGR/Gray/Binary/Contours/...) arrives in Phase 4.
@@ -1151,15 +1157,19 @@ def _compute_hdbscan(inputs, p, in_space="bgr"):
     vb = int(p.get("voxel_bin", 2))
     voxel = float(vb) if vb > 0 else 0.0    # 0 disables; else the grid size in colour units
     mcs = max(2, int(p.get("min_cluster_size", 50)))
-    res = opt.cluster_image(
-        bgr, algo=algo, space=space, voxel=voxel, bgr=True,
-        min_cluster_size=mcs, min_pts=mcs,
-        min_cluster_frac=float(p.get("min_cluster_frac", 0.003)),
-        metric=p.get("metric", "l2"), seed=int(p.get("seed", 42)), max_dim=None)
-    labels = np.asarray(res.labels).reshape(-1).astype(np.int32)   # per-pixel, -1 = noise
+    # The native extension is not thread-safe; serialize against the engine's batch
+    # fan-out (and any other Density Cluster node running concurrently).
+    with _OPTICS_LOCK:
+        res = opt.cluster_image(
+            bgr, algo=algo, space=space, voxel=voxel, bgr=True,
+            min_cluster_size=mcs, min_pts=mcs,
+            min_cluster_frac=float(p.get("min_cluster_frac", 0.003)),
+            metric=p.get("metric", "l2"), seed=int(p.get("seed", 42)), max_dim=None)
+        labels = np.asarray(res.labels).reshape(-1).astype(np.int32)   # per-pixel, -1 = noise
     out = _finalize_hdbscan(bgr, labels, in_space, noise_mode=p.get("noise_handling", "nearest"))
     if p.get("show_reachability"):
-        _attach_reachability(out, opt, bgr, space, voxel, mcs)
+        with _OPTICS_LOCK:
+            _attach_reachability(out, opt, bgr, space, voxel, mcs)
     return out
 
 
