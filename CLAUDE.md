@@ -52,7 +52,7 @@ The **Density Cluster** op (`core/operations.py`, id `hdbscan_cluster`) is drive
 quantization) or flagged magenta (`"flag"`). Note this CIELAB is *true* CIE (L 0–100), not
 cv2's 8-bit Lab, so voxel/size values differ from the old `optics_py` binding (≈2 Lab / 4 RGB
 voxel; ≥8 over-merges). Density clustering needs *separated* colour modes; on smooth photos it
-labels most pixels noise, so K-Means / Auto Cluster are better quantizers there. The engine
+labels most pixels noise, so K-Means / Detect→Assign are better quantizers there. The engine
 test skips cleanly when the package is unavailable.
 
 ## Commit convention
