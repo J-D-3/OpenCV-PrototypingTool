@@ -654,57 +654,87 @@ class ImagePanel(QtWidgets.QWidget):
             self.pixelReleased.emit(*xy)
 
 
+def _hue_ring_colors(n: int = 72):
+    """The true sRGB colours around the CIELAB hue circle (L=60, fixed chroma) — so the
+    equator ring shows which colour sits at each hue. Computed once at import."""
+    ang = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    lab8 = np.zeros((1, n, 3), np.uint8)
+    lab8[0, :, 0] = int(round(60.0 * 255 / 100))          # L
+    lab8[0, :, 1] = np.clip(60.0 * np.cos(ang) + 128, 0, 255)   # a
+    lab8[0, :, 2] = np.clip(60.0 * np.sin(ang) + 128, 0, 255)   # b
+    bgr = cv2.cvtColor(lab8, cv2.COLOR_Lab2BGR)[0]
+    return [QtGui.QColor(int(r), int(g), int(b)) for b, g, r in bgr]
+
+
+_HUE_RING = _hue_ring_colors()
+
+
 class ClusterScatter3D(QtWidgets.QWidget):
     """Interactive 3-D scatter of clustered colours in **CIELAB** space: each pixel placed at
-    its (L, a, b) and painted its cluster's mean colour, with labelled axes and (toggleable)
-    transparent enclosing spheres per cluster. **Drag to rotate, scroll to zoom.** For
-    clustering nodes the inspector shows this in place of the pixel grid + histogram. Points
-    and sphere centres/radii are a precomputed subsample in the clusters payload."""
+    its (L, a, b), with a faint reference colour sphere, a hue-rainbow **equator** (showing
+    where each hue sits in the a–b plane), and the neutral **L** (gray) axis up the middle.
+    **Drag to rotate, scroll to zoom.** Toggles: per-cluster transparent enclosing spheres,
+    and painting points in their **true colour** instead of the cluster mean. For clustering
+    nodes the inspector shows this in place of the pixel grid + histogram."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(170)
         self.setToolTip("Drag to rotate · scroll to zoom — the CIELAB colour space of the clusters")
-        self._pts = None            # (N, 3) display coords (x, y, z), centred & uniformly scaled
-        self._qcols = []            # QColor per point (its cluster's mean colour)
-        self._spheres = []          # [(centre3 (x,y,z), radius, QColor), ...] per cluster
-        self._axes = ("L", "a", "b")
+        self._pts = None            # (N, 3) display coords (x=a, y=L, z=b), centred & scaled
+        self._qmean = []            # QColor per point: its cluster's mean colour
+        self._qtrue = []            # QColor per point: its own original colour
+        self._spheres = []          # [(centre3, radius, QColor), ...] per cluster
+        self._R, self._Req, self._scale, self._Lc = 0.6, 0.5, 1.0, 50.0
         self._yaw, self._pitch, self._zoom = 0.7, 0.45, 1.0
         self._last = None
-        # Toggle for the per-cluster enclosing spheres (floats over the top-left corner).
+        # Toggles float over the top-left corner.
+        css = "QCheckBox{color:#eee; background:rgba(15,15,15,180); padding:2px 5px; border-radius:3px;}"
         self._spheres_cb = QtWidgets.QCheckBox("spheres", self)
-        self._spheres_cb.move(6, 6)
-        self._spheres_cb.setStyleSheet(
-            "QCheckBox{color:#ddd; background:rgba(20,20,20,170); padding:2px 5px; border-radius:3px;}")
+        self._spheres_cb.move(6, 6); self._spheres_cb.setStyleSheet(css)
         self._spheres_cb.toggled.connect(self.update)
+        self._true_cb = QtWidgets.QCheckBox("true colour", self)
+        self._true_cb.move(6, 30); self._true_cb.setStyleSheet(css)
+        self._true_cb.toggled.connect(self.update)
 
-    def set_data(self, pts, labels, centers, sphere_centers=None, sphere_radii=None,
-                 axis_names=("L", "a", "b")):
+    def _to_disp(self, lab):
+        """(L, a, b) -> display (x=a, y=L-up, z=b), neutral axis (a=b=0) at the centre line
+        and L centred at its mid, uniformly scaled so hues map to angles and spheres stay round."""
+        a = np.asarray(lab, np.float32)
+        return np.stack([a[..., 1] / self._scale,
+                         (a[..., 0] - self._Lc) / self._scale,
+                         a[..., 2] / self._scale], axis=-1)
+
+    def set_data(self, pts, labels, centers, sphere_centers=None, sphere_radii=None, point_bgr=None):
         if pts is None or len(pts) == 0 or centers is None or len(centers) == 0:
-            self._pts, self._qcols, self._spheres = None, [], []
+            self._pts = None
             self.update()
             return
-        p = np.asarray(pts, np.float32)
-        lo, hi = p.min(axis=0), p.max(axis=0)
-        self._origin = (lo + hi) / 2.0
-        self._scale = float((hi - lo).max()) or 1.0   # UNIFORM scale: spheres stay spheres
-        self._axes = tuple(axis_names)
+        p = np.asarray(pts, np.float32)                       # (N, 3) = L, a, b
+        L, A, B = p[:, 0], p[:, 1], p[:, 2]
+        self._Lc = float((L.min() + L.max()) / 2.0)
+        half = max(float(np.abs(A).max()), float(np.abs(B).max()),
+                   float(np.abs(L - self._Lc).max()), 1e-3)
+        self._scale = 2.0 * half                              # uniform: keeps the gray axis at a=b=0
+        self._pts = self._to_disp(p)
 
-        def to_disp(arr):
-            # Centre + uniform-scale to ~[-0.5, 0.5], then map columns to display axes:
-            # col0 -> y (up), col1 -> x (right), col2 -> z (depth).
-            a = (np.asarray(arr, np.float32) - self._origin) / self._scale
-            return a[..., [1, 0, 2]]
-
-        self._pts = to_disp(p)
         cen = np.clip(np.asarray(centers), 0, 255).astype(int)
         lab = np.clip(np.asarray(labels, np.int64), 0, len(cen) - 1)
-        cols = cen[lab]
-        self._qcols = [QtGui.QColor(int(r), int(g), int(b)) for b, g, r in cols]
+        self._qmean = [QtGui.QColor(int(r), int(g), int(b)) for b, g, r in cen[lab]]
+        if point_bgr is not None and len(point_bgr) == len(p):
+            pb = np.clip(np.asarray(point_bgr), 0, 255).astype(int)
+            self._qtrue = [QtGui.QColor(int(r), int(g), int(b)) for b, g, r in pb]
+        else:
+            self._qtrue = self._qmean
+
+        rad = np.sqrt((self._pts ** 2).sum(axis=1))
+        self._R = float(rad.max()) * 1.05 if rad.size else 0.6
+        chroma = np.sqrt(self._pts[:, 0] ** 2 + self._pts[:, 2] ** 2)
+        self._Req = float(chroma.max()) * 1.08 if chroma.size else 0.5
 
         self._spheres = []
         if sphere_centers is not None and sphere_radii is not None and len(sphere_centers):
-            sc = to_disp(np.asarray(sphere_centers, np.float32))
+            sc = self._to_disp(np.asarray(sphere_centers, np.float32))
             sr = np.asarray(sphere_radii, np.float32) / self._scale
             for c in range(len(sc)):
                 if sr[c] > 0 and c < len(cen):
@@ -725,51 +755,62 @@ class ClusterScatter3D(QtWidgets.QWidget):
 
     def paintEvent(self, _e):
         qp = QtGui.QPainter(self)
-        qp.fillRect(self.rect(), QtGui.QColor(26, 26, 26))
+        w, h = self.width(), self.height()
+        # Gray gradient backdrop (dark top, light bottom): dark clusters sit low in L and
+        # show against the light bottom; light clusters sit high and show against the dark top.
+        grad = QtGui.QLinearGradient(0, 0, 0, h)
+        grad.setColorAt(0.0, QtGui.QColor(38, 38, 38))
+        grad.setColorAt(1.0, QtGui.QColor(112, 112, 112))
+        qp.fillRect(self.rect(), QtGui.QBrush(grad))
         if self._pts is None:
-            qp.setPen(QtGui.QColor(120, 120, 120))
+            qp.setPen(QtGui.QColor(150, 150, 150))
             qp.drawText(self.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, "no cluster data")
             return
         qp.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-        w, h = self.width(), self.height()
-        s = self._zoom * min(w, h) * 0.60
+        s = self._zoom * min(w, h) * 0.56
         cx, cy = w / 2.0, h / 2.0
 
-        def screen(p3):                       # display coords -> screen points
+        def screen(p3):
             xr, yr, zd = self._rot(np.atleast_2d(p3))
             return cx + xr * s, cy - yr * s, zd
 
-        # Faint wireframe cube for orientation.
-        corners = np.array([[i, j, k] for i in (-.5, .5) for j in (-.5, .5) for k in (-.5, .5)],
-                           np.float32)
-        epx, epy, _ = screen(corners)
-        qp.setPen(QtGui.QPen(QtGui.QColor(70, 70, 70), 1))
-        for a, b in [(0, 1), (0, 2), (0, 4), (1, 3), (1, 5), (2, 3),
-                     (2, 6), (3, 7), (4, 5), (4, 6), (5, 7), (6, 7)]:
-            qp.drawLine(QtCore.QPointF(epx[a], epy[a]), QtCore.QPointF(epx[b], epy[b]))
+        # Very light transparent reference sphere (its orthographic silhouette is a circle).
+        qp.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 36), 1))
+        qp.setBrush(QtGui.QColor(255, 255, 255, 10))
+        qp.drawEllipse(QtCore.QPointF(cx, cy), self._R * s, self._R * s)
 
-        # Axis labels at the cube's axis tips: y(up)=axes[0], x(right)=axes[1], z(depth)=axes[2].
-        tips = np.array([[0, 0.62, 0], [0.62, 0, 0], [0, 0, 0.62]], np.float32)
-        tpx, tpy, _ = screen(tips)
-        qp.setPen(QtGui.QColor(190, 190, 190))
-        for name, tx, ty in zip(self._axes, tpx, tpy):
-            qp.drawText(QtCore.QPointF(tx - 3, ty + 4), name)
+        # Neutral (gray / L) axis up the middle, labelled.
+        ax, ay, _ = screen(np.array([[0, -self._R, 0], [0, self._R, 0]], np.float32))
+        qp.setPen(QtGui.QPen(QtGui.QColor(210, 210, 210, 90), 1))
+        qp.drawLine(QtCore.QPointF(ax[0], ay[0]), QtCore.QPointF(ax[1], ay[1]))
+        qp.setPen(QtGui.QColor(235, 235, 235))
+        qp.drawText(QtCore.QPointF(ax[1] - 3, ay[1] - 4), "L")
 
-        # Points, painter's-algorithm depth sort (far first).
+        # Hue-rainbow equator in the a–b plane (true colour at each hue).
+        n = len(_HUE_RING)
+        ang = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        ring = np.stack([self._Req * np.cos(ang), np.zeros(n), self._Req * np.sin(ang)], axis=1)
+        rx, ry, _ = screen(ring.astype(np.float32))
+        for i in range(n):
+            j = (i + 1) % n
+            qp.setPen(QtGui.QPen(_HUE_RING[i], 2))
+            qp.drawLine(QtCore.QPointF(rx[i], ry[i]), QtCore.QPointF(rx[j], ry[j]))
+
+        # Points, depth-sorted; cluster-mean colour or the pixel's own colour.
+        cols = self._qtrue if self._true_cb.isChecked() else self._qmean
         xr, yr, zd = self._rot(self._pts)
         px, py = cx + xr * s, cy - yr * s
-        order = np.argsort(zd)
         qp.setPen(QtCore.Qt.PenStyle.NoPen)
-        for i in order:
-            qp.setBrush(self._qcols[i])
+        for i in np.argsort(zd):
+            qp.setBrush(cols[i])
             qp.drawEllipse(QtCore.QPointF(float(px[i]), float(py[i])), 2.2, 2.2)
 
-        # Transparent enclosing spheres (a sphere projects to a circle under orthographic).
+        # Per-cluster transparent enclosing spheres (toggle).
         if self._spheres_cb.isChecked():
             for centre3, rad, qcol in self._spheres:
                 sx, sy, _ = screen(centre3)
-                fill = QtGui.QColor(qcol); fill.setAlpha(40)
-                edge = QtGui.QColor(qcol); edge.setAlpha(170)
+                fill = QtGui.QColor(qcol); fill.setAlpha(38)
+                edge = QtGui.QColor(qcol); edge.setAlpha(165)
                 qp.setBrush(fill)
                 qp.setPen(QtGui.QPen(edge, 1))
                 qp.drawEllipse(QtCore.QPointF(float(sx[0]), float(sy[0])), rad * s, rad * s)
@@ -970,16 +1011,12 @@ class InspectorPane(QtWidgets.QWidget):
         payload = self._node.get_output_image()
         scat = (payload["diag"] if isinstance(payload, dict)
                 and isinstance(payload.get("diag"), dict)
-                and "scatter3d" in payload["diag"] else None)
+                and "scatter_lab" in payload["diag"] else None)
         self._scatter.setVisible(scat is not None)
         if scat is not None:
-            if "scatter_lab" in scat:        # perceptual CIELAB positions + cluster spheres
-                self._scatter.set_data(scat["scatter_lab"], scat.get("scatter3d_labels"),
-                                       payload.get("centers"), scat.get("cluster_centers_lab"),
-                                       scat.get("cluster_radii_lab"), axis_names=("L", "a", "b"))
-            else:                             # fallback: raw BGR cube
-                self._scatter.set_data(scat.get("scatter3d"), scat.get("scatter3d_labels"),
-                                       payload.get("centers"), axis_names=("B", "G", "R"))
+            self._scatter.set_data(scat["scatter_lab"], scat.get("scatter3d_labels"),
+                                   payload.get("centers"), scat.get("cluster_centers_lab"),
+                                   scat.get("cluster_radii_lab"), point_bgr=scat.get("scatter3d"))
 
         if chart:
             self._hist.clear()

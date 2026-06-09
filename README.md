@@ -191,9 +191,12 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
   enabled — the **reachability plot with a cluster ribbon** beneath it (each ordered point's
   cluster colour, aligned with the bars). The **3-D colour-space scatter** moved into the
   **inspector pane** as an *interactive* widget (drag to rotate, scroll to zoom): pixels
-  plotted in perceptual **CIELAB** space with **labelled L/a/b axes**, each painted its cluster
-  mean, plus **toggleable transparent enclosing spheres** per cluster (showing each cluster's
-  extent). It's shown for **all the clustering nodes** — Density Cluster, K-Means, and Auto
+  plotted in perceptual **CIELAB** space, framed by a faint reference **colour sphere** with a
+  **hue-rainbow equator** (where each hue sits in the a–b plane) and the neutral **L (gray)
+  axis**, over a **gray gradient backdrop** (dark top / light bottom) so near-black *and*
+  near-white clusters stay visible. Points are painted their cluster mean, with toggles for
+  **per-cluster enclosing spheres** and **true colour** (each pixel its own colour). It's shown
+  for **all the clustering nodes** — Density Cluster, K-Means, and Auto
   Cluster — which now hide the pixel-neighbourhood grid + histogram (meaningless for a palette)
   and show the interactive scatter in their place (the sRGB→CIELAB conversion is a local
   pure-NumPy helper, so K-Means / Auto Cluster need no extra dependency). Also fixed the
