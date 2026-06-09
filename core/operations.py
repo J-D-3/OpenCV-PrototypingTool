@@ -76,10 +76,10 @@ class ParamSpec:
     # Gray this control out unless another param has a given value. Form:
     # ``("other_param", value)`` (equality) or ``("other_param", (v1, v2, ...))``
     # (membership); or a **list** of such tuples, all of which must hold (AND) —
-    # e.g. ``[("k_method", "peaks"), ("channel", 0)]``. The control still exists
-    # and persists; it's only disabled in the panel when the condition is unmet —
-    # so mode-specific params (e.g. Auto Cluster's peak-detection knobs in 'elbow'
-    # mode) read as inactive.
+    # e.g. ``[("mode_a", "x"), ("mode_b", 0)]``. The control still exists and
+    # persists; it's only disabled in the panel when the condition is unmet — so
+    # mode-specific params (e.g. Density Cluster's approximate-only ``metric`` /
+    # ``seed`` knobs for the exact algorithms) read as inactive.
 
 
 @dataclass
