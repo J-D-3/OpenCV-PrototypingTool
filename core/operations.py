@@ -464,8 +464,10 @@ def _finalize_clusters(img, labels, feat, space, in_space):
     remap[order] = np.arange(k)
     labels = remap[labels]
     centers = centers[order]
-    return {"centers": centers, "labels": labels, "shape": img.shape, "k": k,
-            "diag": _cluster_diag(feat, labels, k, space)}
+    payload = {"centers": centers, "labels": labels, "shape": img.shape, "k": k,
+               "diag": _cluster_diag(feat, labels, k, space)}
+    _attach_color_scatter(payload, img, in_space)   # interactive 3-D Lab scatter (inspector)
+    return payload
 
 
 def _kmeans_clusters(img, k, attempts=5, space="bgr", lum_weight=1.0, in_space="bgr"):
@@ -1087,18 +1089,38 @@ def _attach_reachability(out, opt, bgr, space, voxel, min_pts):
         pass
 
 
-def _attach_scatter_lab(out, opt):
+# sRGB (D65) -> CIELAB, pure NumPy — the SAME convention the optics library uses
+# (L 0..100, a/b ~[-128,127]). Local so the K-Means / Auto Cluster nodes (which don't
+# load optics) can position their inspector scatter in perceptual Lab too.
+_RGB2XYZ = np.array([[0.4124564, 0.3575761, 0.1804375],
+                     [0.2126729, 0.7151522, 0.0721750],
+                     [0.0193339, 0.1191920, 0.9503041]])
+_LAB_WHITE = np.array([0.95047, 1.0, 1.08883])
+_LAB_EPS, _LAB_KAPPA = 216.0 / 24389.0, 24389.0 / 27.0
+
+
+def _srgb_to_lab(rgb):
+    """sRGB (0..255, RGB order) -> CIELAB (D65). ``rgb`` is (..., 3); returns float Lab."""
+    a = np.asarray(rgb, np.float64) / 255.0
+    lin = np.where(a <= 0.04045, a / 12.92, ((a + 0.055) / 1.055) ** 2.4)
+    xyz = (lin @ _RGB2XYZ.T) / _LAB_WHITE
+    f = np.where(xyz > _LAB_EPS, np.cbrt(xyz), (_LAB_KAPPA * xyz + 16.0) / 116.0)
+    return np.stack([116.0 * f[..., 1] - 16.0,
+                     500.0 * (f[..., 0] - f[..., 1]),
+                     200.0 * (f[..., 1] - f[..., 2])], axis=-1)
+
+
+def _attach_scatter_lab(out):
     """Add CIELAB positions + per-cluster Lab centre/radius to the diag, for the inspector's
     interactive 3-D scatter (perceptual Lab axes; optional enclosing spheres show each
-    cluster's extent). Uses the library's srgb_to_lab (pure NumPy, thread-safe). The point
-    colours stay the cluster mean BGR (``out['centers']``). Diagnostic only — never fails."""
+    cluster's extent). Reads the BGR subsample in ``diag['scatter3d']``; the point colours
+    stay the cluster mean BGR (``out['centers']``). Diagnostic only — never fails."""
     try:
         diag = out["diag"]
         samp = diag.get("scatter3d")                       # BGR subsample (M, 3)
         if samp is None or len(samp) == 0:
             return
-        rgb = np.ascontiguousarray(samp[:, ::-1].astype(np.float64))   # BGR -> RGB
-        lab = np.asarray(opt.srgb_to_lab(rgb), np.float32)             # (M, 3) = L, a, b
+        lab = _srgb_to_lab(samp[:, ::-1]).astype(np.float32)   # BGR -> RGB -> Lab
         diag["scatter_lab"] = lab
         labs = np.asarray(diag.get("scatter3d_labels"), np.int64)
         kreal = int(out.get("k", 0))
@@ -1113,6 +1135,26 @@ def _attach_scatter_lab(out, opt):
                 radii[c] = float(np.percentile(d, 85))     # robust extent (ignore outliers)
         diag["cluster_centers_lab"] = centres
         diag["cluster_radii_lab"] = radii
+    except Exception:
+        pass
+
+
+def _attach_color_scatter(payload, img, in_space):
+    """Add the interactive 3-D scatter data (a BGR pixel subsample + per-pixel cluster
+    labels, then Lab positions + spheres) to a CLUSTERS payload. Shared by K-Means / Auto
+    Cluster (the density node builds scatter3d itself, then calls _attach_scatter_lab)."""
+    try:
+        labels = np.asarray(payload.get("labels"))
+        if labels.size == 0:
+            return
+        flat = _as_bgr(img, in_space).reshape(-1, 3).astype(np.float32)
+        n = flat.shape[0]
+        sel = (np.random.default_rng(0).choice(n, 4000, replace=False) if n > 4000
+               else np.arange(n))
+        diag = payload.setdefault("diag", {})
+        diag["scatter3d"] = flat[sel]
+        diag["scatter3d_labels"] = labels.reshape(-1)[sel].astype(np.int32)
+        _attach_scatter_lab(payload)
     except Exception:
         pass
 
@@ -1208,7 +1250,7 @@ def _compute_hdbscan(inputs, p, in_space="bgr"):
             metric=p.get("metric", "l2"), seed=int(p.get("seed", 42)), max_dim=None)
         labels = np.asarray(res.labels).reshape(-1).astype(np.int32)   # per-pixel, -1 = noise
     out = _finalize_hdbscan(bgr, labels, in_space, noise_mode=p.get("noise_handling", "nearest"))
-    _attach_scatter_lab(out, opt)           # CIELAB positions + cluster spheres for the inspector
+    _attach_scatter_lab(out)                # CIELAB positions + cluster spheres for the inspector
     if p.get("show_reachability"):
         with _OPTICS_LOCK:
             _attach_reachability(out, opt, bgr, space, voxel, mcs)

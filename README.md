@@ -193,8 +193,10 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
   **inspector pane** as an *interactive* widget (drag to rotate, scroll to zoom): pixels
   plotted in perceptual **CIELAB** space with **labelled L/a/b axes**, each painted its cluster
   mean, plus **toggleable transparent enclosing spheres** per cluster (showing each cluster's
-  extent). For clustering nodes the inspector now hides the pixel-neighbourhood grid +
-  histogram (meaningless for a palette) and shows the scatter in their place. Also fixed the
+  extent). It's shown for **all the clustering nodes** — Density Cluster, K-Means, and Auto
+  Cluster — which now hide the pixel-neighbourhood grid + histogram (meaningless for a palette)
+  and show the interactive scatter in their place (the sRGB→CIELAB conversion is a local
+  pure-NumPy helper, so K-Means / Auto Cluster need no extra dependency). Also fixed the
   reachability plot using `min_cluster_size` as its `min_pts`
   (which over-smoothed it into a featureless ramp) — it now uses a small `min_pts` so density
   peaks are visible.
