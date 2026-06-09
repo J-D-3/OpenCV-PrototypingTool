@@ -1,14 +1,18 @@
-"""Locate and load the optional OPTICS-Clustering Python binding (``optics_py``).
+"""Locate and load the optional **OPTICS-Clustering** Python package (``optics``).
 
-`optics_py` is a compiled pybind11 module built from the sibling **OPTICS-Clustering**
-repo (density-based clustering: OPTICS + HDBSCAN*). It is *not* on PyPI and is ABI-locked
-to the Python version/platform it was built for, so we treat it as an **optional** backend:
-the HDBSCAN node calls :func:`load` and, when the module is missing, receives a clear error
-to surface in the UI (red node border / status bar) instead of crashing.
+`optics` is a pip-installable package (compiled `_optics` pybind11 core + a high-level
+NumPy/OpenCV colour API) built from the sibling **OPTICS-Clustering** repo. It is *not* on
+PyPI, so we treat it as an **optional** backend: the Density Cluster node calls :func:`load`
+and, when the package is missing, receives a clear error to surface in the UI (red node
+border / status bar) instead of crashing.
 
-Search order: already-importable → ``$OPTICS_PY_DIR`` → the sibling repo's default build
-output (``../OPTICS-Clustering/build-py/python/Release``). Kept Qt-free so it stays in
-``core/``. See the project memory note "optics-clustering-integration" for build details.
+The high-level entry point is :func:`optics.cluster_image` — it dedups, voxel-quantizes, and
+converts colour spaces (sRGB→CIELAB) internally, so the node just hands it the BGR image.
+
+Install it with ``pip install <OPTICS-Clustering>/python``. We import ``optics`` directly; as
+a fallback we add ``$OPTICS_PY_DIR`` (or the sibling repo's ``python/`` dir) to ``sys.path``,
+which works when the package was built in place. See the project memory note
+"optics-clustering-integration".
 """
 from __future__ import annotations
 
@@ -21,25 +25,29 @@ _module = None
 _error: Optional[str] = None
 _tried = False
 
-# The build subpath the OPTICS repo's CMake produces (MSVC puts it in a Release/ dir).
-_REL = os.path.join("OPTICS-Clustering", "build-py", "python", "Release")
-
 
 def _candidate_dirs():
-    """Directories that may hold ``optics_py.*.pyd`` / ``.so``, most specific first."""
+    """Dirs that may contain the ``optics`` package (for an in-place / non-installed build)."""
     dirs = []
     env = os.environ.get("OPTICS_PY_DIR")
     if env:
         dirs.append(env)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     parent = os.path.dirname(project_root)            # sibling repos live one level up
-    dirs.append(os.path.join(parent, _REL))           # ../OPTICS-Clustering/build-py/...
-    dirs.append(os.path.join(project_root, _REL))     # a checkout nested inside this repo
+    dirs.append(os.path.join(parent, "OPTICS-Clustering", "python"))
     return dirs
 
 
+def _import_optics():
+    """Import ``optics`` and verify it is the new high-level API (has ``cluster_image``)."""
+    mod = importlib.import_module("optics")
+    if not hasattr(mod, "cluster_image"):
+        raise ImportError("the importable 'optics' package lacks cluster_image (stale/old build)")
+    return mod
+
+
 def available() -> bool:
-    """True if the binding can be loaded (so the UI can probe without raising)."""
+    """True if the package can be loaded (so the UI can probe without raising)."""
     try:
         load()
         return True
@@ -48,7 +56,7 @@ def available() -> bool:
 
 
 def load():
-    """Return the ``optics_py`` module, importing it on first use.
+    """Return the ``optics`` module, importing it on first use.
 
     Raises ``RuntimeError`` with an actionable message if it cannot be found or loaded.
     The result (or the error) is cached, so repeated calls are cheap."""
@@ -60,21 +68,21 @@ def load():
     _tried = True
 
     try:
-        _module = importlib.import_module("optics_py")
+        _module = _import_optics()
         return _module
     except Exception:
-        pass  # not yet on the path — try the known build locations below
+        pass  # not installed — try an in-place build location below
 
     for d in _candidate_dirs():
         if d and os.path.isdir(d) and d not in sys.path:
             sys.path.insert(0, d)
     try:
-        _module = importlib.import_module("optics_py")
+        _module = _import_optics()
         return _module
     except Exception as e:
         _error = (
-            f"OPTICS clustering library (optics_py) not available: {e}. "
-            "Build it in the OPTICS-Clustering repo (cmake -DOPTICS_BUILD_PYTHON=ON) or "
-            "set OPTICS_PY_DIR to the folder holding optics_py.*.pyd."
+            f"OPTICS clustering library (the 'optics' package) not available: {e}. "
+            "Install it with 'pip install <OPTICS-Clustering>/python', or set OPTICS_PY_DIR "
+            "to a folder containing an in-place build of the 'optics' package."
         )
         raise RuntimeError(_error)

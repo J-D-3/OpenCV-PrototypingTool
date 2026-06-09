@@ -214,36 +214,16 @@ def _emit_auto_cluster(o, i, p):
 
 def _emit_hdbscan(o, i, p):
     space = p.get("color_space", "lab")
-    conv = {
-        "lab": "cv::cvtColor(bgr, COLOR_BGR2Lab).reshape(-1, 3)        # cluster in Lab",
-        "hls": "cv::cvtColor(bgr, COLOR_BGR2HLS).reshape(-1, 3)        # cluster in HLS",
-        "lch": "cv::cvtColor(bgr, COLOR_BGR2Lab) -> (L, chroma, hue)   # cluster in LCh",
-        "bgr": "bgr.reshape(-1, 3).astype(float32)                     # cluster in BGR",
-    }.get(space, "bgr.reshape(-1, 3)")
-    bin_ = p.get("voxel_bin")
-    algo = p.get("algorithm", "hdbscan")
-    mcs = p.get("min_cluster_size")
-    if algo == "shdbscan":
-        call = (f"labels = optics::shdbscan(feat, min_cluster_size={mcs}, min_samples={p.get('min_samples')}, "
-                f"method={p.get('method')!r}, seed={p.get('seed')}, metric={p.get('metric')!r}).labels   # approx, -1=noise")
-    elif algo == "soptics":
-        call = (f"reach  = optics::compute_soptics_reachability_dists(feat, min_pts={mcs}, seed={p.get('seed')}, "
-                f"metric={p.get('metric')!r})\n"
-                f"labels = extract_{p.get('extract')}(reach, threshold={p.get('threshold')}, chi={p.get('chi')})   # approx OPTICS, -1=noise")
-    elif algo == "optics":
-        call = (f"reach  = optics::compute_reachability_dists(feat, min_pts={mcs})\n"
-                f"labels = extract_{p.get('extract')}(reach, threshold={p.get('threshold')}, chi={p.get('chi')})   # exact OPTICS, -1=noise")
-    else:
-        call = (f"labels = optics::hdbscan(feat, min_cluster_size={mcs}, min_samples={p.get('min_samples')}, "
-                f"method={p.get('method')!r}).labels   # exact, -1=noise; dedups internally")
+    algo = {"optics": "optics-xi"}.get(p.get("algorithm", "hdbscan"), p.get("algorithm", "hdbscan"))
     noise = ("assign each noise pixel to its nearest cluster"
              if p.get("noise_handling", "nearest") == "nearest" else "paint noise pixels the flag colour")
     return [
-        f"# Density colour clustering (no k) via OPTICS-Clustering: algorithm={algo!r}, space={space!r}",
-        f"bgr  = as_bgr({i[0]})                                # cv::cvtColor from the tracked colour space",
-        f"feat = {conv}",
-        f"feat = floor(feat / {bin_}) * {bin_} + {bin_}/2            # voxel quantize (0 = off)",
-        call,
+        f"# Density colour clustering (no k) via optics.cluster_image: algo={algo!r}, space={space!r}",
+        f"bgr = as_bgr({i[0]})                                 # cv::cvtColor from the tracked colour space",
+        f"res = optics.cluster_image(bgr, algo={algo!r}, space={space!r}, voxel={p.get('voxel_bin')}, "
+        f"bgr=True, min_cluster_size={p.get('min_cluster_size')}, min_cluster_frac={p.get('min_cluster_frac')})",
+        "#   the library converts sRGB->CIELAB, voxel-quantizes and dedups internally",
+        "labels = res.labels                                  # per-pixel cluster id (HxW), -1 = noise",
         f"centers[c] = mean BGR of pixels labelled c; reorder dark->light; {noise}",
         f"{o} = {{centers, labels, shape, k}}   # CLUSTERS payload",
     ]

@@ -185,6 +185,20 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-09** — **Density Cluster: migrated to the new `optics` colour API.** The sibling
+  OPTICS-Clustering library replaced its raw `optics_py` binding with a pip-installable
+  **`optics`** package (`pip install <repo>/python`) whose high-level `optics.cluster_image`
+  **dedups, voxel-quantizes, and converts sRGB→CIELAB internally**. The node now drives that
+  one call instead of doing its own cv2-Lab conversion + manual voxel/dedup. Net effects: the
+  colour conversion is now *true* CIELAB (L 0–100, perceptually correct — the old cv2 8-bit Lab
+  was an approximation); algorithm modes map 1:1 to cluster_image (`hdbscan`, `optics-xi`,
+  `optics-threshold`, `shdbscan`, `soptics`); and the fine knobs cluster_image fixes as good
+  defaults (`min_samples`/`method`/`threshold`/`chi`) were dropped, leaving **Min cluster size**
+  + **Min region size** (`min_cluster_frac`) as the main controls. Colour space is now Lab/RGB
+  (HLS/LCh removed — the study found Lab best). Because the Lab/voxel scales changed, saved
+  Density-Cluster pipelines need their `voxel_bin` (now ~2 Lab / 4 RGB; ≥8 over-merges) and
+  size values re-tuned. `core/optics_backend.py` now imports the `optics` package. Suites:
+  36 smoke + 47 engine.
 - **2026-06-08** — **Density Cluster: OPTICS-exact mode, noise handling, searchability.**
   Three fixes prompted by a real-photo run. (1) Added the **OPTICS (exact)** algorithm
   (the binding already exposed `cluster_threshold`/`extract_xi`; it just wasn't wired as a

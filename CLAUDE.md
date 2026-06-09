@@ -39,19 +39,21 @@ all its checks (no test framework / per-test selection — narrow by commenting 
 calls if needed). Counts as of 2026-06-08: **36 smoke checks + 47 engine tests.**
 
 ## Optional OPTICS backend (Density Cluster node)
-`core/optics_backend.py` lazily loads `optics_py` — a compiled pybind11 module from the
-sibling **OPTICS-Clustering** repo (density clustering). It's optional and ABI-locked to
-the building Python/platform; `load()` searches `$OPTICS_PY_DIR` then
-`../OPTICS-Clustering/build-py/python/Release`, and raises a clear error (→ red node
-border) if absent. The **Density Cluster** op (`core/operations.py`, id `hdbscan_cluster`)
-has four `algorithm` modes — exact `hdbscan` / `optics`, approximate `shdbscan` / `soptics`
-(CEOs random projections, deterministic in `seed`, cosine/L2/L1 metric). It feeds a quantized
-pixel cloud (the binding dedups internally, so `min_cluster_size` stays in *pixel* units)
-and emits the standard `CLUSTERS` payload. Noise (`-1`) is either reassigned to the nearest
-cluster (`noise_handling="nearest"`, default — a usable quantization) or mapped to a trailing
-magenta centre (`"flag"`). Density clustering needs *separated* colour modes; on smooth
-photos it labels most pixels noise, so K-Means / Auto Cluster are the better quantizers there.
-The engine test skips cleanly when the binding is unavailable.
+`core/optics_backend.py` lazily loads the **`optics`** package — a pip-installable pybind11
+core (`_optics`) + high-level colour API from the sibling **OPTICS-Clustering** repo. Install
+with `pip install <repo>/python` (needs a C++20 compiler + CMake); it's ABI-locked to the
+building Python/platform. `load()` imports `optics`, falling back to `$OPTICS_PY_DIR` / the
+sibling `OPTICS-Clustering/python` dir, and raises a clear error (→ red node border) if absent.
+The **Density Cluster** op (`core/operations.py`, id `hdbscan_cluster`) is driven by
+`optics.cluster_image`, which **dedups, voxel-quantizes, and converts sRGB→CIELAB internally**
+— the node just hands it the BGR image. Five `algorithm` modes map to cluster_image's `algo`
+(exact `hdbscan` / `optics-xi` / `optics-threshold`, approximate `shdbscan` / `soptics`). Noise
+(`-1`) is reassigned to the nearest cluster (`noise_handling="nearest"`, default — a usable
+quantization) or flagged magenta (`"flag"`). Note this CIELAB is *true* CIE (L 0–100), not
+cv2's 8-bit Lab, so voxel/size values differ from the old `optics_py` binding (≈2 Lab / 4 RGB
+voxel; ≥8 over-merges). Density clustering needs *separated* colour modes; on smooth photos it
+labels most pixels noise, so K-Means / Auto Cluster are better quantizers there. The engine
+test skips cleanly when the package is unavailable.
 
 ## Commit convention
 - **Commit locally and automatically** on every atomic change (precise, concise
