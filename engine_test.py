@@ -1010,6 +1010,23 @@ def test_detect_centers():
     capped = _detect_centers(seg, "bgr", max_k=2, smoothing=2.0,
                              min_prominence=0.3, chroma_threshold=10.0)
     assert capped["k"] == 2, f"max_k caps the seeds (got {capped['k']})"
+
+    # End-to-end through the registered op: it emits a CENTERS payload with a
+    # detection diagnostic for the preview.
+    m = GraphModel()
+    s = _src(m, seg)
+    d = _op(m, "detect_centers", max_k=12, smoothing=2.0, min_prominence=0.3,
+            chroma_threshold=10.0)
+    m.add_edge(s, d)
+    Engine(m).evaluate_all()
+    assert isinstance(d.output, dict) and d.output["k"] == 4, "op should emit 4 seeds"
+    assert "detdiag" in d.output, "op stashes the detection diagnostic for the preview"
+    from core import codegen
+    from core.operations import REGISTRY
+    code = codegen.op_pseudocode(REGISTRY["detect_centers"],
+                                 {"max_k": 12, "smoothing": 4.0, "min_prominence": 0.3,
+                                  "chroma_threshold": 8.0, "sat_weight": 1.0})
+    assert "CIELAB" in code and "CENTERS" in code, code
     print("OK  detect_centers: LCh hue + adaptive neutral L* seeds, capped by max_k")
 
 

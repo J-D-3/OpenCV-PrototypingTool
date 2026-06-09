@@ -891,11 +891,24 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
                "kinds": [kinds[i] for i in order],
                "shape": img.shape, "k": len(order)}
     if return_diag:
+        def peak_cols(peaks, binof, mask, circular):     # real mean colour per peak
+            cols = []
+            for pk in peaks:
+                if circular:
+                    idx = np.array([(pk + d) % _HUE_BINS for d in range(-win, win + 1)])
+                    sel = mask & np.isin(binof, idx)
+                else:
+                    sel = mask & (binof >= pk - win) & (binof <= pk + win)
+                cols.append(tuple(int(v) for v in flat_bgr[sel].mean(axis=0))
+                            if int(sel.sum()) else _peak_color(pk, 0 if circular else 1))
+            return cols
         payload["detdiag"] = {
             "hue": {"raw": hue_raw, "smooth": hue_smooth, "peaks": hue_peaks,
-                    "channel": 0, "nbins": _HUE_BINS, "chname": "Hue (C*-weighted)"},
+                    "channel": 0, "nbins": _HUE_BINS, "chname": "Hue (C*-weighted)",
+                    "peak_colors": peak_cols(hue_peaks, hb, chromatic, True)},
             "lum": {"raw": lum_raw, "smooth": lum_smooth, "peaks": lum_peaks,
-                    "channel": 1, "nbins": _L_BINS, "chname": "Neutral L*"},
+                    "channel": 1, "nbins": _L_BINS, "chname": "Neutral L*",
+                    "peak_colors": peak_cols(lum_peaks, lbn, neutral, False)},
             "seed_bgr": seeds_bgr}
     return payload
 
@@ -932,6 +945,20 @@ def _compute_auto_cluster(inputs, p, in_space="bgr"):
         return out
     except Exception as e:
         print(f"Error executing auto_cluster: {e}")
+        return None
+
+
+def _compute_detect_centers(inputs, p, in_space="bgr"):
+    """Detect colour-cluster *seeds* (count + each centre's colour) in CIELAB/LCh.
+    Emits a CENTERS payload — no per-pixel labels — for an 'Assign to Centers'
+    node to consume. Chromatic modes come from a chroma-weighted hue histogram,
+    neutral modes from an adaptive lightness histogram (see ``_detect_centers``)."""
+    try:
+        return _detect_centers(inputs[0], in_space, p["max_k"], p["smoothing"],
+                               p["min_prominence"], p["chroma_threshold"],
+                               sat_weight=p.get("sat_weight", 1.0), return_diag=True)
+    except Exception as e:
+        print(f"Error executing detect_centers: {e}")
         return None
 
 
@@ -1512,6 +1539,38 @@ def _render_auto_cluster(inputs, output, p):
         top = None
     palette = _titled(_band_palette(centers, diag["counts"]), "palette after clustering")
     return np.vstack([b for b in (top, palette) if b is not None])
+
+
+def _render_detect_centers(inputs, output, p):
+    """Inspector preview for Detect Color Centers: the two detection histograms
+    (the chroma-weighted hue curve and the neutral-L* curve) with each detected
+    peak marked in its real colour, then a palette of the seed colours."""
+    if not isinstance(output, dict):
+        return None
+    det = output.get("detdiag")
+    seeds = np.clip(output.get("bgr", np.zeros((0, 3))), 0, 255).astype(np.uint8)
+    if det is None:
+        return _simple_swatch(seeds) if len(seeds) else None
+    bands = []
+    if det["hue"]["peaks"]:
+        bands.append(_titled(_band_hist(det["hue"]),
+                             f"hue seeds  ({len(det['hue']['peaks'])})"))
+    if det["lum"]["peaks"]:
+        bands.append(_titled(_band_hist(det["lum"]),
+                             f"neutral L* seeds  ({len(det['lum']['peaks'])})"))
+    if len(seeds):
+        counts = output.get("support", np.ones(len(seeds), np.int64))
+        bands.append(_titled(_band_palette(seeds, np.asarray(counts)),
+                             f"detected centres  (k={output.get('k', len(seeds))})"))
+    return np.vstack(bands) if bands else _simple_swatch(seeds)
+
+
+def _summary_detect_centers(output, p):
+    if not isinstance(output, dict):
+        return {}
+    kinds = output.get("kinds", [])
+    return {"centres": int(output.get("k", 0)),
+            "chromatic": kinds.count("chromatic"), "neutral": kinds.count("neutral")}
 
 
 def _summary_kmeans(output, p):
@@ -2732,6 +2791,43 @@ OPS: list = [
         compute=_compute_kmeans, color=(0, 150, 136), out_space="passthrough",
         space_aware=True, in_label="Mat (any)", out_label="Clusters",
         render_preview=_render_kmeans, summary=_summary_kmeans, preview_is_chart=True,
+    ),
+    Operation(
+        id="detect_centers", label="Detect Color Centers", category="Color Quantization",
+        inputs=[Port("in", datatypes.IMAGE)],
+        outputs=[Port("out", datatypes.CENTERS)],
+        params=[
+            ParamSpec("max_k", 12, kind="int", min=2, max=24, label="Max centres",
+                      help="Upper bound on the number of detected colour centres."),
+            ParamSpec("smoothing", 4.0, kind="float", min=0.5, max=15.0, step=0.5,
+                      label="Histogram smoothing",
+                      help="Gaussian blur of the hue / lightness histograms before peak "
+                           "finding; higher = fewer, broader centres."),
+            ParamSpec("min_prominence", 0.3, kind="float", min=0.0, max=1.0, step=0.01,
+                      label="Min peak prominence",
+                      help="How far a histogram peak must rise above the mean of its two "
+                           "surrounding valleys (fraction of its own height) to count as a "
+                           "centre. Higher = stricter; raise 'smoothing' to drop noise."),
+            ParamSpec("chroma_threshold", 8.0, kind="float", min=0.0, max=60.0, step=1.0,
+                      label="Neutral chroma C*",
+                      help="Pixels with chroma C* (CIELAB radius √(a²+b²)) below this are "
+                           "treated as neutral and detected by lightness L* (adaptive count); "
+                           "the rest are detected by hue. ~8 ≈ just-perceptible colour."),
+            ParamSpec("sat_weight", 1.0, kind="float", min=0.0, max=4.0, step=0.1,
+                      label="Chroma weight",
+                      help="Exponent on C* in the hue histogram; >1 favours vivid pixels, "
+                           "0 weights every chromatic pixel equally. Keeps washed-out pixels "
+                           "from forming phantom hue centres."),
+        ],
+        compute=_compute_detect_centers, color=(0, 150, 136), out_space="passthrough",
+        space_aware=True, in_label="Mat (any)", out_label="Centres (Lab seeds)",
+        render_preview=_render_detect_centers, summary=_summary_detect_centers,
+        preview_is_chart=True,
+        description="Detect colour-cluster seeds (count AND each centre's colour) in "
+                    "perceptual CIELAB / LCh: chromatic pixels are detected by hue, neutral "
+                    "pixels by lightness (adaptive number of gray levels). Emits a CENTERS "
+                    "payload for 'Assign to Centers' — split out from Auto Cluster so the "
+                    "detected centres seed the clustering instead of being thrown away.",
     ),
     Operation(
         id="auto_cluster", label="Auto Cluster", category="Color Quantization",

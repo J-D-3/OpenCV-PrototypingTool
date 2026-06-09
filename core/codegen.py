@@ -78,6 +78,7 @@ _VAR_BASE = {
     "find_contours": "contours", "contour_filter": "contours",
     "label_regions": "regions", "connected_components": "regions",
     "kmeans": "clusters", "auto_cluster": "clusters", "reduce_colors": "quant",
+    "detect_centers": "centres", "assign_centers": "clusters",
     "mean_shift": "seg", "morphology": "morph", "local_hdr": "hdr",
     "create_batch": "batch", "normalize": "norm",
 }
@@ -229,6 +230,21 @@ def _emit_hdbscan(o, i, p):
     ]
 
 
+def _emit_detect_centers(o, i, p):
+    return [
+        f"# Detect colour-cluster seeds in CIELAB/LCh: max_k={p.get('max_k')}, "
+        f"chroma_threshold(C*)={p.get('chroma_threshold')}",
+        f"bgr = as_bgr({i[0]})                                 # cv::cvtColor from the tracked colour space",
+        "lab = srgb_to_lab(bgr)                               # true CIELAB (L 0..100), pure NumPy",
+        "L, C, h = lab[:,0], hypot(lab[:,1], lab[:,2]), atan2(lab[:,2], lab[:,1])  # LCh",
+        f"# chromatic (C* >= {p.get('chroma_threshold')}): circular hue histogram weighted by "
+        f"C*^{p.get('sat_weight')}, cv::GaussianBlur(sigma={p.get('smoothing')})",
+        f"# neutral   (C* <  {p.get('chroma_threshold')}): lightness L* histogram (adaptive count)",
+        f"peaks = local maxima with prominence >= {p.get('min_prominence')} * height (both-sides dip)",
+        f"{o} = {{lab seeds, bgr seeds}} = mean Lab/BGR of each peak's pixels   # CENTERS payload",
+    ]
+
+
 def _emit_reduce_colors(o, i, p):
     return [f"{o} = centers[labels].reshape(shape)   # rebuild image from {i[0]} (CLUSTERS)"]
 
@@ -368,6 +384,7 @@ def _emit_crop_to_contour(o, i, p):
 _CODE.update({
     "kmeans": _emit_kmeans,
     "auto_cluster": _emit_auto_cluster,
+    "detect_centers": _emit_detect_centers,
     "hdbscan_cluster": _emit_hdbscan,
     "reduce_colors": _emit_reduce_colors,
     "label_regions": _emit_label_regions,

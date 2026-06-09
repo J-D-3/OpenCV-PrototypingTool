@@ -33,6 +33,8 @@ ICON_BY_OP = {
     "histogram": "histogram",
     "kmeans": "cluster",
     "auto_cluster": "cluster",
+    "detect_centers": "cluster",
+    "assign_centers": "palette",
     "mean_shift": "cluster",
     "reduce_colors": "palette",
     "find_contours": "contours",
