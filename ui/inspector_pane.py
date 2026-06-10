@@ -692,6 +692,12 @@ class ClusterScatter3D(QtWidgets.QWidget):
         css = "QCheckBox{color:#eee; background:rgba(15,15,15,180); padding:2px 5px; border-radius:3px;}"
         self._spheres_cb = QtWidgets.QCheckBox("spheres", self)
         self._spheres_cb.move(6, 6); self._spheres_cb.setStyleSheet(css)
+        self._spheres_cb.setChecked(True)       # on by default
+        self._spheres_cb.setToolTip(
+            "Per-cluster enclosing spheres.\n"
+            "Centre = the cluster's mean CIELAB position (its pixels' average L, a, b).\n"
+            "Radius = the 85th-percentile distance of its pixels from that centre — a robust\n"
+            "extent that wraps most of the cluster while ignoring stray outliers.")
         self._spheres_cb.toggled.connect(self.update)
         self._true_cb = QtWidgets.QCheckBox("true colour", self)
         self._true_cb.move(6, 30); self._true_cb.setStyleSheet(css)
