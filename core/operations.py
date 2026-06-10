@@ -756,10 +756,12 @@ def _compute_detect_centers(inputs, p, in_space="bgr"):
     node to consume. Chromatic modes come from a chroma-weighted hue histogram,
     neutral modes from an adaptive lightness histogram (see ``_detect_centers``)."""
     try:
-        return _detect_centers(inputs[0], in_space, p["max_k"], p["smoothing"],
-                               p["min_prominence"], p["chroma_threshold"],
-                               sat_weight=p.get("sat_weight", 1.0),
-                               min_area=p.get("min_area", 0.0), return_diag=True)
+        payload = _detect_centers(inputs[0], in_space, p["max_k"], p["smoothing"],
+                                  p["min_prominence"], p["chroma_threshold"],
+                                  sat_weight=p.get("sat_weight", 1.0),
+                                  min_area=p.get("min_area", 0.0), return_diag=True)
+        _attach_centers_scatter(payload, inputs[0], in_space)   # interactive 3-D Lab scatter
+        return payload
     except Exception as e:
         print(f"Error executing detect_centers: {e}")
         return None
@@ -1132,6 +1134,41 @@ def _attach_color_scatter(payload, img, in_space):
         diag["scatter3d"] = flat[sel]
         diag["scatter3d_labels"] = labels.reshape(-1)[sel].astype(np.int32)
         _attach_scatter_lab(payload)
+    except Exception:
+        pass
+
+
+def _attach_centers_scatter(payload, img, in_space):
+    """Build the inspector's 3-D Lab scatter for a CENTERS payload (Detect Color Centers),
+    which has detected seeds but NO per-pixel labels. We show the image's pixels as a cloud,
+    each assigned to its NEAREST seed in CIELAB — a live preview of what 'Assign to Centers'
+    would do — with each seed's sphere = the extent of the pixels nearest it. Stored under
+    ``payload['diag']`` (the histogram preview lives in ``payload['detdiag']``, untouched)."""
+    try:
+        seeds_lab = np.asarray(payload.get("lab"), np.float32)        # (k, 3) CIELAB seeds
+        seeds_bgr = np.asarray(payload.get("bgr"), np.float32)        # (k, 3) display BGR
+        if seeds_lab.size == 0:
+            return
+        flat = _as_bgr(img, in_space).reshape(-1, 3).astype(np.float32)
+        n = flat.shape[0]
+        sel = (np.random.default_rng(0).choice(n, 4000, replace=False) if n > 4000
+               else np.arange(n))
+        bgr_sub = flat[sel]
+        lab_sub = _srgb_to_lab(bgr_sub[:, ::-1]).astype(np.float32)   # BGR -> RGB -> Lab
+        # Nearest seed per pixel (Euclidean in Lab) = the Assign-to-Centers partition.
+        d2 = ((lab_sub[:, None, :] - seeds_lab[None, :, :]) ** 2).sum(axis=2)
+        labels = d2.argmin(axis=1).astype(np.int32)
+        radii = np.zeros(len(seeds_lab), np.float32)
+        for c in range(len(seeds_lab)):
+            m = labels == c
+            if m.any():
+                d = np.sqrt(((lab_sub[m] - seeds_lab[c]) ** 2).sum(axis=1))
+                radii[c] = float(np.percentile(d, 85))
+        payload["diag"] = {
+            "scatter3d": bgr_sub, "scatter3d_labels": labels, "scatter_lab": lab_sub,
+            "cluster_centers_lab": seeds_lab, "cluster_radii_lab": radii,
+            "centers": seeds_bgr,
+        }
     except Exception:
         pass
 

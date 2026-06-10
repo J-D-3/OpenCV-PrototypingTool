@@ -1034,8 +1034,11 @@ class InspectorPane(QtWidgets.QWidget):
                 and "scatter_lab" in payload["diag"] else None)
         self._scatter.setVisible(scat is not None)
         if scat is not None:
+            colours = scat.get("centers")            # CENTERS payloads carry seed colours here
+            if colours is None:
+                colours = payload.get("centers")     # CLUSTERS payloads use the top-level key
             self._scatter.set_data(scat["scatter_lab"], scat.get("scatter3d_labels"),
-                                   payload.get("centers"), scat.get("cluster_centers_lab"),
+                                   colours, scat.get("cluster_centers_lab"),
                                    scat.get("cluster_radii_lab"), point_bgr=scat.get("scatter3d"))
 
         if chart:
