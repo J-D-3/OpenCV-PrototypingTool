@@ -191,8 +191,10 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
   clusters (k-means *refine* pushing the near-identical seeds apart). New **Merge distance ΔE**
   param re-fuses any two detected centres within that ΔE: one colour mode, however it was found.
   The merged centre is the **support-weighted mean** of its parts (exactly the centroid of their
-  pixel union) and inherits *both* histogram components, so it shows one marker but still claims
-  every basin in the inspector scatter. Default 12 ΔE; 0 disables. Also fixed a latent bug in the
+  pixel union) and inherits *both* histogram components. The lower-support part folds into the
+  higher; in the preview the surviving centre is drawn **solid** and the merged-away one a
+  **dashed** line with a hollow marker (at its own original peak + colour), so you can still see
+  what was merged and where. Default 12 ΔE; 0 disables. Also fixed a latent bug in the
   scatter's peak-basin walk: an **isolated** hue peak on a near-zero plain returned the *complement*
   arc (excluding the peak), so half a cluster showed as scatter noise — the descent now stops at a
   near-zero floor, not only when the histogram rises. Suites: 36 smoke + 49 engine.

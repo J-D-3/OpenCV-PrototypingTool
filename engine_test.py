@@ -950,14 +950,16 @@ def test_detect_centers():
 def test_merge_close_seeds():
     from core.operations import _merge_close_seeds
 
-    def seed(lab, n, kind, comp):
-        return {"lab": np.array(lab, np.float32), "bgr": np.array([n, n, n], np.float32),
-                "support": n, "kind": kind, "comps": [comp]}
+    def seed(lab, n, kind, source, b):           # comps carry (source, bin, colour, support)
+        col = np.array([n % 256, n % 256, n % 256], np.float32)
+        return {"lab": np.array(lab, np.float32), "bgr": col,
+                "support": n, "kind": kind, "comps": [(source, b, col, n)]}
 
     # The chroma-cut artefact: one bright cluster split into a neutral-L* seed and a
-    # hue seed at nearly the same Lab point (ΔE ≈ 8.5). They merge into one centre.
-    a = seed([80, 6, 6], 300, "neutral", ("lum", 200))
-    b = seed([80, 12, 12], 100, "chromatic", ("hue", 20))
+    # hue seed at nearly the same Lab point (ΔE ≈ 8.5). They merge into one centre,
+    # and the LOWER-support part (the hue seed) folds into the higher (neutral) one.
+    a = seed([80, 6, 6], 300, "neutral", "lum", 200)
+    b = seed([80, 12, 12], 100, "chromatic", "hue", 20)
     merged = _merge_close_seeds([a, b], max_de=15.0)
     assert len(merged) == 1, "two near-identical Lab centres merge into one"
     m = merged[0]
@@ -965,14 +967,16 @@ def test_merge_close_seeds():
     assert m["kind"] == "chromatic", "a merged centre with any hue is chromatic"
     expect = (np.array([80, 6, 6]) * 300 + np.array([80, 12, 12]) * 100) / 400
     assert np.allclose(m["lab"], expect), "merged centre = support-weighted mean (exact union centroid)"
-    assert set(m["comps"]) == {("lum", 200), ("hue", 20)}, "merged centre owns BOTH basins"
+    assert {(c[0], c[1]) for c in m["comps"]} == {("lum", 200), ("hue", 20)}, "owns BOTH basins"
+    dom = max(m["comps"], key=lambda c: c[3])    # highest-support component = drawn solid
+    assert dom[0] == "lum" and dom[3] == 300, "the higher-support part is dominant (solid); lower is dashed"
 
     # Distinct hues (far apart in Lab) never merge; max_de=0 disables merging entirely.
-    far = _merge_close_seeds([seed([50, 70, 55], 100, "chromatic", ("hue", 0)),
-                              seed([60, -50, 40], 100, "chromatic", ("hue", 60))], max_de=15.0)
+    far = _merge_close_seeds([seed([50, 70, 55], 100, "chromatic", "hue", 0),
+                              seed([60, -50, 40], 100, "chromatic", "hue", 60)], max_de=15.0)
     assert len(far) == 2, "distinct hues stay separate"
     assert len(_merge_close_seeds([a, b], max_de=0.0)) == 2, "max_de=0 disables merging"
-    print("OK  merge_close_seeds: re-fuses near-identical Lab centres (exact weighted mean, owns both basins)")
+    print("OK  merge_close_seeds: re-fuses near-identical Lab centres; lower-support folds into higher")
 
 
 def test_detect_merge_straddle():
@@ -982,11 +986,11 @@ def test_detect_merge_straddle():
     # With the cut between them, detection makes a neutral-L* seed AND a hue seed at
     # almost the same Lab point — merge_distance re-fuses them into one centre.
     img = np.zeros((40, 40, 3), np.uint8)
-    img[:, :20] = (238, 240, 243)     # near-neutral bright (low chroma)
-    img[:, 20:] = (228, 238, 250)     # faint warm tint (higher chroma)
+    img[:, :30] = (238, 240, 243)     # near-neutral bright (low chroma), 1200px — the LARGER half
+    img[:, 30:] = (228, 238, 250)     # faint warm tint (higher chroma), 400px — the smaller half
     _, _, C, _ = _lab_lch(img)
     C2 = C.reshape(40, 40)
-    cA, cB = float(C2[:, :20].mean()), float(C2[:, 20:].mean())
+    cA, cB = float(C2[:, :30].mean()), float(C2[:, 30:].mean())
     thr = 0.5 * (cA + cB)
     assert cA < thr < cB, f"fixture must straddle the cut (cA={cA:.1f}, cB={cB:.1f})"
     off = _detect_centers(img, "bgr", 8, 2.0, 0.2, thr, merge_distance=0.0)
@@ -994,10 +998,16 @@ def test_detect_merge_straddle():
     assert off["k"] == 2, f"without merge: the cut splits one cluster into two seeds (got {off['k']})"
     assert on["k"] == 1, f"merge re-fuses them into one centre (got {on['k']})"
     assert int(on["support"][0]) == 1600, "the merged centre keeps all the pixels"
-    # The surviving merged centre still owns both histograms' pixels in the scatter.
+    # The surviving merged centre still owns both histograms' pixels in the scatter,
+    # AND the smaller (hue) component is preserved as a DASHED marker on the hue band
+    # while the larger (neutral) one is the solid centre.
     diag = _detect_centers(img, "bgr", 8, 2.0, 0.2, thr, merge_distance=40.0, return_diag=True)
     assert int((diag["member"] >= 0).sum()) == 1600, "merged centre claims both basins (no noise)"
-    print("OK  detect_centers: merge_distance re-fuses a cluster the chroma cut split in two")
+    dd = diag["detdiag"]
+    assert len(dd["lum"]["peaks"]) == 1, "the larger (neutral) component stays solid"
+    assert len(dd["hue"]["peaks"]) == 0, "the smaller (hue) component is not solid"
+    assert len(dd["hue"]["dashed_peaks"]) == 1, "the merged-away (smaller) component is drawn dashed"
+    print("OK  detect_centers: merge re-fuses a split cluster; lower-support peak kept as a dashed marker")
 
 
 def test_peak_basin():

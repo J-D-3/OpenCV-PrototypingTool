@@ -759,18 +759,20 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence, chroma_thre
     chromatic = C >= float(chroma_threshold)
 
     # Each seed is a record: Lab/BGR centroid, pixel support, kind, and the histogram
-    # component(s) it was built from — ``comps = [(source, bin), ...]`` with source ∈
-    # {"hue","lum"}. Components let the preview mark only surviving centres (and only
-    # once, on the dominant component) AND let a *merged* centre own every basin that
-    # fed it (so the scatter doesn't show half a split cluster as noise).
+    # component(s) it was built from — ``comps = [(source, bin, colour, support), ...]``
+    # with source ∈ {"hue","lum"}. Components let the preview mark surviving centres
+    # (solid on the dominant/highest-support component, DASHED on the lower-support
+    # ones a merge folded in) AND let a *merged* centre own every basin that fed it
+    # (so the scatter doesn't show half a split cluster as noise).
     seeds = []
 
     def add(sel, kind, source, pk):
         n = int(sel.sum())
         if n == 0:
             return
-        seeds.append({"lab": lab[sel].mean(axis=0), "bgr": flat_bgr[sel].mean(axis=0),
-                      "support": n, "kind": kind, "comps": [(source, int(pk))]})
+        col = flat_bgr[sel].mean(axis=0)
+        seeds.append({"lab": lab[sel].mean(axis=0), "bgr": col, "support": n,
+                      "kind": kind, "comps": [(source, int(pk), col, n)]})
 
     # --- chromatic modes: circular, chroma-weighted hue histogram ---
     hb = np.minimum((h / 360.0 * _HUE_BINS).astype(np.int64), _HUE_BINS - 1)
@@ -819,14 +821,24 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence, chroma_thre
                "shape": img.shape, "k": len(kept)}
     if return_diag:
         def band(source, raw, smooth, ch, name, nbins):
-            # One marker per surviving centre, on its DOMINANT histogram component
-            # (comps[0] — the larger-support part a merge folded into), in its own mean
-            # colour. So markers track merge / min_area / max_k, not just prominence.
-            keep = [s for s in kept if s["comps"][0][0] == source]
-            return {"raw": raw, "smooth": smooth,
-                    "peaks": [s["comps"][0][1] for s in keep], "channel": ch,
-                    "nbins": nbins, "chname": name,
-                    "peak_colors": [tuple(int(v) for v in s["bgr"]) for s in keep]}
+            # Each surviving centre marks its DOMINANT (highest-support) component
+            # SOLID, in the centre's final mean colour; every lower-support component a
+            # merge folded in is marked DASHED at its own original peak/colour — so you
+            # can still see a detected-but-merged centre. Markers track merge / min_area
+            # / max_k, not just prominence.
+            peaks, pcols, dpeaks, dcols = [], [], [], []
+            for s in kept:
+                dom = max(s["comps"], key=lambda c: c[3])   # highest support = solid
+                if dom[0] == source:
+                    peaks.append(dom[1])
+                    pcols.append(tuple(int(v) for v in s["bgr"]))
+                for c in s["comps"]:                         # the rest, dashed
+                    if c is not dom and c[0] == source:
+                        dpeaks.append(c[1])
+                        dcols.append(tuple(int(v) for v in c[2]))
+            return {"raw": raw, "smooth": smooth, "peaks": peaks, "peak_colors": pcols,
+                    "dashed_peaks": dpeaks, "dashed_colors": dcols,
+                    "channel": ch, "nbins": nbins, "chname": name}
         payload["detdiag"] = {
             "hue": band("hue", hue_raw, hue_smooth, 0, "Hue (C*-weighted)", _HUE_BINS),
             "lum": band("lum", lum_raw, lum_smooth, 1, "Neutral L*", _L_BINS),
@@ -838,7 +850,7 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence, chroma_thre
         # who-built-what for the scatter.
         member = np.full(len(lab), -1, np.int32)
         for g, s in enumerate(kept):
-            for source, pk in s["comps"]:
+            for source, pk, _col, _n in s["comps"]:
                 if source == "hue":
                     lo, hi = _peak_basin(hue_smooth, pk, circular=True)
                     sel = chromatic & np.isin(hb, _basin_bins(lo, hi, _HUE_BINS, True)) & (member < 0)
@@ -1089,6 +1101,24 @@ def _band_hist(kdiag, width=_PREVIEW_W, height=None):
     plot(raw, (120, 120, 120))                 # original histogram
     plot(sm, (0, 200, 255))                     # smoothed / saturation-damped
     smx = float(sm.max()) or 1.0
+
+    def vdash(x, col):                           # a dashed vertical line (merged-away peak)
+        seg, gap, y0 = _px(7), _px(5), pad
+        while y0 < height - pad:
+            y1 = min(y0 + seg, height - pad)
+            cv2.line(band, (x, y0), (x, y1), col, _tk(1), cv2.LINE_AA)
+            y0 = y1 + gap
+
+    # Centres detected but folded into a nearby one by Merge distance: their original
+    # peak, drawn DASHED with a HOLLOW marker (vs the solid line + filled dot of a
+    # surviving centre) so you can still see what was merged and where.
+    for pk, col in zip(kdiag.get("dashed_peaks", []), kdiag.get("dashed_colors", [])):
+        x = int(pk / (n - 1) * (width - 1))
+        y = int((height - pad) - (sm[pk] / smx) * (height - 2 * pad))
+        vdash(x, col)
+        cv2.circle(band, (x, y), _tk(3), col, _tk(1), cv2.LINE_AA)          # hollow = merged
+        cv2.circle(band, (x, y), _tk(4), (210, 210, 210), _tk(1), cv2.LINE_AA)
+
     peak_colors = kdiag.get("peak_colors")      # real saturation-weighted mean colors
     for i, pk in enumerate(kdiag["peaks"]):
         x = int(pk / (n - 1) * (width - 1))
@@ -1499,8 +1529,9 @@ def _render_kmeans(inputs, output, p):
 
 def _render_detect_centers(inputs, output, p):
     """Inspector preview for Detect Color Centers: the two detection histograms
-    (the chroma-weighted hue curve and the neutral-L* curve) with each detected
-    peak marked in its real colour, then a palette of the seed colours."""
+    (the chroma-weighted hue curve and the neutral-L* curve) with each surviving
+    centre marked SOLID in its real colour and each merged-away centre DASHED, then
+    a palette of the seed colours."""
     if not isinstance(output, dict):
         return None
     det = output.get("detdiag")
@@ -1508,10 +1539,11 @@ def _render_detect_centers(inputs, output, p):
     if det is None:
         return _simple_swatch(seeds) if len(seeds) else None
     bands = []
-    if det["hue"]["peaks"]:
+    # Draw a histogram if it carries any marker — solid (surviving) or dashed (merged).
+    if det["hue"]["peaks"] or det["hue"].get("dashed_peaks"):
         bands.append(_titled(_band_hist(det["hue"]),
                              f"hue seeds  ({len(det['hue']['peaks'])})"))
-    if det["lum"]["peaks"]:
+    if det["lum"]["peaks"] or det["lum"].get("dashed_peaks"):
         bands.append(_titled(_band_hist(det["lum"]),
                              f"neutral L* seeds  ({len(det['lum']['peaks'])})"))
     if len(seeds):
