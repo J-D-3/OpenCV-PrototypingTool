@@ -199,6 +199,7 @@ def _emit_detect_centers(o, i, p):
         f"C*^{p.get('sat_weight')}, cv::GaussianBlur(sigma={p.get('smoothing')})",
         f"# neutral   (C* <  {p.get('chroma_threshold')}): lightness L* histogram (adaptive count)",
         f"peaks = local maxima with prominence >= {p.get('min_prominence')} * height (both-sides dip)",
+        f"merge centres within {p.get('merge_distance')} ΔE (re-fuses a cluster the cut split in two)",
         f"drop peaks whose pixel support < min_area={p.get('min_area')} of the image (keep >=1)",
         f"{o} = {{lab seeds, bgr seeds}} = mean Lab/BGR of each peak's pixels   # CENTERS payload",
     ]

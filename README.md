@@ -185,6 +185,17 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-10** — **Detect Color Centers: merge split centres (chroma-cut fix) + isolated-peak
+  basin fix.** A bright/pale cluster straddling the **Neutral chroma C\*** cut splits into a hue
+  centre *and* a lightness centre at nearly the same Lab point — which Assign then renders as two
+  clusters (k-means *refine* pushing the near-identical seeds apart). New **Merge distance ΔE**
+  param re-fuses any two detected centres within that ΔE: one colour mode, however it was found.
+  The merged centre is the **support-weighted mean** of its parts (exactly the centroid of their
+  pixel union) and inherits *both* histogram components, so it shows one marker but still claims
+  every basin in the inspector scatter. Default 12 ΔE; 0 disables. Also fixed a latent bug in the
+  scatter's peak-basin walk: an **isolated** hue peak on a near-zero plain returned the *complement*
+  arc (excluding the peak), so half a cluster showed as scatter noise — the descent now stops at a
+  near-zero floor, not only when the histogram rises. Suites: 36 smoke + 49 engine.
 - **2026-06-09** — **Density Cluster: reachability in true colours + cluster axis.** The
   reachability bars are now painted each ordered point's **own original colour** (so the
   within-cluster colour variation is visible — e.g. several distinct reds that all belong

@@ -645,10 +645,16 @@ _L_BINS = 256
 
 
 def _peak_basin(hist, pk, circular):
-    """Descend from peak bin ``pk`` to the nearest local minimum on each side and return
-    ``(left, right)`` bin indices — the peak's basin. 'Nearest local minimum' = the last bin
-    before the histogram starts rising again. Non-circular descents stop at the array bounds."""
+    """Descend from peak bin ``pk`` to the nearest valley on each side and return
+    ``(left, right)`` bin indices — the peak's basin. A valley is where the histogram
+    **starts rising again** OR where it has fallen to a near-zero **floor** (≤2 % of the
+    peak's height). The floor test matters for an *isolated* peak on a near-zero plain
+    (e.g. one tinted hue in a mostly-neutral image): without it the descent never sees
+    a rise, so on a circular histogram it would wrap all the way around and return the
+    *complement* arc that excludes the peak. Non-circular descents also stop at the
+    array bounds."""
     n = len(hist)
+    floor = 0.02 * float(hist[pk])          # ≤2 % of peak height counts as basin floor
 
     def descend(step):
         j = int(pk)
@@ -659,6 +665,8 @@ def _peak_basin(hist, pk, circular):
             if hist[nj] > hist[j]:          # rising again => j is the valley floor
                 return j
             j = nj
+            if hist[j] <= floor:            # reached the near-zero floor => stop here
+                return j
         return j
 
     return descend(-1), descend(1)
@@ -671,8 +679,46 @@ def _basin_bins(lo, hi, n, circular):
     return np.concatenate([np.arange(lo, n), np.arange(0, hi + 1)])
 
 
-def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
-                    chroma_threshold, sat_weight=1.0, min_area=0.0, return_diag=False):
+def _merge_close_seeds(seeds, max_de):
+    """Agglomeratively merge detected seeds whose Lab centres are within ``max_de``
+    (ΔE) of each other — two centres that close are *one* colour mode, however they
+    were found. This re-fuses a bright/pale cluster that the chroma cut split into a
+    neutral-L* seed and a hue seed at nearly the same Lab point; without it, Assign
+    would realise that one mode as two clusters (and k-means refine would push the
+    two near-identical seeds apart). The merged centre is the **support-weighted
+    mean** of its parts — exactly the centroid of their pixel union — and inherits
+    *both* parts' histogram components (so a merged centre still claims every basin
+    that fed it, for the scatter, but shows a single marker on its dominant one).
+    Iterates to a fixpoint; ``max_de <= 0`` disables merging."""
+    if max_de <= 0 or len(seeds) < 2:
+        return seeds
+    items = [dict(s) for s in seeds]
+    changed = True
+    while changed and len(items) > 1:
+        changed = False
+        items.sort(key=lambda s: s["support"], reverse=True)   # fold small into large
+        out = []
+        for s in items:
+            hit = next((m for m in out
+                        if float(np.linalg.norm(m["lab"] - s["lab"])) <= max_de), None)
+            if hit is None:
+                out.append(s)
+                continue
+            n1, n2 = hit["support"], s["support"]
+            tot = n1 + n2
+            hit["lab"] = (hit["lab"] * n1 + s["lab"] * n2) / tot
+            hit["bgr"] = (hit["bgr"] * n1 + s["bgr"] * n2) / tot
+            hit["support"] = tot
+            hit["comps"] = hit["comps"] + s["comps"]
+            if s["kind"] == "chromatic":
+                hit["kind"] = "chromatic"      # a merged centre with any hue is chromatic
+            changed = True
+        items = out
+    return items
+
+
+def _detect_centers(img, in_space, max_k, smoothing, min_prominence, chroma_threshold,
+                    sat_weight=1.0, min_area=0.0, merge_distance=0.0, return_diag=False):
     """Detect colour-cluster *seeds* in CIELAB/LCh — the count AND each centre's
     colour, not just k. Two structural cases replace the old 'pick a channel':
 
@@ -697,7 +743,14 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
     *is this a distinct mode?*, ``min_area`` asks *is it big enough to matter?*. It
     filters tiny-but-locally-prominent peaks (a few stray colourful pixels rising
     from a near-zero background) without a unit-dependent height threshold; the
-    single best-supported centre is always kept, so the result is never empty."""
+    single best-supported centre is always kept, so the result is never empty.
+
+    ``merge_distance`` (ΔE) re-fuses any two detected centres whose Lab points are
+    that close (``_merge_close_seeds``). Its purpose is the chroma-cut artefact: a
+    bright/pale cluster straddling ``chroma_threshold`` splits into a neutral-L* seed
+    *and* a hue seed at nearly the same Lab point, which Assign would otherwise render
+    as two clusters. Merging is in the same perceptual ΔE units as the threshold; 0
+    disables it."""
     bgr = _as_bgr(img, in_space)
     lab, L, C, h = _lab_lch(bgr)
     flat_bgr = bgr.reshape(-1, 3).astype(np.float32)
@@ -705,21 +758,19 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
     win = max(1, int(round(sig)))
     chromatic = C >= float(chroma_threshold)
 
-    # Per seed we keep its support, kind, AND which histogram + bin it came from
-    # (``src`` ∈ {"hue","lum"}, ``bin``), so the preview can mark *only the surviving*
-    # centres on the histograms — when min_area / max_k drops a centre, its indicator
-    # disappears too (mirroring how min_prominence already drops undetected peaks).
-    seeds_lab, seeds_bgr, support, kinds, src, sbin = [], [], [], [], [], []
+    # Each seed is a record: Lab/BGR centroid, pixel support, kind, and the histogram
+    # component(s) it was built from — ``comps = [(source, bin), ...]`` with source ∈
+    # {"hue","lum"}. Components let the preview mark only surviving centres (and only
+    # once, on the dominant component) AND let a *merged* centre own every basin that
+    # fed it (so the scatter doesn't show half a split cluster as noise).
+    seeds = []
 
     def add(sel, kind, source, pk):
-        if int(sel.sum()) == 0:
+        n = int(sel.sum())
+        if n == 0:
             return
-        seeds_lab.append(lab[sel].mean(axis=0))
-        seeds_bgr.append(flat_bgr[sel].mean(axis=0))
-        support.append(int(sel.sum()))
-        kinds.append(kind)
-        src.append(source)
-        sbin.append(int(pk))
+        seeds.append({"lab": lab[sel].mean(axis=0), "bgr": flat_bgr[sel].mean(axis=0),
+                      "support": n, "kind": kind, "comps": [(source, int(pk))]})
 
     # --- chromatic modes: circular, chroma-weighted hue histogram ---
     hb = np.minimum((h / 360.0 * _HUE_BINS).astype(np.int64), _HUE_BINS - 1)
@@ -745,48 +796,56 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
     for pk in lum_peaks:
         add(neutral & (lbn >= pk - win) & (lbn <= pk + win), "neutral", "lum", pk)
 
-    if not seeds_lab:                                  # degenerate image: one overall mean
+    if not seeds:                                      # degenerate image: one overall mean
         add(np.ones(len(lab), bool), "neutral", "lum", int(np.argmax(lum_smooth)))
+
+    # Re-fuse seeds that landed at nearly the same Lab point (e.g. a bright cluster the
+    # chroma cut split into a neutral + a hue seed) BEFORE the size floor / cap, so the
+    # combined support is what's measured and counted.
+    seeds = _merge_close_seeds(seeds, merge_distance)
 
     # Size floor: drop centres backed by < min_area of the image, but never all of
     # them (keep at least the single best-supported one so the output is non-empty).
-    min_support = float(min_area) * max(1, len(lab))
-    kept = [i for i in range(len(support)) if support[i] >= min_support] \
-        or [int(np.argmax(support))]
-    order = sorted(kept, key=lambda i: support[i], reverse=True)[:max(1, int(max_k))]
-    sel_lab = np.asarray([seeds_lab[i] for i in order], np.float32)
-    sel_bgr = np.asarray([seeds_bgr[i] for i in order], np.float32)
+    total = max(1, len(lab))
+    kept = [s for s in seeds if s["support"] >= float(min_area) * total] \
+        or [max(seeds, key=lambda s: s["support"])]
+    kept = sorted(kept, key=lambda s: s["support"], reverse=True)[:max(1, int(max_k))]
+
+    sel_lab = np.asarray([s["lab"] for s in kept], np.float32)
+    sel_bgr = np.asarray([s["bgr"] for s in kept], np.float32)
     payload = {"lab": sel_lab, "bgr": sel_bgr,
-               "support": np.asarray([support[i] for i in order], np.int64),
-               "kinds": [kinds[i] for i in order],
-               "shape": img.shape, "k": len(order)}
+               "support": np.asarray([s["support"] for s in kept], np.int64),
+               "kinds": [s["kind"] for s in kept],
+               "shape": img.shape, "k": len(kept)}
     if return_diag:
         def band(source, raw, smooth, ch, name, nbins):
-            # Mark only the SURVIVING centres of this histogram, each in its own
-            # mean colour — so the indicators track min_area / max_k, not just
-            # min_prominence.
-            keep = [i for i in order if src[i] == source]
+            # One marker per surviving centre, on its DOMINANT histogram component
+            # (comps[0] — the larger-support part a merge folded into), in its own mean
+            # colour. So markers track merge / min_area / max_k, not just prominence.
+            keep = [s for s in kept if s["comps"][0][0] == source]
             return {"raw": raw, "smooth": smooth,
-                    "peaks": [sbin[i] for i in keep], "channel": ch, "nbins": nbins,
-                    "chname": name,
-                    "peak_colors": [tuple(int(v) for v in seeds_bgr[i]) for i in keep]}
+                    "peaks": [s["comps"][0][1] for s in keep], "channel": ch,
+                    "nbins": nbins, "chname": name,
+                    "peak_colors": [tuple(int(v) for v in s["bgr"]) for s in keep]}
         payload["detdiag"] = {
             "hue": band("hue", hue_raw, hue_smooth, 0, "Hue (C*-weighted)", _HUE_BINS),
             "lum": band("lum", lum_raw, lum_smooth, 1, "Neutral L*", _L_BINS),
             "seed_bgr": sel_bgr}
-        # Per-pixel basin membership for the inspector scatter: a pixel belongs to the
-        # surviving seed whose histogram peak BASIN (local-min to local-min) contains it —
-        # the pixels that actually built that peak. Pixels in no basin are noise (-1). The
-        # detected seeds are unchanged; this only labels who-built-what for the scatter.
+        # Per-pixel basin membership for the inspector scatter: each surviving seed
+        # claims the basin(s) (local-min to local-min) of ALL its histogram components —
+        # a merged centre owns both the hue and the neutral basin that fed it. Pixels in
+        # no basin are noise (-1). The detected seeds are unchanged; this only labels
+        # who-built-what for the scatter.
         member = np.full(len(lab), -1, np.int32)
-        for g, i in enumerate(order):
-            if src[i] == "hue":
-                lo, hi = _peak_basin(hue_smooth, sbin[i], circular=True)
-                sel = chromatic & np.isin(hb, _basin_bins(lo, hi, _HUE_BINS, True)) & (member < 0)
-            else:
-                lo, hi = _peak_basin(lum_smooth, sbin[i], circular=False)
-                sel = neutral & np.isin(lbn, _basin_bins(lo, hi, _L_BINS, False)) & (member < 0)
-            member[sel] = g
+        for g, s in enumerate(kept):
+            for source, pk in s["comps"]:
+                if source == "hue":
+                    lo, hi = _peak_basin(hue_smooth, pk, circular=True)
+                    sel = chromatic & np.isin(hb, _basin_bins(lo, hi, _HUE_BINS, True)) & (member < 0)
+                else:
+                    lo, hi = _peak_basin(lum_smooth, pk, circular=False)
+                    sel = neutral & np.isin(lbn, _basin_bins(lo, hi, _L_BINS, False)) & (member < 0)
+                member[sel] = g
         payload["member"] = member
     return payload
 
@@ -800,7 +859,9 @@ def _compute_detect_centers(inputs, p, in_space="bgr"):
         payload = _detect_centers(inputs[0], in_space, p["max_k"], p["smoothing"],
                                   p["min_prominence"], p["chroma_threshold"],
                                   sat_weight=p.get("sat_weight", 1.0),
-                                  min_area=p.get("min_area", 0.0), return_diag=True)
+                                  min_area=p.get("min_area", 0.0),
+                                  merge_distance=p.get("merge_distance", 0.0),
+                                  return_diag=True)
         _attach_centers_scatter(payload, inputs[0], in_space)   # interactive 3-D Lab scatter
         return payload
     except Exception as e:
@@ -2700,6 +2761,13 @@ OPS: list = [
                       help="Pixels with chroma C* (CIELAB radius √(a²+b²)) below this are "
                            "treated as neutral and detected by lightness L* (adaptive count); "
                            "the rest are detected by hue. ~8 ≈ just-perceptible colour."),
+            ParamSpec("merge_distance", 12.0, kind="float", min=0.0, max=40.0, step=1.0,
+                      label="Merge distance ΔE",
+                      help="Merge two detected centres whose CIELAB colours are within this "
+                           "ΔE — they're one colour mode. Chiefly fixes a bright/pale cluster "
+                           "straddling the neutral-chroma cut, which otherwise splits into a "
+                           "hue centre AND a lightness centre at the same Lab point (Assign "
+                           "would then make two clusters). 0 = no merging."),
             ParamSpec("sat_weight", 1.0, kind="float", min=0.0, max=4.0, step=0.1,
                       label="Chroma weight",
                       help="Exponent on C* in the hue histogram; >1 favours vivid pixels, "

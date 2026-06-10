@@ -947,6 +947,76 @@ def test_detect_centers():
     print("OK  detect_centers: LCh hue + adaptive neutral L* seeds, capped by max_k")
 
 
+def test_merge_close_seeds():
+    from core.operations import _merge_close_seeds
+
+    def seed(lab, n, kind, comp):
+        return {"lab": np.array(lab, np.float32), "bgr": np.array([n, n, n], np.float32),
+                "support": n, "kind": kind, "comps": [comp]}
+
+    # The chroma-cut artefact: one bright cluster split into a neutral-L* seed and a
+    # hue seed at nearly the same Lab point (ΔE ≈ 8.5). They merge into one centre.
+    a = seed([80, 6, 6], 300, "neutral", ("lum", 200))
+    b = seed([80, 12, 12], 100, "chromatic", ("hue", 20))
+    merged = _merge_close_seeds([a, b], max_de=15.0)
+    assert len(merged) == 1, "two near-identical Lab centres merge into one"
+    m = merged[0]
+    assert m["support"] == 400, "merged support = sum of parts"
+    assert m["kind"] == "chromatic", "a merged centre with any hue is chromatic"
+    expect = (np.array([80, 6, 6]) * 300 + np.array([80, 12, 12]) * 100) / 400
+    assert np.allclose(m["lab"], expect), "merged centre = support-weighted mean (exact union centroid)"
+    assert set(m["comps"]) == {("lum", 200), ("hue", 20)}, "merged centre owns BOTH basins"
+
+    # Distinct hues (far apart in Lab) never merge; max_de=0 disables merging entirely.
+    far = _merge_close_seeds([seed([50, 70, 55], 100, "chromatic", ("hue", 0)),
+                              seed([60, -50, 40], 100, "chromatic", ("hue", 60))], max_de=15.0)
+    assert len(far) == 2, "distinct hues stay separate"
+    assert len(_merge_close_seeds([a, b], max_de=0.0)) == 2, "max_de=0 disables merging"
+    print("OK  merge_close_seeds: re-fuses near-identical Lab centres (exact weighted mean, owns both basins)")
+
+
+def test_detect_merge_straddle():
+    from core.operations import _detect_centers, _lab_lch
+    # A single bright warm-white cluster whose two halves straddle the chroma cut: a
+    # near-neutral half (low C*) and a faintly-tinted half (higher C*, ~same L/hue).
+    # With the cut between them, detection makes a neutral-L* seed AND a hue seed at
+    # almost the same Lab point — merge_distance re-fuses them into one centre.
+    img = np.zeros((40, 40, 3), np.uint8)
+    img[:, :20] = (238, 240, 243)     # near-neutral bright (low chroma)
+    img[:, 20:] = (228, 238, 250)     # faint warm tint (higher chroma)
+    _, _, C, _ = _lab_lch(img)
+    C2 = C.reshape(40, 40)
+    cA, cB = float(C2[:, :20].mean()), float(C2[:, 20:].mean())
+    thr = 0.5 * (cA + cB)
+    assert cA < thr < cB, f"fixture must straddle the cut (cA={cA:.1f}, cB={cB:.1f})"
+    off = _detect_centers(img, "bgr", 8, 2.0, 0.2, thr, merge_distance=0.0)
+    on = _detect_centers(img, "bgr", 8, 2.0, 0.2, thr, merge_distance=40.0)
+    assert off["k"] == 2, f"without merge: the cut splits one cluster into two seeds (got {off['k']})"
+    assert on["k"] == 1, f"merge re-fuses them into one centre (got {on['k']})"
+    assert int(on["support"][0]) == 1600, "the merged centre keeps all the pixels"
+    # The surviving merged centre still owns both histograms' pixels in the scatter.
+    diag = _detect_centers(img, "bgr", 8, 2.0, 0.2, thr, merge_distance=40.0, return_diag=True)
+    assert int((diag["member"] >= 0).sum()) == 1600, "merged centre claims both basins (no noise)"
+    print("OK  detect_centers: merge_distance re-fuses a cluster the chroma cut split in two")
+
+
+def test_peak_basin():
+    from core.operations import _peak_basin, _basin_bins
+    # Isolated circular peak on a near-zero plain: the basin must CONTAIN the peak.
+    # (The old code never saw a "rise", so it wrapped around and returned the
+    # complement arc that EXCLUDED the peak — half a cluster shown as scatter noise.)
+    hist = np.zeros(180, np.float32); hist[34] = 10.0; hist[33] = hist[35] = 4.0
+    lo, hi = _peak_basin(hist, 34, circular=True)
+    bins = set(_basin_bins(lo, hi, 180, True).tolist())
+    assert 34 in bins, "an isolated circular peak's basin must contain the peak"
+    assert len(bins) < 60, "basin is the local bump, not the whole-circle complement"
+    # A real valley between two peaks still bounds the basin (non-circular).
+    h2 = np.array([0, 6, 10, 6, 1, 0, 1, 7, 12, 7, 0], np.float32)
+    lo2, hi2 = _peak_basin(h2, 2, circular=False)
+    assert lo2 <= 2 <= hi2 and hi2 <= 5, "basin stops at the valley between the two peaks"
+    print("OK  peak_basin: isolated peak keeps its bump; a valley bounds adjacent peaks")
+
+
 def test_assign_centers():
     from core import datatypes, codegen
     from core.operations import REGISTRY
@@ -1228,6 +1298,9 @@ def main():
     test_peak_prominence()
     test_peak_subpeak_vs_step()
     test_detect_centers()
+    test_merge_close_seeds()
+    test_detect_merge_straddle()
+    test_peak_basin()
     test_assign_centers()
     test_cluster_preview_diag()
     test_normalize_lighting()
@@ -1237,7 +1310,7 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 46 backend tests passed")
+    print("\nENGINE OK: 49 backend tests passed")
 
 
 if __name__ == "__main__":
