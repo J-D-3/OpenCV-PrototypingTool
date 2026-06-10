@@ -701,8 +701,8 @@ class ClusterScatter3D(QtWidgets.QWidget):
         self._spheres_cb.toggled.connect(self.update)
         self._true_cb = QtWidgets.QCheckBox("true colour", self)
         self._true_cb.move(6, 30); self._true_cb.setStyleSheet(css)
-        self._true_cb.setToolTip("Paint every point its own original colour instead of its "
-                                 "cluster's mean.")
+        self._true_cb.setToolTip("Paint cluster MEMBERS in their own original colour instead "
+                                 "of the cluster mean. (Noise is governed by 'flag noise'.)")
         self._true_cb.toggled.connect(self.update)
         # Only meaningful when the payload has noise (-1) points, e.g. Detect Color Centers
         # pixels outside every peak's basin. Hidden otherwise.
@@ -710,8 +710,8 @@ class ClusterScatter3D(QtWidgets.QWidget):
         self._flag_cb.move(6, 54); self._flag_cb.setStyleSheet(css)
         self._flag_cb.setToolTip(
             "Noise = pixels not inside any detected peak's basin.\n"
-            "Off: show them in their own (original) colour. On: a magenta flag.\n"
-            "Cluster members always keep their cluster's mean colour.")
+            "Off: their own (original) colour. On: a magenta flag — this wins for noise\n"
+            "even with 'true colour' on.")
         self._flag_cb.setVisible(False)
         self._flag_cb.toggled.connect(self.update)
         self._has_noise = False
@@ -749,15 +749,18 @@ class ClusterScatter3D(QtWidgets.QWidget):
             self._qtrue = [QtGui.QColor(int(r), int(g), int(b)) for b, g, r in pb]
         else:
             self._qtrue = list(mean_cols)
-        # Members -> cluster mean; noise (-1) -> its own colour (_qmean) or a magenta flag
-        # (_qflag). Members are identical in both, so non-CENTERS scatters are unaffected.
+        # The two toggles act INDEPENDENTLY: "true colour" governs MEMBERS (mean vs their
+        # own colour); "flag noise" governs NOISE (own colour vs a magenta flag) and always
+        # wins for noise points, even with true colour on. Four precomputed colour lists, one
+        # per (true, flag) combo, so paint just picks one. Members are identical across the
+        # noise-only variants, so non-CENTERS scatters (no -1) are unaffected.
         flag = QtGui.QColor(200, 0, 200)
-        self._qmean, self._qflag = [], []
+        self._qmean, self._qflag, self._qtrueflag = [], [], []
         for i in range(len(raw)):
-            if raw[i] < 0:
-                self._qmean.append(self._qtrue[i]); self._qflag.append(flag)
-            else:
-                self._qmean.append(mean_cols[i]); self._qflag.append(mean_cols[i])
+            noise = raw[i] < 0
+            self._qmean.append(self._qtrue[i] if noise else mean_cols[i])       # true off, flag off
+            self._qflag.append(flag if noise else mean_cols[i])                 # true off, flag on
+            self._qtrueflag.append(flag if noise else self._qtrue[i])           # true on,  flag on
 
         rad = np.sqrt((self._pts ** 2).sum(axis=1))
         self._R = float(rad.max()) * 1.05 if rad.size else 0.6
@@ -842,14 +845,14 @@ class ClusterScatter3D(QtWidgets.QWidget):
         for name, (tx, ty) in (("L", l_tip), ("a", a_tip), ("b", b_tip)):
             qp.drawText(QtCore.QPointF(tx + 3, ty + 4), name)
 
-        # Points, depth-sorted. true colour -> every point original; else members keep the
-        # cluster mean and noise is shown original (_qmean) or magenta-flagged (_qflag).
-        if self._true_cb.isChecked():
-            cols = self._qtrue
-        elif self._flag_cb.isChecked():
-            cols = self._qflag
-        else:
-            cols = self._qmean
+        # Points, depth-sorted. Independent toggles: true colour -> members in their own
+        # colour (else mean); flag noise -> noise magenta (else its own colour). Flag noise
+        # always wins for noise, so it overrides true colour there.
+        true, flag = self._true_cb.isChecked(), self._flag_cb.isChecked()
+        cols = (self._qtrueflag if (true and flag)
+                else self._qtrue if true
+                else self._qflag if flag
+                else self._qmean)
         xr, yr, zd = self._rot(self._pts)
         px, py = cx + xr * s, cy - yr * s
         qp.setPen(QtCore.Qt.PenStyle.NoPen)
