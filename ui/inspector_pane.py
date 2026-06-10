@@ -701,7 +701,20 @@ class ClusterScatter3D(QtWidgets.QWidget):
         self._spheres_cb.toggled.connect(self.update)
         self._true_cb = QtWidgets.QCheckBox("true colour", self)
         self._true_cb.move(6, 30); self._true_cb.setStyleSheet(css)
+        self._true_cb.setToolTip("Paint every point its own original colour instead of its "
+                                 "cluster's mean.")
         self._true_cb.toggled.connect(self.update)
+        # Only meaningful when the payload has noise (-1) points, e.g. Detect Color Centers
+        # pixels outside every peak's basin. Hidden otherwise.
+        self._flag_cb = QtWidgets.QCheckBox("flag noise", self)
+        self._flag_cb.move(6, 54); self._flag_cb.setStyleSheet(css)
+        self._flag_cb.setToolTip(
+            "Noise = pixels not inside any detected peak's basin.\n"
+            "Off: show them in their own (original) colour. On: a magenta flag.\n"
+            "Cluster members always keep their cluster's mean colour.")
+        self._flag_cb.setVisible(False)
+        self._flag_cb.toggled.connect(self.update)
+        self._has_noise = False
 
     def _to_disp(self, lab):
         """(L, a, b) -> display (x=a, y=L-up, z=b), neutral axis (a=b=0) at the centre line
@@ -725,13 +738,26 @@ class ClusterScatter3D(QtWidgets.QWidget):
         self._pts = self._to_disp(p)
 
         cen = np.clip(np.asarray(centers), 0, 255).astype(int)
-        lab = np.clip(np.asarray(labels, np.int64), 0, len(cen) - 1)
-        self._qmean = [QtGui.QColor(int(r), int(g), int(b)) for b, g, r in cen[lab]]
+        raw = np.asarray(labels, np.int64)
+        self._has_noise = bool((raw < 0).any())
+        self._flag_cb.setVisible(self._has_noise)
+        clip = np.clip(raw, 0, len(cen) - 1)
+        mean_cols = [QtGui.QColor(int(r), int(g), int(b)) for b, g, r in cen[clip]]
+        # Each point's own original colour (for true-colour mode and unflagged noise).
         if point_bgr is not None and len(point_bgr) == len(p):
             pb = np.clip(np.asarray(point_bgr), 0, 255).astype(int)
             self._qtrue = [QtGui.QColor(int(r), int(g), int(b)) for b, g, r in pb]
         else:
-            self._qtrue = self._qmean
+            self._qtrue = list(mean_cols)
+        # Members -> cluster mean; noise (-1) -> its own colour (_qmean) or a magenta flag
+        # (_qflag). Members are identical in both, so non-CENTERS scatters are unaffected.
+        flag = QtGui.QColor(200, 0, 200)
+        self._qmean, self._qflag = [], []
+        for i in range(len(raw)):
+            if raw[i] < 0:
+                self._qmean.append(self._qtrue[i]); self._qflag.append(flag)
+            else:
+                self._qmean.append(mean_cols[i]); self._qflag.append(mean_cols[i])
 
         rad = np.sqrt((self._pts ** 2).sum(axis=1))
         self._R = float(rad.max()) * 1.05 if rad.size else 0.6
@@ -816,8 +842,14 @@ class ClusterScatter3D(QtWidgets.QWidget):
         for name, (tx, ty) in (("L", l_tip), ("a", a_tip), ("b", b_tip)):
             qp.drawText(QtCore.QPointF(tx + 3, ty + 4), name)
 
-        # Points, depth-sorted; cluster-mean colour or the pixel's own colour.
-        cols = self._qtrue if self._true_cb.isChecked() else self._qmean
+        # Points, depth-sorted. true colour -> every point original; else members keep the
+        # cluster mean and noise is shown original (_qmean) or magenta-flagged (_qflag).
+        if self._true_cb.isChecked():
+            cols = self._qtrue
+        elif self._flag_cb.isChecked():
+            cols = self._qflag
+        else:
+            cols = self._qmean
         xr, yr, zd = self._rot(self._pts)
         px, py = cx + xr * s, cy - yr * s
         qp.setPen(QtCore.Qt.PenStyle.NoPen)

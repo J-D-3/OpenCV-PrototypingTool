@@ -644,6 +644,33 @@ _HUE_BINS = 180
 _L_BINS = 256
 
 
+def _peak_basin(hist, pk, circular):
+    """Descend from peak bin ``pk`` to the nearest local minimum on each side and return
+    ``(left, right)`` bin indices — the peak's basin. 'Nearest local minimum' = the last bin
+    before the histogram starts rising again. Non-circular descents stop at the array bounds."""
+    n = len(hist)
+
+    def descend(step):
+        j = int(pk)
+        for _ in range(n):
+            nj = (j + step) % n if circular else j + step
+            if not circular and (nj < 0 or nj >= n):
+                return j
+            if hist[nj] > hist[j]:          # rising again => j is the valley floor
+                return j
+            j = nj
+        return j
+
+    return descend(-1), descend(1)
+
+
+def _basin_bins(lo, hi, n, circular):
+    """The bin indices in a peak's basin ``[lo, hi]`` (wrapping for a circular histogram)."""
+    if not circular or lo <= hi:
+        return np.arange(lo, hi + 1)
+    return np.concatenate([np.arange(lo, n), np.arange(0, hi + 1)])
+
+
 def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
                     chroma_threshold, sat_weight=1.0, min_area=0.0, return_diag=False):
     """Detect colour-cluster *seeds* in CIELAB/LCh — the count AND each centre's
@@ -747,6 +774,20 @@ def _detect_centers(img, in_space, max_k, smoothing, min_prominence,
             "hue": band("hue", hue_raw, hue_smooth, 0, "Hue (C*-weighted)", _HUE_BINS),
             "lum": band("lum", lum_raw, lum_smooth, 1, "Neutral L*", _L_BINS),
             "seed_bgr": sel_bgr}
+        # Per-pixel basin membership for the inspector scatter: a pixel belongs to the
+        # surviving seed whose histogram peak BASIN (local-min to local-min) contains it —
+        # the pixels that actually built that peak. Pixels in no basin are noise (-1). The
+        # detected seeds are unchanged; this only labels who-built-what for the scatter.
+        member = np.full(len(lab), -1, np.int32)
+        for g, i in enumerate(order):
+            if src[i] == "hue":
+                lo, hi = _peak_basin(hue_smooth, sbin[i], circular=True)
+                sel = chromatic & np.isin(hb, _basin_bins(lo, hi, _HUE_BINS, True)) & (member < 0)
+            else:
+                lo, hi = _peak_basin(lum_smooth, sbin[i], circular=False)
+                sel = neutral & np.isin(lbn, _basin_bins(lo, hi, _L_BINS, False)) & (member < 0)
+            member[sel] = g
+        payload["member"] = member
     return payload
 
 
@@ -1139,25 +1180,26 @@ def _attach_color_scatter(payload, img, in_space):
 
 
 def _attach_centers_scatter(payload, img, in_space):
-    """Build the inspector's 3-D Lab scatter for a CENTERS payload (Detect Color Centers),
-    which has detected seeds but NO per-pixel labels. We show the image's pixels as a cloud,
-    each assigned to its NEAREST seed in CIELAB — a live preview of what 'Assign to Centers'
-    would do — with each seed's sphere = the extent of the pixels nearest it. Stored under
-    ``payload['diag']`` (the histogram preview lives in ``payload['detdiag']``, untouched)."""
+    """Build the inspector's 3-D Lab scatter for a CENTERS payload (Detect Color Centers).
+    Each pixel is coloured by the histogram peak BASIN it belongs to (``payload['member']``
+    from ``_detect_centers`` — the pixels that actually built each peak), painted the seed's
+    mean colour; pixels in no basin are noise (-1, shown original or flagged in the widget).
+    Each seed's sphere is the extent of its basin pixels. Stored under ``payload['diag']``
+    (the histogram preview in ``payload['detdiag']`` is untouched)."""
     try:
+        member = payload.get("member")
         seeds_lab = np.asarray(payload.get("lab"), np.float32)        # (k, 3) CIELAB seeds
         seeds_bgr = np.asarray(payload.get("bgr"), np.float32)        # (k, 3) display BGR
-        if seeds_lab.size == 0:
+        if member is None or seeds_lab.size == 0:
             return
+        member = np.asarray(member).reshape(-1)
         flat = _as_bgr(img, in_space).reshape(-1, 3).astype(np.float32)
         n = flat.shape[0]
         sel = (np.random.default_rng(0).choice(n, 4000, replace=False) if n > 4000
                else np.arange(n))
         bgr_sub = flat[sel]
         lab_sub = _srgb_to_lab(bgr_sub[:, ::-1]).astype(np.float32)   # BGR -> RGB -> Lab
-        # Nearest seed per pixel (Euclidean in Lab) = the Assign-to-Centers partition.
-        d2 = ((lab_sub[:, None, :] - seeds_lab[None, :, :]) ** 2).sum(axis=2)
-        labels = d2.argmin(axis=1).astype(np.int32)
+        labels = member[sel].astype(np.int32)                        # basin id, -1 = noise
         radii = np.zeros(len(seeds_lab), np.float32)
         for c in range(len(seeds_lab)):
             m = labels == c
