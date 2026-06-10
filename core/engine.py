@@ -22,6 +22,7 @@ import numpy as np
 
 from core.graph import GraphModel, GraphNode
 from core.batch import Batch
+from core import diag
 
 
 def _infer_space(arr) -> str:
@@ -59,6 +60,11 @@ class Engine:
 
     def evaluate(self, node: GraphNode) -> None:
         """Evaluate a single node, assuming its inputs are already evaluated."""
+        op_id = "source" if node.is_source else getattr(node.op, "id", "?")
+        with diag.timed(f"evaluate node {node.id} ({op_id})"):
+            self._evaluate(node)
+
+    def _evaluate(self, node: GraphNode) -> None:
         if node.is_source:
             node.output = node.source_image
             node.error = None
@@ -178,8 +184,9 @@ class Engine:
         save-to-file) after a node's inputs are ready.
         """
         recomputed: List[GraphNode] = []
-        for node in self.graph.topo_order():
-            if node.dirty:
-                self.evaluate(node)
-                recomputed.append(node)
+        with diag.evaluation_guard("evaluate_all"):
+            for node in self.graph.topo_order():
+                if node.dirty:
+                    self.evaluate(node)
+                    recomputed.append(node)
         return recomputed

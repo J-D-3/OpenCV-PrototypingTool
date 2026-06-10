@@ -6,9 +6,14 @@ from pathlib import Path
 import cv2
 from PyQt6 import QtWidgets
 
+from core import diag
 from ui.main_window import MainWindow
 
 def main() -> None:
+    # Crash-hunting instrumentation: faulthandler dumps every thread's stack to
+    # logs/faulthandler.log on a native crash; structural edits / evaluations are
+    # logged to logs/diag.log. Set OCVPT_DIAG=1 for verbose per-node timing.
+    diag.init()
     parser = argparse.ArgumentParser(description="OpenCV image viewer (PyQt6) with sidebar and drag-and-drop pane.")
     parser.add_argument("image_path", nargs="?", default=None, help="Optional path to an initial image")
     args = parser.parse_args()

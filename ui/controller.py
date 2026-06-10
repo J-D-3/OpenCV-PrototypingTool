@@ -16,7 +16,7 @@ from PyQt6 import QtCore, QtWidgets
 
 from core.graph import GraphModel
 from core.engine import Engine
-from core import datatypes
+from core import datatypes, diag
 
 
 class ControllerSignals(QtCore.QObject):
@@ -59,6 +59,11 @@ class GraphController:
 
     def adopt(self, model) -> None:
         """Replace the backend with a freshly loaded model (clears bindings)."""
+        # Never swap the engine/model out from under a running background worker:
+        # every other topology mutation waits for idle first; load must too, or a
+        # stale worker keeps evaluating the old model while load builds the new one.
+        diag.log(f"adopt: replacing model (busy={self._busy}, pending={self._pending})")
+        self.wait_idle()
         self.model = model
         self.engine = Engine(model)
         self._qt_by_gid.clear()
@@ -84,20 +89,25 @@ class GraphController:
         self._pump()                              # 1. draw the (empty) graph
         order = self.model.topo_order()
         pending = [n for n in order if n.dirty]
+        diag.log(f"recompute_all: {len(pending)} pending nodes (busy={self._busy})")
         for gn in pending:                        # 2. show spinners on what's coming
             qt = self._qt_by_gid.get(gn.id)
             if qt is not None:
                 qt.set_computing(True)
         self._pump()
-        for node in pending:                      # 3. evaluate + reveal one at a time
-            self.engine.evaluate(node)
-            qt = self._qt_by_gid.get(node.id)
-            if qt is not None:
-                qt.set_computing(False)
-                qt.refresh_from_model()
-                qt.on_commit()
-                self.signals.nodeChanged.emit(qt)
-            self._pump()
+        # Guard the whole progressive load: if a stale background worker is still
+        # evaluating (e.g. from the graph we just replaced), this warns instead of
+        # silently racing it on the engine.
+        with diag.evaluation_guard("recompute_all"):
+            for node in pending:                  # 3. evaluate + reveal one at a time
+                self.engine.evaluate(node)
+                qt = self._qt_by_gid.get(node.id)
+                if qt is not None:
+                    qt.set_computing(False)
+                    qt.refresh_from_model()
+                    qt.on_commit()
+                    self.signals.nodeChanged.emit(qt)
+                self._pump()
 
     def set_preview_index(self, index: int) -> None:
         """Change which batch element every node previews and re-render views."""
@@ -231,9 +241,12 @@ class GraphController:
                     qt.set_computing(True)
         if self._busy:
             self._pending = commit if self._pending is None else (commit or self._pending)
+            diag.log(f"_recompute_async: busy, coalesced (pending={self._pending})")
             return
         self._busy = True
-        threading.Thread(target=self._eval_worker, args=(commit,), daemon=True).start()
+        diag.log("_recompute_async: starting worker")
+        threading.Thread(target=self._eval_worker, args=(commit,),
+                         name="eval-worker", daemon=True).start()
 
     def _eval_worker(self, commit: bool) -> None:
         try:

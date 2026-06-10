@@ -14,6 +14,9 @@ __pycache__/
 # Generated output images
 output/
 
+# Diagnostics / crash logs (core.diag)
+logs/
+
 # Scratch / scaffolding files used during refactors
 _commitmsg.txt
 _tail*.py
