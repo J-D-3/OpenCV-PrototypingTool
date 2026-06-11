@@ -9,7 +9,9 @@ This is the only place where the frontend drives the backend, so it stays thin.
 """
 from __future__ import annotations
 
+import logging
 import threading
+import time
 from typing import Dict
 
 from PyQt6 import QtCore, QtWidgets
@@ -249,10 +251,16 @@ class GraphController:
                          name="eval-worker", daemon=True).start()
 
     def _eval_worker(self, commit: bool) -> None:
+        diag.log(f"_eval_worker: begin (commit={commit})")
+        t0 = time.perf_counter()
         try:
             recomputed = self.engine.evaluate_all()
+            diag.log(f"_eval_worker: done in {(time.perf_counter() - t0) * 1000.0:.1f} ms, "
+                     f"recomputed {len(recomputed)} node(s): {diag.nodes_summary(recomputed)}")
         except Exception as e:  # noqa: BLE001 — surface, never kill the worker silently
             # Cross-thread emit auto-queues to the GUI-thread status-bar slot.
+            diag.log(f"_eval_worker: FAILED after {(time.perf_counter() - t0) * 1000.0:.1f} ms: {e}",
+                     level=logging.ERROR)
             self.signals.notify.emit("error", f"Background evaluation failed: {e}")
             recomputed = []
         self.signals.evalDone.emit(recomputed, commit)   # -> _on_eval_done (GUI thread)
@@ -260,6 +268,8 @@ class GraphController:
     def _on_eval_done(self, recomputed, commit: bool) -> None:
         self._apply_results(recomputed, commit)
         self._busy = False
+        diag.log(f"_on_eval_done: applied {len(recomputed)} node(s), commit={commit}, "
+                 f"pending={self._pending}")
         if self._pending is not None:
             commit2, self._pending = self._pending, None
             self._recompute_async(commit2)

@@ -1,40 +1,46 @@
-"""Diagnostics — crash-hunting instrumentation (backend, Qt-free).
+"""Diagnostics — opt-in crash/hang instrumentation (backend, Qt-free).
 
-The app occasionally crashes hard (the window vanishes) while loading a pipeline
-or recomputing a node. Because :mod:`core.engine` wraps every ``compute`` in a
+Why this exists
+---------------
+The app used to crash hard (window vanishes) or hang while loading a pipeline or
+recomputing. Because :mod:`core.engine` wraps every ``compute`` in a
 ``try/except``, a *Python* exception can never do that — it becomes a red node
-border. A hard crash is therefore a **native** event: a segfault / access
-violation inside a C extension (OpenCV, the ``optics`` pybind11 core), or the
-process being torn down. Those leave **no Python traceback** and discard any
-buffered ``print`` output, so by the time the user notices, the evidence is gone.
+border. Such failures are **native** events (a segfault in OpenCV / the ``optics``
+pybind11 core / OpenBLAS, or a deadlock) that leave no Python traceback and
+discard buffered output. This module captures the evidence those failures need:
 
-This module gives us that evidence:
-
-* **faulthandler** — on a fatal signal (SIGSEGV/SIGABRT/access violation, which
-  faulthandler also catches on Windows) it writes *every thread's* Python stack
-  to ``logs/faulthandler.log``. That single dump tells us which op each thread
-  was inside at the instant of the crash — the whole game when the bug is a
-  concurrent native call.
-* **thread-tagged logging** of evaluation start/end and structural edits, flushed
-  per line to ``logs/diag.log`` so the last lines survive the crash.
-* a **concurrent-evaluation detector**: :func:`evaluation_guard` warns (always,
-  cheaply) whenever two threads enter engine evaluation at once — the prime
-  suspect for the crash. This fires *before* the segfault, naming both threads.
+* **faulthandler** — on a fatal signal (SIGSEGV/SIGABRT/access violation, caught
+  on Windows too) it writes *every thread's* Python stack, so we can see which op
+  each thread was inside at the instant of the crash.
+* **thread-tagged logging** of evaluation + background-worker + structural-edit
+  events, flushed per line so the trailing lines survive a crash.
+* a **concurrent-evaluation detector** (:func:`evaluation_guard`) that warns when
+  two threads evaluate at once.
 
 Everything here is stdlib-only (no Qt, no cv2), so ``core`` stays headless.
 
-Usage
------
-Call :func:`init` once at startup (``app.main`` does). Verbose per-node timing is
-gated behind the ``OCVPT_DIAG`` env var (set it to ``1`` during a crash hunt);
-the faulthandler dump and the concurrency warning are always on once ``init`` has
-run, because they are nearly free and only speak up when something is wrong.
+Turning it on (it's **off by default**)
+---------------------------------------
+Set the ``OCVPT_DIAG`` environment variable before launching:
+
+* unset / ``0`` / ``off`` — **off**. No ``logs/`` dir, no handlers; logging calls
+  are no-ops. faulthandler still arms itself to ``stderr`` (free crash insurance).
+* ``1`` / ``on`` / ``info`` — **on**. INFO logging (worker start/end, structural
+  edits, concurrency warnings) to ``logs/diag.log`` + stderr; faulthandler dumps
+  to ``logs/faulthandler.log``.
+* ``2`` / ``verbose`` / ``trace`` — adds **per-node / per-eval-pass timing**.
+
+``init`` may also be called with an explicit ``level`` to override the env var
+(e.g. from a future "Debug logging" menu toggle). It is idempotent.
+
+    PowerShell:  $env:OCVPT_DIAG=1; .\.venv\Scripts\python.exe main.py
 """
 from __future__ import annotations
 
 import faulthandler
 import logging
 import os
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -42,9 +48,25 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
-# Verbose per-node/per-element timing. Off by default (keeps normal runs and the
-# headless test suites silent); set OCVPT_DIAG=1 to capture a full timing trace.
-VERBOSE = os.environ.get("OCVPT_DIAG", "") not in ("", "0", "false", "False")
+# --- level resolution --------------------------------------------------------
+OFF, ON, VERBOSE_LEVEL = 0, 1, 2
+_LEVEL_WORDS = {
+    "": OFF, "0": OFF, "off": OFF, "false": OFF, "no": OFF, "none": OFF,
+    "1": ON, "on": ON, "true": ON, "yes": ON, "info": ON,
+    "2": VERBOSE_LEVEL, "verbose": VERBOSE_LEVEL, "trace": VERBOSE_LEVEL, "debug": VERBOSE_LEVEL,
+}
+
+
+def _resolve_level(value: Optional[str]) -> int:
+    """Map an OCVPT_DIAG value to a level; unknown non-empty values mean ``ON``."""
+    if value is None:
+        return OFF
+    return _LEVEL_WORDS.get(value.strip().lower(), ON)
+
+
+LEVEL = _resolve_level(os.environ.get("OCVPT_DIAG"))
+ENABLED = LEVEL >= ON          # file logging + INFO events
+VERBOSE = LEVEL >= VERBOSE_LEVEL  # adds per-node / per-pass timing
 
 _log = logging.getLogger("ocvpt")
 _initialized = False
@@ -61,19 +83,27 @@ def _log_dir() -> Path:
     return d
 
 
-def init(verbose: Optional[bool] = None) -> None:
-    """Set up faulthandler + file logging. Idempotent; safe to call repeatedly.
+def init(level: Optional[int] = None) -> None:
+    """Arm faulthandler and (when enabled) file logging. Idempotent.
 
-    Called from ``app.main``. The headless test suites do **not** call it, so they
-    create no ``logs/`` dir and stay silent — but :func:`evaluation_guard` and
-    :func:`log` still work (logging just has no handler, so they're no-ops)."""
-    global _initialized, _fault_fp
+    ``app.main`` calls this once. ``level`` overrides the ``OCVPT_DIAG`` env var
+    when given (``diag.OFF`` / ``diag.ON`` / ``diag.VERBOSE_LEVEL``) — handy for a
+    future in-app "enable debug logging" toggle. When the level is OFF we create no
+    ``logs/`` dir and add no handlers (so logging calls stay no-ops), but still arm
+    faulthandler to stderr so a surprise native crash is at least dumped there."""
+    global _initialized, _fault_fp, LEVEL, ENABLED, VERBOSE
     if _initialized:
         return
     _initialized = True
-    if verbose is not None:
-        global VERBOSE
-        VERBOSE = verbose
+    if level is not None:
+        LEVEL = level
+        ENABLED = LEVEL >= ON
+        VERBOSE = LEVEL >= VERBOSE_LEVEL
+
+    if not ENABLED:
+        # Off: no files, no handlers. Free crash insurance to the console only.
+        faulthandler.enable(file=sys.stderr, all_threads=True)
+        return
 
     log_dir = _log_dir()
 
@@ -85,8 +115,8 @@ def init(verbose: Optional[bool] = None) -> None:
     _fault_fp.flush()
     faulthandler.enable(file=_fault_fp, all_threads=True)
 
-    # Rotating file handler (per-line flush via RotatingFileHandler's default) +
-    # stderr, so a trailing trace is both on disk and visible in the console.
+    # Rotating file handler + stderr, so a trailing trace is both on disk and
+    # visible in the console.
     _log.setLevel(logging.DEBUG if VERBOSE else logging.INFO)
     fmt = logging.Formatter("%(asctime)s.%(msecs)03d %(levelname)-7s %(message)s",
                             datefmt="%H:%M:%S")
@@ -98,15 +128,22 @@ def init(verbose: Optional[bool] = None) -> None:
     sh.setFormatter(fmt)
     _log.addHandler(sh)
     _log.propagate = False
-    _log.info("diag initialized (verbose=%s, pid=%d) -> %s", VERBOSE, os.getpid(), log_dir)
+    _log.info("diag initialized (level=%d, pid=%d) -> %s", LEVEL, os.getpid(), log_dir)
+
+
+def is_enabled() -> bool:
+    """True if INFO-level diagnostics are active (callers can skip building costly
+    log strings when this is False)."""
+    return ENABLED
 
 
 def dump_now(label: str = "manual") -> None:
-    """Dump every thread's stack right now (for diagnosing a hang, not a crash)."""
-    if _fault_fp is not None:
-        _fault_fp.write(f"\n--- manual dump '{label}' {time.strftime('%H:%M:%S')} ---\n")
-        _fault_fp.flush()
-        faulthandler.dump_traceback(file=_fault_fp, all_threads=True)
+    """Dump every thread's stack right now — for diagnosing a *hang* (not a crash).
+    Writes to the faulthandler log when enabled, else to stderr."""
+    target = _fault_fp if _fault_fp is not None else sys.stderr
+    target.write(f"\n--- manual dump '{label}' {time.strftime('%H:%M:%S')} ---\n")
+    target.flush()
+    faulthandler.dump_traceback(file=target, all_threads=True)
 
 
 def thread_tag() -> str:
@@ -115,31 +152,43 @@ def thread_tag() -> str:
 
 
 def log(msg: str, *, level: int = logging.INFO) -> None:
-    """Thread-tagged log line (no-op if init() was never called and no handlers)."""
+    """Thread-tagged log line. No-op when diagnostics are off (no handlers)."""
     if _log.handlers:
         _log.log(level, "[%s] %s", thread_tag(), msg)
 
 
+def nodes_summary(nodes, limit: int = 8) -> str:
+    """Compact ``id:op_id`` list for logging which nodes a worker (re)computed,
+    e.g. ``"3:to_grayscale, 4:blur, 7:hdbscan_cluster ...+2"``."""
+    parts = []
+    for n in nodes[:limit]:
+        op = getattr(n, "op", None)
+        op_id = "source" if op is None else getattr(op, "id", "?")
+        parts.append(f"{getattr(n, 'id', '?')}:{op_id}")
+    extra = len(nodes) - limit
+    if extra > 0:
+        parts.append(f"...+{extra}")
+    return ", ".join(parts) if parts else "none"
+
+
 @contextmanager
 def evaluation_guard(what: str):
-    """Wrap one engine evaluation pass. Always-on, cheap: registers this thread as
-    'evaluating' and **warns if another thread is already evaluating** — the exact
-    overlap we suspect is causing the native crash. Names both threads so the log
-    (and any following faulthandler dump) pin down the race."""
+    """Wrap one engine evaluation pass. Cheap and always active: registers this
+    thread as 'evaluating' and **warns if another thread is already evaluating** —
+    the overlap that can corrupt evaluation. Names both threads so the log (and any
+    following faulthandler dump) pin down the race. When diagnostics are off, an
+    overlap still prints once to stderr (it should never happen)."""
     tid = threading.get_ident()
     tag = thread_tag()
     with _active_lock:
         others = {k: v for k, v in _active.items() if k != tid}
         _active[tid] = what
     if others:
-        # This is the smoking gun: two evaluations on the engine at once.
+        msg = f"CONCURRENT EVALUATION: '{what}' on {tag} overlaps {list(others.values())}"
         if _log.handlers:
-            _log.warning("[%s] CONCURRENT EVALUATION: '%s' starting while %s already running",
-                         tag, what, list(others.values()))
-        else:  # logging not initialized (e.g. tests) — still surface it
-            import sys
-            print(f"[diag] CONCURRENT EVALUATION: {tag} '{what}' overlaps {list(others.values())}",
-                  file=sys.stderr)
+            _log.warning("[%s] %s", tag, msg)
+        else:
+            print(f"[diag] {msg}", file=sys.stderr)
     t0 = time.perf_counter()
     try:
         yield
@@ -153,7 +202,7 @@ def evaluation_guard(what: str):
 
 @contextmanager
 def timed(label: str):
-    """Verbose-only timing of a compute. Near-zero cost when OCVPT_DIAG is unset."""
+    """Verbose-only timing of a compute. Near-zero cost unless OCVPT_DIAG>=2."""
     if not VERBOSE:
         yield
         return

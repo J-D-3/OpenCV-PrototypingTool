@@ -24,11 +24,14 @@ does internally). Setting them afterwards has no effect — so this module must 
 before any numpy/cv2/core import. Each entry point (``app``, ``main``,
 ``engine_test``, ``smoke_test``) imports it on its very first line.
 
-``setdefault`` so an explicit override in the environment is respected — note,
-though, that raising it reintroduces the crash risk.
+The value is **hard-forced** to ``1`` (not ``setdefault``): a higher
+``OPENBLAS_NUM_THREADS`` inherited from the environment would silently
+reintroduce the crash/hang, so we override it unconditionally. There is no
+in-process need for multi-threaded BLAS here — parallelism comes from the batch
+fan-out — so forcing it costs nothing and closes that foot-gun.
 """
 import os
 
 for _var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
              "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
-    os.environ.setdefault(_var, "1")
+    os.environ[_var] = "1"
