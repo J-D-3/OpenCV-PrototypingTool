@@ -107,7 +107,7 @@ class Engine:
                 batches = [i for i in inputs if isinstance(i, Batch)]
                 if batches:
                     node.output, node.error, node.comp_time_ms = self._run_batched(
-                        op, inputs, batches, node.params, input_nodes)
+                        op, inputs, batches, node.params, input_nodes, node._elem_cache)
                 else:
                     t0 = time.perf_counter()
                     result = self._call(op, inputs, node.params, input_nodes)
@@ -127,61 +127,106 @@ class Engine:
             return op.compute(inputs, params, in_space)
         return op.compute(inputs, params)
 
-    def _run_batched(self, op, inputs, batches, params, input_nodes):
+    def _run_batched(self, op, inputs, batches, params, input_nodes, cache):
         """Map the op over a batch: zip equal-length batches; broadcast singles
-        (and length-1 batches) against the batch length. Elements are computed
-        in parallel across a thread pool, with the previewed element first."""
+        (and length-1 batches) against the batch length.
+
+        **Per-element memoization.** ``cache`` is the node's ``_elem_cache``, keyed
+        by the *identity* of each output element's input(s). Unchanged elements
+        keep their ndarray identity through the chain (an op that reuses a cached
+        element returns the same object), so a batch-membership change upstream
+        (add/remove an input to a Create Batch) only recomputes the genuinely new
+        elements; the rest are cache hits. The key is identity-based, not
+        positional, so a *middle* delete reuses the survivors instead of shifting
+        every index. Only successful results are cached; the cache is rebuilt each
+        pass, which prunes elements that are no longer present. (Invalidated by a
+        param change via ``GraphNode.invalidate_elem_cache``.)
+
+        Newly-computed elements run in parallel across a thread pool, preview first.
+        """
         n = max(len(b) for b in batches)
         for b in batches:
             if len(b) not in (1, n):
                 raise ValueError(f"batch size mismatch: {len(b)} vs {n}")
 
-        def compute_elem(k):
-            elem = [(inp.items[k if len(inp) > 1 else 0] if isinstance(inp, Batch) else inp)
+        def gather(k):
+            return [(inp.items[k if len(inp) > 1 else 0] if isinstance(inp, Batch) else inp)
                     for inp in inputs]
+
+        # Decide per element: reuse a cached result (inputs identity-unchanged) or
+        # (re)compute it. The dict value keeps refs to the input elements so their
+        # id()s can't be recycled while cached — making the identity key safe.
+        results: List = [None] * n
+        elems: List = [None] * n
+        keys: List = [None] * n
+        new_cache: dict = {}
+        to_compute: List[int] = []
+        for k in range(n):
+            elem = gather(k)
+            elems[k] = elem
             if any(e is None for e in elem):
-                return None, None, None
+                continue                                   # missing input -> None
+            key = tuple(id(e) for e in elem)
+            keys[k] = key
+            hit = cache.get(key)
+            if hit is not None and len(hit[0]) == len(elem) \
+                    and all(a is b for a, b in zip(hit[0], elem)):
+                results[k] = hit[1]                        # identity-unchanged: reuse
+                new_cache[key] = hit                       # carry forward (keeps refs alive)
+            else:
+                to_compute.append(k)
+
+        def compute_elem(k):
             t0 = time.perf_counter()
             try:
-                r = self._call(op, elem, params, input_nodes)
+                r = self._call(op, elems[k], params, input_nodes)
                 return r, None, (time.perf_counter() - t0) * 1000.0
             except Exception as e:  # noqa: BLE001
                 return None, f"{type(e).__name__}: {e}", (time.perf_counter() - t0) * 1000.0
 
-        # Preview element first, then the rest — useful once results stream.
-        order = list(range(n))
+        # Preview element first among the ones we actually (re)compute.
         pv = self.preview_index
-        if 0 <= pv < n:
-            order = [pv] + [k for k in range(n) if k != pv]
+        order = ([pv] + [k for k in to_compute if k != pv]) if pv in to_compute else list(to_compute)
 
-        results: List = [None] * n
         first_error = None
         times: List[float] = []
-        workers = min(self._max_workers, n)
-        if workers <= 1:
+
+        def _store(k, r, err, dt):
+            nonlocal first_error
+            results[k] = r
+            first_error = first_error or err
+            if dt is not None:
+                times.append(dt)
+            if err is None and r is not None and keys[k] is not None:
+                new_cache[keys[k]] = (tuple(elems[k]), r)  # cache only successes
+
+        workers = min(self._max_workers, max(1, len(order)))
+        if len(order) <= 1 or workers <= 1:
             for k in order:
-                results[k], err, dt = compute_elem(k)
-                first_error = first_error or err
-                if dt is not None:
-                    times.append(dt)
+                _store(k, *compute_elem(k))
         else:
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 futures = {ex.submit(compute_elem, k): k for k in order}
                 for fut in as_completed(futures):
                     k = futures[fut]
-                    results[k], err, dt = fut.result()
-                    first_error = first_error or err
-                    if dt is not None:
-                        times.append(dt)
+                    _store(k, *fut.result())
+
+        cache.clear()
+        cache.update(new_cache)                            # prune elements no longer present
         mean_ms = (sum(times) / len(times)) if times else None
         return Batch(results), first_error, mean_ms
 
-    def evaluate_all(self) -> List[GraphNode]:
+    def evaluate_all(self, on_node_done=None) -> List[GraphNode]:
         """Evaluate every dirty node in dependency order.
 
         Returns the nodes that were (re)computed this pass, in topo order, so
         callers can refresh exactly those views and fire side effects (e.g.
         save-to-file) after a node's inputs are ready.
+
+        ``on_node_done(node)``, if given, is called right after each node finishes
+        — letting the caller reveal results incrementally (e.g. clear that node's
+        spinner) instead of waiting for the whole pass. It runs on the calling
+        (worker) thread, so a Qt caller should emit a queued signal from it.
         """
         recomputed: List[GraphNode] = []
         with diag.evaluation_guard("evaluate_all"):
@@ -189,4 +234,6 @@ class Engine:
                 if node.dirty:
                     self.evaluate(node)
                     recomputed.append(node)
+                    if on_node_done is not None:
+                        on_node_done(node)
         return recomputed

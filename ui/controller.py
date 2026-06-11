@@ -25,6 +25,8 @@ class ControllerSignals(QtCore.QObject):
     """One signal hub per canvas (cheaper than a QObject per node)."""
     nodeChanged = QtCore.pyqtSignal(object)        # the Qt node whose result changed
     previewIndexChanged = QtCore.pyqtSignal(int)   # the batch element being previewed
+    nodeComputed = QtCore.pyqtSignal(object)       # one gnode just finished (bg eval) —
+                                                   # reveal it now, before the pass ends
     evalDone = QtCore.pyqtSignal(object, bool)     # (recomputed gnodes, commit) — bg eval
     notify = QtCore.pyqtSignal(str, str)           # (level, message): view-layer feedback
                                                    # for the status bar; level in {error, info}
@@ -41,9 +43,13 @@ class GraphController:
         # canvas stays responsive; rapid changes coalesce (latest wins).
         self._busy = False
         self._pending = None     # None or the commit flag of a queued re-run
-        # Queued so the slot runs on the main (GUI) thread, not the worker.
+        # Queued so the slots run on the main (GUI) thread, not the worker.
         self.signals.evalDone.connect(
             self._on_eval_done, QtCore.Qt.ConnectionType.QueuedConnection)
+        # Per-node reveal: the worker emits this as each node finishes, so spinners
+        # clear one-by-one (like a pipeline load) instead of all at once at the end.
+        self.signals.nodeComputed.connect(
+            self._on_node_computed, QtCore.Qt.ConnectionType.QueuedConnection)
 
     # --- registration ------------------------------------------------------
     def register_source(self, qt_node, image) -> None:
@@ -209,6 +215,7 @@ class GraphController:
     def set_param(self, qt_node, name, value, commit: bool) -> None:
         gn = qt_node.gnode
         gn.params[name] = value
+        gn.invalidate_elem_cache()   # own params changed -> every element recomputes
         self.model.mark_dirty(gn)
         self._recompute_async(commit=commit)   # off the UI thread; coalesced
 
@@ -253,8 +260,11 @@ class GraphController:
     def _eval_worker(self, commit: bool) -> None:
         diag.log(f"_eval_worker: begin (commit={commit})")
         t0 = time.perf_counter()
+        # Reveal each node the instant the worker finishes it (queued -> GUI thread),
+        # so spinners clear progressively rather than all together at the end.
+        on_done = lambda gnode: self.signals.nodeComputed.emit(gnode)
         try:
-            recomputed = self.engine.evaluate_all()
+            recomputed = self.engine.evaluate_all(on_node_done=on_done)
             diag.log(f"_eval_worker: done in {(time.perf_counter() - t0) * 1000.0:.1f} ms, "
                      f"recomputed {len(recomputed)} node(s): {diag.nodes_summary(recomputed)}")
         except Exception as e:  # noqa: BLE001 — surface, never kill the worker silently
@@ -265,8 +275,29 @@ class GraphController:
             recomputed = []
         self.signals.evalDone.emit(recomputed, commit)   # -> _on_eval_done (GUI thread)
 
+    def _on_node_computed(self, gnode) -> None:
+        """One node finished on the worker: clear its spinner and show its result
+        now (queued from `_eval_worker`, runs on the GUI thread). The committed
+        side effects (`on_commit`) fire later, in `_on_eval_done`."""
+        qt = self._qt_by_gid.get(gnode.id)
+        if qt is None:
+            return
+        qt.set_computing(False)
+        qt.refresh_from_model()
+        self.signals.nodeChanged.emit(qt)
+
     def _on_eval_done(self, recomputed, commit: bool) -> None:
-        self._apply_results(recomputed, commit)
+        # Spinners/previews were already revealed per node via `_on_node_computed`
+        # (queued before this signal, so all processed by now). Here we only finalize:
+        # clear any straggler spinner and fire commit side effects in topo order.
+        self.engine.preview_index = self.preview_index
+        for gnode in recomputed:
+            qt = self._qt_by_gid.get(gnode.id)
+            if qt is None:
+                continue
+            qt.set_computing(False)      # idempotent safety net
+            if commit:
+                qt.on_commit()
         self._busy = False
         diag.log(f"_on_eval_done: applied {len(recomputed)} node(s), commit={commit}, "
                  f"pending={self._pending}")

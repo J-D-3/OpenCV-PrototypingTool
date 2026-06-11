@@ -40,6 +40,50 @@ def test_blas_thread_pinned():
     print("OK  BLAS pinned to 1 thread (concurrent-fan-out crash/hang guard)")
 
 
+def test_batch_elem_memo():
+    """Identity-based per-element memo (core/engine._run_batched).
+
+    Changing batch membership upstream of a chain recomputes only the genuinely
+    new elements; unchanged elements keep their exact result object (proving a
+    cache hit, not a recompute). A *middle* delete reuses the survivors by
+    identity rather than shifting every index. A param change on a node busts that
+    node's whole element cache."""
+    m = GraphModel(); e = Engine(m)
+    a, b, c = _src(m, gradient()), _src(m, gradient()), _src(m, gradient())
+    cb = _op(m, "create_batch")
+    bl = _op(m, "blur", kernel_size=5)
+    m.add_edge(a, cb); m.add_edge(b, cb); m.add_edge(cb, bl)
+
+    e.evaluate_all()
+    out0 = list(bl.output.items)
+    assert len(out0) == 2
+
+    # Append a third input: first two elements are reused (same objects), only
+    # the new one is computed.
+    m.add_edge(c, cb)
+    e.evaluate_all()
+    out1 = list(bl.output.items)
+    assert len(out1) == 3
+    assert out1[0] is out0[0] and out1[1] is out0[1], "append recomputed unchanged elements"
+    assert out1[2] is not None
+
+    # Delete the MIDDLE input: survivors reused by identity — C keeps its result
+    # even though its index moved from 2 to 1 (positional caching would miss this).
+    m.remove_edge(b, cb)
+    e.evaluate_all()
+    out2 = list(bl.output.items)
+    assert len(out2) == 2
+    assert out2[0] is out1[0], "middle-delete recomputed a survivor (A)"
+    assert out2[1] is out1[2], "middle-delete failed to reuse C across an index shift"
+
+    # A param change on the node invalidates its element cache -> all recompute.
+    bl.invalidate_elem_cache(); m.mark_dirty(bl)
+    e.evaluate_all()
+    out3 = list(bl.output.items)
+    assert out3[0] is not out2[0] and out3[1] is not out2[1], "param change did not bust cache"
+    print("OK  batch element memo: add/middle-delete reuse by identity; param change busts cache")
+
+
 def test_linear_chain_and_caching():
     m = GraphModel(); e = Engine(m)
     s = _src(m, gradient())
@@ -1283,6 +1327,7 @@ def test_param_help_present():
 
 
 def main():
+    test_batch_elem_memo()
     test_linear_chain_and_caching()
     test_dirty_propagation()
     test_arity_gating()
@@ -1333,7 +1378,7 @@ def main():
     test_cycle_prevention()
     test_param_help_present()
     test_blas_thread_pinned()
-    print("\nENGINE OK: 50 backend tests passed")
+    print("\nENGINE OK: 51 backend tests passed")
 
 
 if __name__ == "__main__":

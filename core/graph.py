@@ -27,6 +27,18 @@ class GraphNode:
         self.color_space: str = "unknown"  # "bgr"|"gray"|"hls"|"binary"|"unknown"
         self.dirty: bool = True
         self.comp_time_ms: Optional[float] = None  # last compute time (mean/elem for batches)
+        # Per-element result memo for batched evaluation, keyed by the *identity*
+        # of this node's input element(s). Lets a batch-membership change (add /
+        # remove an input to a Create Batch upstream) recompute only the new
+        # elements and reuse the rest — unchanged elements keep their ndarray
+        # identity through the chain. Invalidated only when this node's own params
+        # change (the engine prunes stale keys each pass). Never serialized.
+        self._elem_cache: dict = {}
+
+    def invalidate_elem_cache(self) -> None:
+        """Drop the per-element memo — call when this node's own params change so
+        every element recomputes (identity alone wouldn't catch a param edit)."""
+        self._elem_cache.clear()
 
     @property
     def is_source(self) -> bool:
