@@ -1,4 +1,6 @@
 """Application entrypoint (argparse + QApplication)."""
+import core._threadlimit  # noqa: F401 — MUST be first: pins OpenBLAS to 1 thread
+                          # before numpy/cv2 load (prevents the batch-fan-out crash/hang)
 import sys
 import argparse
 from pathlib import Path

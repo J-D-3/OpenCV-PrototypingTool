@@ -12,6 +12,7 @@ propagation) across:
 
 Run with QT_QPA_PLATFORM=offscreen (set automatically below).
 """
+import core._threadlimit  # noqa: F401 — first import: pin OpenBLAS before numpy loads
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

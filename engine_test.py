@@ -2,6 +2,7 @@
 
 Run: python engine_test.py
 """
+import core._threadlimit  # noqa: F401 — first import: pin OpenBLAS before numpy loads
 import json
 import numpy as np
 import cv2
@@ -26,6 +27,17 @@ def _op(model, op_id, **params):
 
 def gradient(h=40, w=60):
     return np.tile(np.linspace(0, 255, w, dtype=np.uint8), (h, 1))[:, :, None].repeat(3, 2)
+
+
+def test_blas_thread_pinned():
+    """Regression: the batch fan-out runs numpy/BLAS across many threads, and
+    concurrent OpenBLAS calls deadlock/segfault the process. core._threadlimit
+    (imported first, before numpy) pins BLAS to one thread to prevent it. Guard
+    the wiring so it can't silently regress (e.g. a reordered import)."""
+    import os
+    assert os.environ.get("OPENBLAS_NUM_THREADS") == "1", \
+        "BLAS not pinned — core._threadlimit must be imported before numpy"
+    print("OK  BLAS pinned to 1 thread (concurrent-fan-out crash/hang guard)")
 
 
 def test_linear_chain_and_caching():
@@ -1320,7 +1332,8 @@ def main():
     test_codegen_covers_cv_calls()
     test_cycle_prevention()
     test_param_help_present()
-    print("\nENGINE OK: 49 backend tests passed")
+    test_blas_thread_pinned()
+    print("\nENGINE OK: 50 backend tests passed")
 
 
 if __name__ == "__main__":

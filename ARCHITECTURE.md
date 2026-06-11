@@ -92,6 +92,17 @@ Evaluation no longer blocks the UI thread. Two independent layers:
   during heavy C work — so threads (no pickling/copying), not processes. The one
   shared global is `cv2.setRNGSeed`, so k-means holds `operations._KMEANS_LOCK`
   across seed+kmeans to stay deterministic under parallel fan-out.
+  - **Caveat — BLAS is not thread-safe across callers.** numpy is backed by
+    **OpenBLAS**, whose internal thread pool deadlocks/segfaults when several
+    fan-out threads call a BLAS routine (e.g. a `@` matmul) at once — the cause of
+    the old non-reproducible crash *and* hang. `core/_threadlimit.py` (imported
+    **first**, before numpy, by every entry point) pins BLAS to one thread; the
+    parallelism comes from the fan-out, so BLAS's own threads were redundant
+    anyway. Any new dependency that ships its own thread pool needs the same care.
+  - **Diagnostics** (`core/diag.py`): `faulthandler` dumps every thread's stack to
+    `logs/faulthandler.log` on a native crash; `evaluation_guard` warns if two
+    evaluations overlap. Set `OCVPT_DIAG=1` for verbose per-node timing in
+    `logs/diag.log`.
 
 The model stays **node-major** (each node finishes its whole batch before the
 next); the previewed element is computed first within a node but is not streamed
