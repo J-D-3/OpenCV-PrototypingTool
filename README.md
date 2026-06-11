@@ -185,6 +185,21 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-11** — **Density Centers: density clustering as a centre detector.** New
+  **Density Centers** node (`image → CENTERS`) runs the same OPTICS/HDBSCAN clustering as
+  **Density Cluster** but emits only the discovered colour modes as CIELAB seeds (straight
+  from the library's `palette[*].lab`), so it feeds **Assign to Centers** exactly like
+  **Detect Color Centers** — density picks *which* colours exist, Assign labels every pixel
+  in unified Lab (with the luminance-weight / k-means knobs), and the sparse "bridge" colours
+  density calls noise fall to their nearest centre at assignment time. This replaces the
+  Density Cluster node's own BGR nearest-noise pass for that workflow. **Note:** it's
+  density-detected centres + Voronoi assignment, which reassigns *all* pixels (not just
+  noise), so it differs from Density Cluster's density *segmentation* — kept as a separate
+  node (rather than changing Density Cluster's output type) so existing pipelines and the
+  reachability diagnostic are untouched. Same density knobs (algorithm, sizes, colour space,
+  voxel, approx metric/seed); no noise-handling param. The inspector shows the same
+  interactive 3-D Lab scatter as Detect Color Centers (payload-driven). Suites: 36 smoke +
+  52 engine.
 - **2026-06-10** — **Detect Color Centers: merge split centres (chroma-cut fix) + isolated-peak
   basin fix.** A bright/pale cluster straddling the **Neutral chroma C\*** cut splits into a hue
   centre *and* a lightness centre at nearly the same Lab point — which Assign then renders as two

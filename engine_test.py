@@ -280,6 +280,53 @@ def test_hdbscan_cluster():
     print("OK  density cluster: cluster_image (HDBSCAN/OPTICS/sHDBSCAN/sOPTICS); noise nearest+flag; reachability")
 
 
+def test_density_centers():
+    """Density Centers: the density counterpart to Detect Color Centers. Runs the same
+    OPTICS/HDBSCAN clustering but emits a CENTERS payload (true-CIELAB palette seeds)
+    that feeds Assign to Centers -> Reduce Colors, exactly like detect_centers — so
+    density picks the colours and Assign labels every pixel. Skips if optics absent."""
+    from core import optics_backend
+    if not optics_backend.available():
+        print("OK  density centers: SKIPPED (optics package unavailable)")
+        return
+    rng = np.random.default_rng(0)
+    blocks = [np.clip(rng.normal(mean, 6, (1200, 3)), 0, 255)
+              for mean in [(40, 40, 200), (60, 180, 60), (200, 120, 40)]]
+    pix = np.vstack(blocks).astype(np.uint8)
+    pix = np.vstack([pix, rng.integers(0, 255, (120, 3)).astype(np.uint8)])  # sparse bridge -> noise
+    rng.shuffle(pix)
+    img = pix[:3600].reshape(60, 60, 3)
+
+    m = GraphModel()
+    s = _src(m, img)
+    dc = _op(m, "density_centers", algorithm="hdbscan", color_space="lab",
+             voxel_bin=2, min_cluster_size=80, min_cluster_frac=0.01)
+    asg = _op(m, "assign_centers", algorithm="nearest")
+    red = _op(m, "reduce_colors")
+    m.add_edge(s, dc)
+    m.add_edge(s, asg)      # image  -> assign port 0
+    m.add_edge(dc, asg)     # centres -> assign port 1
+    m.add_edge(asg, red)
+    Engine(m).evaluate_all()
+
+    # CENTERS payload: Lab seeds (what Assign consumes), display BGR, support, k, noise frac.
+    assert isinstance(dc.output, dict), f"density_centers should emit a CENTERS payload (error={dc.error})"
+    lab = dc.output["lab"]
+    assert lab.ndim == 2 and lab.shape[1] == 3 and lab.shape[0] >= 2, f"expected >=2 Lab seeds, got {lab.shape}"
+    assert dc.output["bgr"].shape == lab.shape and dc.output["k"] == lab.shape[0]
+    assert 0.0 <= dc.output["noise_fraction"] <= 1.0
+
+    # Composes with Assign to Centers -> CLUSTERS -> Reduce Colors -> image; every pixel labelled.
+    assert isinstance(asg.output, dict) and "labels" in asg.output, f"assign should label (error={asg.error})"
+    assert asg.output["labels"].max() < asg.output["k"], "every pixel assigned to a real centre"
+    assert red.output is not None and red.output.shape == img.shape
+
+    # Output type is CENTERS (composes with Assign), distinct from Density Cluster's CLUSTERS.
+    assert REGISTRY["density_centers"].outputs[0].type == "centers"
+    assert REGISTRY["density_centers"].render_preview([img], dc.output, {}) is not None
+    print("OK  density centers: CENTERS payload (palette Lab seeds) -> Assign -> Reduce; CENTERS-typed")
+
+
 def test_contours():
     img = np.zeros((80, 80, 3), np.uint8)
     cv2.rectangle(img, (5, 5), (24, 24), (255, 255, 255), -1)    # small (~361 px area)
@@ -1336,6 +1383,7 @@ def main():
     test_persistence_roundtrip()
     test_color_pipeline()
     test_hdbscan_cluster()
+    test_density_centers()
     test_contours()
     test_contour_nesting_colors()
     test_label_regions()
@@ -1378,7 +1426,7 @@ def main():
     test_cycle_prevention()
     test_param_help_present()
     test_blas_thread_pinned()
-    print("\nENGINE OK: 51 backend tests passed")
+    print("\nENGINE OK: 52 backend tests passed")
 
 
 if __name__ == "__main__":

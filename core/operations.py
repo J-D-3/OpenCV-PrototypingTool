@@ -1404,6 +1404,52 @@ def _compute_hdbscan(inputs, p, in_space="bgr"):
     return out
 
 
+def _compute_density_centers(inputs, p, in_space="bgr"):
+    """Density-based colour-centre *detection* (no k) — a density counterpart to
+    Detect Color Centers. Runs the same OPTICS/HDBSCAN clustering as the Density
+    Cluster node but, instead of segmenting and handling noise itself, emits only
+    the discovered colour modes as a CENTERS payload (the palette's true-CIELAB
+    seeds) for an 'Assign to Centers' node to label every pixel against.
+
+    So density picks WHICH colours exist; Assign decides where each pixel goes — in
+    unified CIELAB, with the luminance-weight / k-means knobs — instead of this
+    node's own BGR nearest-noise pass. The sparse 'bridge' colours density calls
+    noise simply fall to their nearest centre at assignment time. A missing library
+    propagates a clear error (red node border)."""
+    img = inputs[0]
+    if img is None:
+        return None
+    opt = optics_backend.load()             # RuntimeError (clear msg) if unavailable
+    bgr = _as_bgr(img, in_space)
+    algo = {"optics": "optics-xi"}.get(p.get("algorithm", "hdbscan"), p.get("algorithm", "hdbscan"))
+    if algo not in ("hdbscan", "optics-xi", "optics-threshold", "shdbscan", "soptics"):
+        algo = "hdbscan"
+    space = "lab" if p.get("color_space", "lab") == "lab" else "rgb"
+    vb = int(p.get("voxel_bin", 2))
+    voxel = float(vb) if vb > 0 else 0.0
+    mcs = max(2, int(p.get("min_cluster_size", 50)))
+    # The native extension is not thread-safe; serialize like the Density Cluster node.
+    with _OPTICS_LOCK:
+        res = opt.cluster_image(
+            bgr, algo=algo, space=space, voxel=voxel, bgr=True,
+            min_cluster_size=mcs, min_pts=mcs,
+            min_cluster_frac=float(p.get("min_cluster_frac", 0.003)),
+            metric=p.get("metric", "l2"), seed=int(p.get("seed", 42)), max_dim=None)
+        palette = list(res.palette)         # Cluster list, largest-first
+        labels = np.asarray(res.labels).reshape(-1).astype(np.int32)  # palette idx, -1 = noise
+        noise_frac = float(res.noise_fraction)
+    if not palette:
+        return None                          # nothing dense enough -> no centres
+    lab = np.asarray([c.lab for c in palette], np.float32)            # true CIELAB seeds
+    bgr_centers = np.asarray([c.rgb for c in palette], np.float32)[:, ::-1].copy()  # -> display BGR
+    support = np.asarray([c.size for c in palette], np.int64)
+    payload = {"lab": lab, "bgr": bgr_centers, "support": support,
+               "shape": bgr.shape, "k": len(palette),
+               "member": labels, "noise_fraction": noise_frac}
+    _attach_centers_scatter(payload, img, in_space)   # 3-D Lab scatter (reuses 'member')
+    return payload
+
+
 def _band_reachability(reach, colors, height=None):
     """The OPTICS reachability plot: ordered points as bars (height = reachability), each
     painted its OWN original colour — so within-cluster colour variation is visible (e.g.
@@ -1507,6 +1553,28 @@ def _summary_hdbscan(output, p):
     if labels is not None and len(labels):
         info["noise"] = f"{100 * int(output.get('n_noise', 0)) // len(labels)}%"
     return info
+
+
+def _render_density_centers(inputs, output, p):
+    """Inspector preview for Density Centers: a proportional palette of the detected
+    centres (bar width = pixel share among the dense ones), titled with k and the
+    fraction density left as noise (folded into the nearest centre by Assign)."""
+    if not isinstance(output, dict):
+        return None
+    seeds = np.clip(output.get("bgr", np.zeros((0, 3))), 0, 255).astype(np.uint8)
+    if not len(seeds):
+        return None
+    support = np.asarray(output.get("support", np.ones(len(seeds), np.int64)))
+    title = (f"density centres  (k={output.get('k', len(seeds))}, "
+             f"noise {100 * float(output.get('noise_fraction', 0.0)):.0f}%)")
+    return _titled(_band_palette(seeds, support), title)
+
+
+def _summary_density_centers(output, p):
+    if not isinstance(output, dict):
+        return {}
+    return {"centres": int(output.get("k", 0)),
+            "noise": f"{100 * float(output.get('noise_fraction', 0.0)):.0f}%"}
 
 
 def _render_kmeans(inputs, output, p):
@@ -2903,6 +2971,51 @@ OPS: list = [
                     "differing densities and labels sparse 'bridge' colours as noise. Best when "
                     "there are well-separated colour modes; for smooth photos prefer K-Means / "
                     "Auto Cluster. Emits a CLUSTERS payload (use Reduce Colors to render).",
+    ),
+    Operation(
+        id="density_centers", label="Density Centers", category="Color Quantization",
+        inputs=[Port("in", datatypes.IMAGE)],
+        outputs=[Port("out", datatypes.CENTERS)],
+        params=[
+            ParamSpec("algorithm", "hdbscan", kind="enum", choices=_HDBSCAN_ALGOS,
+                      label="Algorithm",
+                      help="HDBSCAN/OPTICS are exact (best colour recall). sHDBSCAN/sOPTICS are "
+                           "approximate (only faster above ~100k unique colours; otherwise exact "
+                           "HDBSCAN is both faster and better)."),
+            ParamSpec("min_cluster_size", 50, kind="int", min=2, max=20000, log=True,
+                      label="Min cluster size",
+                      help="Smallest group of pixels called a colour centre — the main knob (no k "
+                           "needed). Larger = fewer, broader centres; smaller = more, finer."),
+            ParamSpec("min_cluster_frac", 0.003, kind="float", min=0.0, max=0.2, step=0.001,
+                      label="Min region size",
+                      help="Centres backed by less than this fraction of the image are dropped as "
+                           "noise. Bigger = fewer, broader centres."),
+            ParamSpec("color_space", "lab", kind="enum", choices=_HDBSCAN_SPACES,
+                      label="Colour space",
+                      help="Distance space the library clusters in: Lab (perceptual CIELAB — the "
+                           "study's pick) or raw RGB. The seeds are emitted in true CIELAB either way."),
+            ParamSpec("voxel_bin", 2, kind="int", min=0, max=8, label="Voxel bin",
+                      help="Snap colours to a grid before clustering (speed/quality knob). 0 = off; "
+                           "~2 for Lab / ~4 for RGB is the sweet spot. ≥8 over-merges."),
+            ParamSpec("metric", "l2", kind="enum", choices=_HDBSCAN_METRICS,
+                      label="Metric (approx only)", enabled_if=("algorithm", ("shdbscan", "soptics")),
+                      help="Distance for the approximate variants. L2 is correct for colour; cosine "
+                           "clusters by hue and merges black/white/gray (rarely wanted)."),
+            ParamSpec("seed", 42, kind="int", min=0, max=9999, label="Seed (approx only)",
+                      enabled_if=("algorithm", ("shdbscan", "soptics")),
+                      help="The approximate variants are randomized but reproducible: the same seed "
+                           "always gives the same centres."),
+        ],
+        compute=_compute_density_centers, color=(0, 150, 136), out_space="passthrough",
+        space_aware=True, in_label="Mat (any)", out_label="Centres (Lab seeds)",
+        render_preview=_render_density_centers, summary=_summary_density_centers,
+        preview_is_chart=True,
+        description="Density-based colour-centre detection (no k) via the OPTICS-Clustering "
+                    "library — the density counterpart to Detect Color Centers. Finds the dense "
+                    "colour modes and emits them as a CENTERS payload (true-CIELAB seeds) for "
+                    "'Assign to Centers', which then labels every pixel (the sparse colours "
+                    "density calls noise fall to their nearest centre). Use this to drive Assign; "
+                    "use Density Cluster when you want the density segmentation + reachability.",
     ),
     Operation(
         id="reduce_colors", label="Reduce Colors", category="Color Quantization",

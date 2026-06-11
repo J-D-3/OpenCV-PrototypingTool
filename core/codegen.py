@@ -78,7 +78,7 @@ _VAR_BASE = {
     "find_contours": "contours", "contour_filter": "contours",
     "label_regions": "regions", "connected_components": "regions",
     "kmeans": "clusters", "reduce_colors": "quant",
-    "detect_centers": "centres", "assign_centers": "clusters",
+    "detect_centers": "centres", "density_centers": "centres", "assign_centers": "clusters",
     "mean_shift": "seg", "morphology": "morph", "local_hdr": "hdr",
     "create_batch": "batch", "normalize": "norm",
 }
@@ -185,6 +185,20 @@ def _emit_hdbscan(o, i, p):
         "labels = res.labels                                  # per-pixel cluster id (HxW), -1 = noise",
         f"centers[c] = mean BGR of pixels labelled c; reorder dark->light; {noise}",
         f"{o} = {{centers, labels, shape, k}}   # CLUSTERS payload",
+    ]
+
+
+def _emit_density_centers(o, i, p):
+    space = p.get("color_space", "lab")
+    algo = {"optics": "optics-xi"}.get(p.get("algorithm", "hdbscan"), p.get("algorithm", "hdbscan"))
+    return [
+        f"# Density colour-centre detection (no k) via optics.cluster_image: algo={algo!r}, space={space!r}",
+        f"bgr = as_bgr({i[0]})                                 # cv::cvtColor from the tracked colour space",
+        f"res = optics.cluster_image(bgr, algo={algo!r}, space={space!r}, voxel={p.get('voxel_bin')}, "
+        f"bgr=True, min_cluster_size={p.get('min_cluster_size')}, min_cluster_frac={p.get('min_cluster_frac')})",
+        "#   the library converts sRGB->CIELAB, voxel-quantizes and dedups internally",
+        "seeds = res.palette[*].lab                           # each dense mode's true-CIELAB centre",
+        f"{o} = {{lab seeds, bgr seeds, support}}   # CENTERS payload -> feed Assign to Centers",
     ]
 
 
@@ -366,6 +380,7 @@ def _emit_crop_to_contour(o, i, p):
 _CODE.update({
     "kmeans": _emit_kmeans,
     "detect_centers": _emit_detect_centers,
+    "density_centers": _emit_density_centers,
     "assign_centers": _emit_assign_centers,
     "hdbscan_cluster": _emit_hdbscan,
     "reduce_colors": _emit_reduce_colors,
