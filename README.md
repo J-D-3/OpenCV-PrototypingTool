@@ -185,6 +185,16 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-11** — **Inspector windows: follow or pin the batch frame.** A dedicated
+  inspector window (double-click a node) now **follows the global batch frame** by default —
+  scrub a batch on the canvas and the window updates with it (previously it stayed on
+  whichever frame it last rendered). Tick **Pin to frame** to lock a window to the current
+  frame so it stays put while you scrub others — open several windows pinned to different
+  frames to compare batch elements side by side. A pinned window still updates its *content*
+  when the node recomputes; it just keeps its frame. Implemented by threading an optional
+  `index` through the nodes' preview/output/summary methods (default = the global index, so
+  canvas thumbnails and the docked pane are unchanged) and subscribing the window to
+  `previewIndexChanged`. Suites: 36 smoke + 52 engine.
 - **2026-06-11** — **Density Centers: density clustering as a centre detector.** New
   **Density Centers** node (`image → CENTERS`) runs the same OPTICS/HDBSCAN clustering as
   **Density Cluster** but emits only the discovered colour modes as CIELAB seeds (straight

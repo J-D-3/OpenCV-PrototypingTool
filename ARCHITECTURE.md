@@ -36,7 +36,8 @@ ui/                   frontend — PyQt6 view layer
   node_icons.py       per-operation corner glyphs (hand-drawn, keyed by op id)
   arrow.py            ArrowItem (edge graphics)
   canvas.py           GraphicsImageView + ImageDropWidget (the node canvas)
-  viewer.py           ImageViewerWindow (pinned, per-node output inspector)
+  viewer.py           ImageViewerWindow (pop-out per-node output inspector; a batch
+                      frame it FOLLOWS as you scrub the canvas, or PINs to compare)
   inspector_pane.py   InspectorPane: docked live inspector that follows the
                       selection (image + pixel-neighbourhood + histogram filter;
                       pseudocode for Export Code; an interactive 3-D colour scatter

@@ -317,10 +317,11 @@ class Node(QtWidgets.QGraphicsPixmapItem):
         if arrow in self._arrows:
             self._arrows.remove(arrow)
     
-    def get_output_image(self) -> Optional[np.ndarray]:
-        """Get the output image from this node. Override in subclasses."""
+    def get_output_image(self, index=None) -> Optional[np.ndarray]:
+        """Get the output image from this node. ``index`` picks a batch element
+        (None = the global preview index). Override in subclasses."""
         return self._result_image
-    
+
     def can_accept_input(self, input_node: 'Node') -> bool:
         """Check if this node can accept input from another node. Override in subclasses."""
         return False
@@ -349,26 +350,32 @@ class Node(QtWidgets.QGraphicsPixmapItem):
         """Hook fired after a committed (non-preview) recompute. Override as needed."""
         pass
 
-    def get_preview_image(self):
-        """Image to show in the inspector. Defaults to the node's output."""
-        return self.get_output_image()
+    def get_preview_image(self, index=None):
+        """Image to show in the inspector. Defaults to the node's output.
+        ``index`` picks a batch element (None = the global preview index)."""
+        return self.get_output_image(index)
 
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self, index=None) -> Dict[str, Any]:
         """Key facts to show in the inspector (e.g. {'contours': 42})."""
         return {}
 
     # --- batch element resolution -----------------------------------------
-    def _cur_index(self, value) -> int:
-        """Current preview index clamped to a batched value's length."""
+    def _cur_index(self, value, index=None) -> int:
+        """Batch element to show, clamped to the value's length. ``index=None``
+        means 'use the global preview index' (canvas thumbnails, the docked pane);
+        a dedicated inspector window pins itself to a frame by passing an explicit
+        ``index`` instead (see ``ui/viewer.ImageViewerWindow``)."""
         if isinstance(value, Batch) and value.items:
-            idx = self.controller.preview_index if self.controller is not None else 0
-            return max(0, min(idx, len(value.items) - 1))
+            if index is None:
+                index = self.controller.preview_index if self.controller is not None else 0
+            return max(0, min(index, len(value.items) - 1))
         return 0
 
-    def _element(self, value):
-        """Resolve the currently-previewed element of a (possibly batched) value."""
+    def _element(self, value, index=None):
+        """Resolve the previewed element of a (possibly batched) value at ``index``
+        (None = the global preview index)."""
         if isinstance(value, Batch):
-            return value.items[self._cur_index(value)] if value.items else None
+            return value.items[self._cur_index(value, index)] if value.items else None
         return value
 
     def _batch_value(self):
@@ -454,9 +461,9 @@ class ImageNode(Node):
         self._render_icon()
         self._notify_arrows()
 
-    def get_output_image(self) -> Optional[np.ndarray]:
-        """Return the source image (current element when batched)."""
-        return self._element(self._source)
+    def get_output_image(self, index=None) -> Optional[np.ndarray]:
+        """Return the source image (element ``index`` when batched; None = global)."""
+        return self._element(self._source, index)
     
     def _draw_specific_type_icon(self, painter: QtGui.QPainter, icon_rect: QtCore.QRectF) -> None:
         """Photo icon for a single image; a stacked-heap icon for a batch."""
@@ -590,17 +597,18 @@ class FunctionNode(Node):
         self.setPixmap(thumb)
 
     # --- data: delegate to the backend via the controller ------------------
-    def get_output_image(self) -> Optional[np.ndarray]:
-        return None if self.gnode is None else self._element(self.gnode.output)
+    def get_output_image(self, index=None) -> Optional[np.ndarray]:
+        return None if self.gnode is None else self._element(self.gnode.output, index)
 
-    def get_preview_image(self):
+    def get_preview_image(self, index=None):
         """Inspector image: the op's render_preview (e.g. contours drawn onto the
         input) if it defines one, otherwise the raw output. Batch-aware: resolves
-        the currently-previewed element of the output and of each input."""
-        out = self.get_output_image()
+        the element at ``index`` (None = the global preview index) of the output
+        AND of each input, so they stay aligned."""
+        out = self.get_output_image(index)
         render = getattr(self.op, "render_preview", None)
         if render is not None and self.gnode is not None and self.controller is not None:
-            inputs = [n.get_output_image() if isinstance(n, Node) else None
+            inputs = [n.get_output_image(index) if isinstance(n, Node) else None
                       for n in self._input_qt_nodes()]
             try:
                 preview = render(inputs, out, dict(self.gnode.params))
@@ -617,13 +625,13 @@ class FunctionNode(Node):
         return [self.controller._qt_by_gid.get(src.id)
                 for src in self.controller.model.inputs_of(self.gnode)]
 
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self, index=None) -> Dict[str, Any]:
         """Key facts from the op's summary hook (e.g. {'contours': 42})."""
         summarize = getattr(self.op, "summary", None)
         if summarize is None or self.gnode is None:
             return {}
         try:
-            return summarize(self.get_output_image(), dict(self.gnode.params)) or {}
+            return summarize(self.get_output_image(index), dict(self.gnode.params)) or {}
         except Exception as e:  # noqa: BLE001
             _notify(self, "error", f"Summary failed for {self.op.label}: {e}")
             return {}
@@ -687,9 +695,9 @@ class SaveToFileNode(FunctionNode):
             return None
         return img if img.dtype == np.uint8 else to_uint8(img)
 
-    def get_preview_image(self):
+    def get_preview_image(self, index=None):
         # Show what would be saved (image, or the upstream rendered preview).
-        return self._savable(self.get_output_image())
+        return self._savable(self.get_output_image(index))
 
     def on_commit(self) -> None:
         # Write the whole batch (one file per element), or the single result.

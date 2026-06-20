@@ -727,6 +727,20 @@ def check_batch(app) -> None:
     ctrl.set_preview_index(2)
     assert int(blur.get_output_image().mean()) == 220
 
+    # Dedicated inspector window: follows the global frame by default, can pin to one.
+    viewer = ImageViewerWindow(blur)
+    ctrl.set_preview_index(0)                       # follows -> frame 0
+    assert viewer._pinned_index is None
+    assert int(viewer.node.get_preview_image(viewer._pinned_index).mean()) == 20
+    viewer._pin_check.setChecked(True)              # pin to the current frame (0)
+    assert viewer._pinned_index == 0 and viewer._frame_label.text().endswith("(pinned)")
+    ctrl.set_preview_index(2)                        # global moves; pinned window stays put
+    assert int(viewer.node.get_preview_image(viewer._pinned_index).mean()) == 20
+    viewer._pin_check.setChecked(False)             # unpin -> follow global again (frame 2)
+    assert viewer._pinned_index is None
+    assert int(viewer.node.get_preview_image(viewer._pinned_index).mean()) == 220
+    viewer.close()
+
     # Save-to-File wrote one file per image.
     files = glob.glob(pattern)
     assert len(files) == 3, f"expected 3 saved files, got {len(files)}"
@@ -739,7 +753,7 @@ def check_batch(app) -> None:
     assert w.inspector_pane._frame_nav.isVisible()
     assert w.inspector_pane._frame_label.text().endswith("/3")
     w.close()
-    print("OK  batched: one chain over 3 images; per-frame preview + save-all")
+    print("OK  batched: one chain over 3 images; per-frame preview + save-all; inspector follow/pin")
 
 
 def check_create_batch(app) -> None:
