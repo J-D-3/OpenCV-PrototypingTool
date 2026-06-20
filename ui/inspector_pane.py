@@ -945,17 +945,17 @@ class InspectorPane(QtWidgets.QWidget):
 
         # Image + (pixel grid, histogram) | OR the interactive 3-D cluster scatter, which
         # replaces the grid+histogram for clustering nodes. Thin 1px handles between.
-        splitter = LineSplitter(QtCore.Qt.Orientation.Vertical)
+        self._panels = LineSplitter(QtCore.Qt.Orientation.Vertical)
         self._image = ImagePanel()
         self._neigh = NeighborhoodPanel()
         self._hist = HistogramPanel()
         self._scatter = ClusterScatter3D()
         for i, panel in enumerate((self._image, self._neigh, self._hist, self._scatter)):
-            splitter.addWidget(panel)
-            splitter.setStretchFactor(i, 1)
+            self._panels.addWidget(panel)
+            self._panels.setStretchFactor(i, 1)
         self._scatter.setVisible(False)            # only for clustering nodes
-        splitter.setSizes([1100, 950, 950, 1100])
-        layout.addWidget(splitter, 1)
+        self._panels.setSizes([1100, 950, 950, 1100])
+        layout.addWidget(self._panels, 1)
 
         self._node = None
         self._disp = None       # uint8 display image (unfiltered, native channels)
@@ -1021,21 +1021,30 @@ class InspectorPane(QtWidgets.QWidget):
             label = "Gray" if channels == 1 else "BGR"
         return label
 
-    def _update_code(self) -> None:
-        """Show the node's pseudocode (Export Code node) or hide the code view."""
+    def _update_code(self) -> bool:
+        """Show the node's pseudocode (Export Code node) or hide the code view.
+        Returns True when the code view is showing — the caller then suppresses the
+        image/histogram (the Export Code node carries a pass-through image, but it's
+        a text node: only the pseudocode is meaningful)."""
         getter = getattr(self._node, "get_pseudocode", None) if self._node is not None else None
-        if callable(getter):
+        showing = callable(getter)
+        if showing:
             try:
                 self._code.setPlainText(getter())
             except Exception as e:  # noqa: BLE001
                 self._code.setPlainText(f"# {e}")
-            self._code.setVisible(True)
-        else:
-            self._code.setVisible(False)
+        self._code.setVisible(showing)
+        return showing
 
     def _recompute(self, reset: bool) -> None:
-        self._update_code()
+        code_only = self._update_code()
+        # Text-only nodes (Export Code): hide image, pixel grid, histogram, scatter
+        # and the size/type metadata — the pseudocode view is the whole inspector.
+        self._panels.setVisible(not code_only)
+        self._meta.setVisible(not code_only)
         self._update_frame_controls()
+        if code_only:
+            return
         raw = self._node.get_preview_image() if self._node is not None else None
         if not isinstance(raw, np.ndarray):
             self._disp = None

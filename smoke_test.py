@@ -910,14 +910,17 @@ def check_export_code(app) -> None:
     code = exp.get_pseudocode()
     assert "imread(" in code and "cvtColor" in code, f"codegen missing expected calls:\n{code}"
 
-    # Inspector pane shows the code text for this node (and hides it otherwise).
+    # Inspector pane shows ONLY the code text for this node — no image/histogram/meta.
     w.inspector_pane.set_node(exp)
     app.processEvents()
     assert w.inspector_pane._code.isVisible(), "inspector should show the code panel for Export Code"
     assert "imread(" in w.inspector_pane._code.toPlainText()
+    assert not w.inspector_pane._panels.isVisible(), "image/histogram should be hidden for Export Code"
+    assert not w.inspector_pane._meta.isVisible(), "metadata should be hidden for Export Code"
     w.inspector_pane.set_node(gray)
     app.processEvents()
     assert not w.inspector_pane._code.isVisible(), "code panel should hide for ordinary nodes"
+    assert w.inspector_pane._panels.isVisible(), "image/histogram should return for ordinary nodes"
 
     # on_commit writes the pseudocode to ./output.
     if not hasattr(exp, "_node_index"):
@@ -929,7 +932,7 @@ def check_export_code(app) -> None:
     assert os.path.exists(path), f"export code did not write {path}"
     os.remove(path)
     w.close()
-    print("OK  export code: upstream pseudocode in inspector + written to ./output")
+    print("OK  export code: text-only inspector (no image/histogram) + written to ./output")
 
 
 def check_function_search(app) -> None:
