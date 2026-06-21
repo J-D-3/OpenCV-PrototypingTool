@@ -17,6 +17,10 @@ output/
 # Diagnostics / crash logs (core.diag)
 logs/
 
+# Scratch pipeline backups (saved alongside user pipelines in test/pipelines/)
+*.bak
+*.bak[0-9]
+
 # Scratch / scaffolding files used during refactors
 _commitmsg.txt
 _tail*.py

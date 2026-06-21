@@ -1,0 +1,7 @@
+# Development-only tools (not needed to run the app — see requirements.txt for that).
+# Install with:  .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+#
+# py-spy: sample a live Python process's thread stacks without modifying it —
+# e.g. `py-spy dump --pid <PID>` to diagnose a hang/deadlock. This is how the
+# OpenBLAS batch-fan-out hang was caught (see core/diag.py + the README changelog).
+py-spy

@@ -70,7 +70,7 @@ avoids spurious file writes.
 
 ---
 
-## Project status (as of 2026-06-02)
+## Project status (as of 2026-06-21)
 
 This is a **working prototype** being revived. The environment is now set up
 (git + venv + pinned-ish deps), but the code carries prototype-era rough edges.
@@ -151,7 +151,8 @@ This is a **working prototype** being revived. The environment is now set up
       **Normalize** (stretch / equalize / CLAHE; luminance-only for color),
       **Invert**, and **Local HDR** (Gaussian local mean/std normalization on
       luminance — radius/amplitude/strength). Clustering: **Auto Cluster**
-      (auto-picks k from smoothed-histogram peaks, then k-means) and **Mean
+      (auto-picks k from smoothed-histogram peaks, then k-means — *later split into
+      **Detect Color Centers → Assign to Centers**, see Changelog 06-09*) and **Mean
       Shift** (`cv2.pyrMeanShiftFiltering`). Contours now use **stable id-based
       colors** (R G B C M Y) and **hierarchy/size ordering** (filled draws outer
       first), preserved across filtering. Save-to-File **falls back to a node's
@@ -166,6 +167,16 @@ This is a **working prototype** being revived. The environment is now set up
       arrow and re-evaluates downstream); the hover highlight shows an
       already-connected target as a valid drop. (`controller.is_connected`,
       `canvas._disconnect`.)
+- [x] **Colour-quantization overhaul + robustness (June 2026).** Auto Cluster
+      split into **Detect Color Centers → Assign to Centers**; added **Density
+      Cluster** and **Density Centers** (OPTICS/HDBSCAN via the sibling
+      OPTICS-Clustering library). Engine: **identity-based per-element batch memo**
+      (a batch-membership change recomputes only the new elements) and a
+      **staggered spinner reveal**. Robustness: pinned **OpenBLAS to one thread**
+      to fix an intermittent batch-fan-out **crash/hang**, plus opt-in
+      **diagnostics** (`core/diag.py` — faulthandler + `OCVPT_DIAG` logging).
+      Inspector: pop-out windows **follow or pin** the batch frame; Export Code
+      shows **text only**. See the Changelog for detail.
 
 All planned phases are complete. Adding a new operation is cheap: define one
 `Operation` in `core/operations.py` (+ optional `render_preview`/`summary`), and
@@ -173,6 +184,17 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ### Future ideas
+- **Type-aware input wiring for two-input nodes.** A node with two *different*
+  input types (`assign_centers` = image + centers, `crop_to_contour` = image +
+  contours, `backproject` = image + histogram) currently forces an **order**: you
+  must wire the image first, then the other type. That's an artefact of
+  `controller.can_connect`, which validates a new edge against the *next positional*
+  free port (`op.inputs[n_in].type`) rather than against *any* still-unfilled port.
+  Desired: accept a first input that matches **either** declared type and a second
+  that fills the **missing** one (route each edge to the port whose type it
+  matches), allow adding/removing either input in any order, and recompute as soon
+  as both valid inputs are present. (Homogeneous two-input ops — sum/and/diff, both
+  image — are unaffected; their A/B order is semantic and handled by the **S** swap.)
 - Undo/redo on the canvas; multi-input rewire; drag connection endpoints.
 - More ops as needed (template matching, warps, feature detectors, …).
 - Batch sources from a folder; per-element filenames carried through to Save.
@@ -181,6 +203,13 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 - Reduce Colors / contour ops work in whatever space they receive; for the HSL
   chain, append **To BGR** to view the quantized result in true colors (the
   conversion is color-space aware, so it correctly maps HLS → BGR).
+
+### Development & debugging
+- **Dev tools:** `requirements-dev.txt` (currently `py-spy`, for live thread-stack
+  dumps of a hung process: `py-spy dump --pid <PID>`).
+- **Diagnostics:** set `OCVPT_DIAG=1` (events) or `2` (per-node timing) before
+  launching to write `logs/diag.log`; `faulthandler` always dumps every thread's
+  stack to `logs/faulthandler.log` on a native crash. See `core/diag.py`.
 
 ---
 
