@@ -184,17 +184,6 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ### Future ideas
-- **Type-aware input wiring for two-input nodes.** A node with two *different*
-  input types (`assign_centers` = image + centers, `crop_to_contour` = image +
-  contours, `backproject` = image + histogram) currently forces an **order**: you
-  must wire the image first, then the other type. That's an artefact of
-  `controller.can_connect`, which validates a new edge against the *next positional*
-  free port (`op.inputs[n_in].type`) rather than against *any* still-unfilled port.
-  Desired: accept a first input that matches **either** declared type and a second
-  that fills the **missing** one (route each edge to the port whose type it
-  matches), allow adding/removing either input in any order, and recompute as soon
-  as both valid inputs are present. (Homogeneous two-input ops — sum/and/diff, both
-  image — are unaffected; their A/B order is semantic and handled by the **S** swap.)
 - Undo/redo on the canvas; multi-input rewire; drag connection endpoints.
 - More ops as needed (template matching, warps, feature detectors, …).
 - Batch sources from a folder; per-element filenames carried through to Save.
@@ -214,6 +203,16 @@ the sidebar, parameter panel, evaluation, and inspection all follow — see
 ---
 
 ## Changelog
+- **2026-06-21** — **Type-aware input wiring for two-input nodes.** A node with two
+  *different* input types — **Assign to Centers** (image + centres), **Crop to Contour**
+  (image + contours), **Back-project** (image + histogram) — no longer forces an order: you
+  can wire the inputs in **either** order and each edge is routed to the port whose **type**
+  it matches, recomputing as soon as both valid inputs are present. Previously `can_connect`
+  validated against the *next positional* free port, so the image had to be connected first.
+  Now it accepts a source that fits *any* still-free port and `connect` assigns that port
+  (`controller._match_port`). The **S** swap is correspondingly guarded — it's a no-op on a
+  heterogeneous node (swapping would mis-type its ports) and still flips A/B on same-typed
+  ops like Diff. Suites: 37 smoke + 52 engine.
 - **2026-06-11** — **Inspector windows: follow or pin the batch frame.** A dedicated
   inspector window (double-click a node) now **follows the global batch frame** by default —
   scrub a batch on the canvas and the window updates with it (previously it stayed on

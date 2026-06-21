@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Dict
+from typing import Dict, Optional
 
 from PyQt6 import QtCore, QtWidgets
 
@@ -147,13 +147,22 @@ class GraphController:
         self._recompute_async(commit=True)
 
     def swap_inputs(self, qt_node) -> bool:
-        """Swap the two incoming edges of a 2-input node (e.g. Diff A<->B)."""
-        edges = self.model.incoming(qt_node.gnode)
+        """Swap the two incoming edges of a 2-input node (e.g. Diff A<->B). No-op for a
+        heterogeneous node (e.g. image+centers): swapping would put each source in a
+        port whose type it doesn't match, so there's nothing meaningful to swap."""
+        gn = qt_node.gnode
+        edges = self.model.incoming(gn)
         if len(edges) != 2:
             return False
+        p0, p1 = edges[0].dst_port, edges[1].dst_port
+        op = gn.op
+        if op is not None and not (
+                datatypes.compatible(self._gnode_output_type(edges[0].src), op.inputs[p1].type)
+                and datatypes.compatible(self._gnode_output_type(edges[1].src), op.inputs[p0].type)):
+            return False
         self.wait_idle()
-        edges[0].dst_port, edges[1].dst_port = edges[1].dst_port, edges[0].dst_port
-        self.model.mark_dirty(qt_node.gnode)
+        edges[0].dst_port, edges[1].dst_port = p1, p0
+        self.model.mark_dirty(gn)
         self._recompute_async(commit=True)
         return True
 
@@ -165,16 +174,29 @@ class GraphController:
         if self.model.creates_cycle(src_qt.gnode, gn):
             return False
         op = dst_qt.op
-        n_in = len(self.model.incoming(gn))
+        out_type = self._output_type(src_qt)
         if getattr(op, "variadic", False):
-            if n_in >= self._VARIADIC_CAP:
+            if len(self.model.incoming(gn)) >= self._VARIADIC_CAP:
                 return False
-            in_type = op.inputs[0].type   # single template port for all inputs
-        else:
-            if n_in >= gn.arity:
-                return False  # all input ports already filled
-            in_type = op.inputs[n_in].type
-        return datatypes.compatible(self._output_type(src_qt), in_type)
+            return datatypes.compatible(out_type, op.inputs[0].type)  # one template port
+        # Non-variadic: accept if the source fits ANY still-free port (type-driven, not
+        # next-positional) — so a node with two *different* input types takes them in
+        # either order. Returns None when all matching ports are full.
+        return self._match_port(out_type, gn) is not None
+
+    def _match_port(self, out_type: str, gn) -> Optional[int]:
+        """Lowest-indexed *unfilled* input port of ``gn`` whose declared type accepts
+        ``out_type`` — or None if no free port matches. Type-driven, so heterogeneous
+        two-input ops (image+centers / image+contours / image+histogram) accept their
+        inputs in any wiring order; same-typed ports still fill low-to-high as before."""
+        op = gn.op
+        if op is None:
+            return None
+        filled = {e.dst_port for e in self.model.incoming(gn)}
+        for i, port in enumerate(op.inputs):
+            if i not in filled and datatypes.compatible(out_type, port.type):
+                return i
+        return None
 
     def can_rewire(self, src_qt, dst_qt) -> bool:
         """A full single-input node can be re-pointed at a new (compatible) source."""
@@ -199,16 +221,23 @@ class GraphController:
         self._recompute_async(commit=True)
 
     def _output_type(self, qt) -> str:
-        gn = qt.gnode
+        return self._gnode_output_type(qt.gnode)
+
+    def _gnode_output_type(self, gn) -> str:
         if gn.is_source:
             return datatypes.IMAGE
-        return qt.op.outputs[0].type
+        return gn.op.outputs[0].type
 
     def connect(self, src_qt, dst_qt) -> bool:
         if not self.can_connect(src_qt, dst_qt):
             return False
         self.wait_idle()
-        self.model.add_edge(src_qt.gnode, dst_qt.gnode)
+        # Route to the port whose TYPE the source matches (variadic uses the next free
+        # slot). Engine reads inputs ordered by dst_port, so the image always lands in
+        # the image port and the centres/contours/histogram in theirs, whatever the order.
+        port = (None if getattr(dst_qt.op, "variadic", False)
+                else self._match_port(self._output_type(src_qt), dst_qt.gnode))
+        self.model.add_edge(src_qt.gnode, dst_qt.gnode, port)
         self._recompute_async(commit=True)
         return True
 

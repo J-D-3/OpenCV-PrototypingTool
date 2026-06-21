@@ -438,6 +438,37 @@ def check_input_swap(app) -> None:
     print("OK  binary-op input swap reverses the operands")
 
 
+def check_input_order_agnostic(app) -> None:
+    # A node with two DIFFERENT input types (Assign to Centers = image + centers)
+    # accepts its inputs in EITHER wiring order, routing each edge to the port whose
+    # type it matches — no more "image must be connected first".
+    w = make_window(app)
+    ctrl = w.drop_widget.view.controller
+    src = add_image(w, gradient_bgr())
+    detect = add_func(w, "Detect Color Centers")    # outputs CENTERS
+    assign = add_func(w, "Assign to Centers")       # inputs: image (0), centers (1)
+    connect(w, src, detect)                         # so detect produces a centres payload
+
+    # Wire the CENTERS input FIRST (before the image) — previously rejected.
+    assert ctrl.can_connect(detect, assign), "centres should be accepted as the first input"
+    assert ctrl.connect(detect, assign)
+    ctrl.wait_idle()
+    inc = ctrl.model.incoming(assign.gnode)
+    assert len(inc) == 1 and inc[0].dst_port == 1, "centres must route to the centres port (1)"
+    assert assign.gnode.output is None and assign.gnode.error is None, "one input -> idle, no error"
+
+    # Now the image fills port 0 and the node computes as soon as both inputs are valid.
+    assert ctrl.can_connect(src, assign) and ctrl.connect(src, assign)
+    ctrl.wait_idle()
+    assert sorted(e.dst_port for e in ctrl.model.incoming(assign.gnode)) == [0, 1]
+    assert isinstance(assign.gnode.output, dict), f"both inputs valid -> computes (err={assign.gnode.error})"
+
+    # S-swap is a no-op on a heterogeneous node (swapping would mis-type the ports).
+    assert ctrl.swap_inputs(assign) is False
+    w.close()
+    print("OK  two-input wiring is order-agnostic (type-routed ports; swap guarded)")
+
+
 def check_color_chain(app) -> None:
     # The user's target chain: Load > To HSL > Cluster > Reduce Colors.
     w = make_window(app)
@@ -1213,6 +1244,7 @@ def main() -> int:
         check_progressive_load,
         check_delete_node,
         check_input_swap,
+        check_input_order_agnostic,
         check_color_chain,
         check_segmentation_chain,
         check_resize_polymorphic,
